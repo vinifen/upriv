@@ -29,7 +29,8 @@ function createMockFm(overrides: Partial<FileManagerApi> = {}) {
     isFileImage: vi.fn(() => false),
     isImportPending: vi.fn(() => false),
     isImportProcessing: vi.fn(() => false),
-    importBudget: { visible: false, budgetMs: 0, remainingMs: 0 },
+    editorImportStartedAt: null,
+    stopImports: vi.fn(),
     showToast: vi.fn(),
     ...overrides,
   } as unknown as FileManagerApi;

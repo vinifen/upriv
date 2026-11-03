@@ -2,7 +2,6 @@ import {
   createLiveVaultService,
   isContentUri,
   newJobId,
-  SIZED_BUDGET_CEILING_MS,
   RpcError,
   type CreateVaultInput,
 } from "@upriv/shared";
@@ -22,10 +21,10 @@ import {
   rpcVaultImportZip,
   rpcVaultIngestDirectory,
   rpcVaultIngestOpen,
+  rpcVaultFinishImport,
   rpcVaultList,
-  rpcVaultPlainExportSweep,
   rpcVaultRename,
-  rpcVaultClose,
+  rpcVaultUnfinishedSweep,
 } from "@/lib/rpc";
 import {
   contentTreeClaimedForCreate,
@@ -38,8 +37,8 @@ import { releaseImportCache } from "./importCache";
 import { nativeSafExportMount } from "./safExportMount";
 
 const contentIo: ContentTreeImportIo = {
-  createVault(input) {
-    return rpcVaultCreate(input);
+  createVault(input, job) {
+    return rpcVaultCreate(input, job, true);
   },
   openSession(id, password) {
     return rpcVaultIngestOpen(id, password);
@@ -47,11 +46,11 @@ const contentIo: ContentTreeImportIo = {
   addDirectory(id, logicalPath) {
     return rpcVaultIngestDirectory(id, logicalPath);
   },
-  addFile(id, logicalPath, uri) {
-    return rpcImportContentUri(id, logicalPath, uri);
+  addFile(id, logicalPath, uri, job) {
+    return rpcImportContentUri(id, logicalPath, uri, job);
   },
   close(id) {
-    return rpcVaultClose(id).then(() => undefined);
+    return rpcVaultFinishImport(id);
   },
   abort(id) {
     return rpcVaultDiscardImport(id);
@@ -80,8 +79,8 @@ export const nativeVaultService = createLiveVaultService({
   async listVaults() {
     return rpcVaultList();
   },
-  createVault(input: CreateVaultInput) {
-    return rpcVaultCreate(input);
+  createVault(input: CreateVaultInput, job) {
+    return rpcVaultCreate(input, job);
   },
   async getSettings(vaultId) {
     return rpcVaultConfigGet(vaultId);
@@ -100,7 +99,7 @@ export const nativeVaultService = createLiveVaultService({
   },
   // A picked folder is mounted for the export, so Rust writes the file straight into it.
   async exportVaultToFolder(vaultId, request, destDir, job) {
-    return nativeSafExportMount.withExportFolder(destDir, job, SIZED_BUDGET_CEILING_MS, (dir) =>
+    return nativeSafExportMount.withExportFolder(destDir, job, (dir) =>
       rpcVaultExportToFolder(vaultId, request, dir, job),
     );
   },
@@ -111,29 +110,29 @@ export const nativeVaultService = createLiveVaultService({
   // holds a leftover is mounted for a second sweep. Its access stays after a
   // kill, because nothing ran to release it. A folder that no longer answers
   // keeps its record for the next launch.
-  async sweepPlainExports() {
-    const { folders } = await rpcVaultPlainExportSweep();
+  async sweepUnfinished() {
+    const { folders } = await rpcVaultUnfinishedSweep();
     for (const folder of folders) {
       await nativeSafExportMount
-        .withExportFolder(folder, newJobId(), 0, () => rpcVaultPlainExportSweep())
+        .withExportFolder(folder, newJobId(), () => rpcVaultUnfinishedSweep())
         .catch(() => undefined);
     }
   },
-  importZip: (input) =>
-    finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportZip(input)),
-  import7z: (input) =>
-    finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImport7z(input)),
-  importFilesZip: (input) =>
-    finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportFilesZip(input)),
-  importOsPath: (input) => {
+  importZip: (input, job) =>
+    finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportZip(input, job)),
+  import7z: (input, job) =>
+    finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImport7z(input, job)),
+  importFilesZip: (input, job) =>
+    finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportFilesZip(input, job)),
+  importOsPath: (input, job) => {
     const path = input.importPackage?.archivePath ?? "";
     const tree = contentTreeClaimedForCreate(input.settings.vault.id);
     if (tree) {
-      return finishContentImport(tree, () => importContentTree(input, tree, contentIo));
+      return finishContentImport(tree, () => importContentTree(input, tree, contentIo, job));
     }
     if (isContentUri(path)) {
       return Promise.reject(new RpcError("invalid_request", "import folder is unavailable"));
     }
-    return finishImport(path, () => rpcVaultImportOsPath(input));
+    return finishImport(path, () => rpcVaultImportOsPath(input, job));
   },
 });

@@ -6,7 +6,7 @@ import {
   rpcVaultDelete,
   rpcVaultExportCapabilities,
   rpcVaultExportToFolder,
-  rpcVaultPlainExportSweep,
+  rpcVaultUnfinishedSweep,
   rpcVaultImport7z,
   rpcVaultImportFilesZip,
   rpcVaultImportOsPath,
@@ -19,7 +19,7 @@ import {
 /** Desktop → daemon vault list / create / import / config / rename / delete / export. */
 export const desktopVaultService = createLiveVaultService({
   listVaults: () => rpcVaultList(),
-  createVault: (input: CreateVaultInput) => rpcVaultCreate(input),
+  createVault: (input: CreateVaultInput, job) => rpcVaultCreate(input, job),
   getSettings: (vaultId) => rpcVaultConfigGet(vaultId),
   storeOnDiskBytes: (vaultId) => rpcVaultStoreSize(vaultId),
   saveSettings: (vaultId, config) => rpcVaultConfigSave(vaultId, config),
@@ -28,11 +28,11 @@ export const desktopVaultService = createLiveVaultService({
   exportVaultToFolder: (vaultId, request, destDir, job) =>
     rpcVaultExportToFolder(vaultId, request, destDir, job),
   exportCapabilities: () => rpcVaultExportCapabilities(),
-  sweepPlainExports: async () => {
-    await rpcVaultPlainExportSweep();
+  sweepUnfinished: async () => {
+    await rpcVaultUnfinishedSweep();
   },
-  importZip: (input) => rpcVaultImportZip(input),
-  import7z: (input) => rpcVaultImport7z(input),
-  importFilesZip: (input) => rpcVaultImportFilesZip(input),
-  importOsPath: (input) => rpcVaultImportOsPath(input),
+  importZip: (input, job) => rpcVaultImportZip(input, job),
+  import7z: (input, job) => rpcVaultImport7z(input, job),
+  importFilesZip: (input, job) => rpcVaultImportFilesZip(input, job),
+  importOsPath: (input, job) => rpcVaultImportOsPath(input, job),
 });

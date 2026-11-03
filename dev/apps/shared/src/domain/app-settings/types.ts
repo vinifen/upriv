@@ -85,6 +85,16 @@ export interface AppSettingsConfig {
      * asked about either way.
      */
     lifecycle_confirm_close_now: boolean;
+    /**
+     * When true, Stop on a vault row needs a second click to confirm.
+     * Default true. Windows always stop with one click.
+     */
+    lifecycle_confirm_stop: boolean;
+    /**
+     * When true, Open and Close on a vault row (and a click on the row that
+     * opens it) need a second click to confirm. Default false.
+     */
+    lifecycle_confirm_lock: boolean;
   };
   logging: {
     enabled: boolean;
@@ -149,6 +159,8 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.lifecycle_open_file_manager_on_open === b.ui.lifecycle_open_file_manager_on_open &&
     a.ui.lifecycle_keep_open_on_wake === b.ui.lifecycle_keep_open_on_wake &&
     a.ui.lifecycle_confirm_close_now === b.ui.lifecycle_confirm_close_now &&
+    a.ui.lifecycle_confirm_stop === b.ui.lifecycle_confirm_stop &&
+    a.ui.lifecycle_confirm_lock === b.ui.lifecycle_confirm_lock &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&

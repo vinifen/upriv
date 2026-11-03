@@ -62,6 +62,8 @@ describe("buildSystemInfoSections", () => {
         "lifecycle_open_file_manager_on_open",
         "lifecycle_keep_open_on_wake",
         "lifecycle_confirm_close_now",
+        "lifecycle_confirm_stop",
+        "lifecycle_confirm_lock",
         "file_manager_dock_expanded",
         "app_home",
         "logs_path",

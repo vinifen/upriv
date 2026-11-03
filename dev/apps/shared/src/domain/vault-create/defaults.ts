@@ -37,6 +37,7 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
     auto_close: {
       enabled: false,
       idle_minutes: 15,
+      when_busy: "wait",
     },
     backup: {
       enabled: true,

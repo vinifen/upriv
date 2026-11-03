@@ -5,6 +5,7 @@ import {
   useJobService,
   useVaultGroupService,
   useLogService,
+  useVaultSecurityService,
   useVaultService,
 } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -12,7 +13,6 @@ import { useAppRefresh } from "@/features/system/refresh";
 import type { CreateVaultGroupAssignment, CreateVaultResult } from "@upriv/shared";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
-  LOADING_BUDGET_MS,
   RpcError,
   VAULT_ERROR_CODES,
   VAULT_LIST_SEARCH_PERSIST_MS,
@@ -30,7 +30,10 @@ import {
   fileNameOfPath,
   vaultCanSaveBackupNow,
   vaultDeleteHold,
+  resolveVaultListStatus,
   vaultRowControls,
+  vaultRowJobWork,
+  vaultStatusLabelKey,
   VAULT_DELETE_HOLD_I18N_KEY,
   displayNameToGroupId,
   resolveVaultDisplayStatus,
@@ -54,7 +57,6 @@ import {
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
-  type VaultRewrapRun,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { useFileManager } from "@/features/vaults/file-manager";
@@ -65,11 +67,15 @@ import {
   useBackupExportJob,
   useDataFolderExportJob,
   useFileManagerSelector,
-  useLoadingBudget,
-  usePlainExportSweep,
+  useOperationLimit,
+  useUnfinishedSweep,
   useVaultBackupJob,
+  useVaultRewrapJob,
+  type VaultRewrapOutcome,
+  type VaultRewrapTarget,
 } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
+import { publishRunningWork, type RunningWorkItem } from "@/lib/runningWork";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultImportDrop } from "./useVaultImportDrop";
@@ -77,13 +83,25 @@ import { useExportFolder } from "@/hooks/useExportFolder";
 import { useVaultExportFolders } from "./useVaultExportFolders";
 import type { VaultListDropSource } from "../lib/vaultImportDrop";
 
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
 export function useVaultListScreen() {
   const { t, locale } = useTranslation();
   const vaultService = useVaultService();
   const vaultGroupService = useVaultGroupService();
   const logService = useLogService();
-  const { openFromVault, syncWithVaultList } = useFileManager();
+  const { openFromVault, syncWithVaultList, cancelImports } = useFileManager();
   const fileManagerMaximized = useFileManagerSelector((state) => state.maximizedVaultId !== null);
+  /** Vaults whose file manager is importing files; the quit overlay lists them. */
+  const importingVaultIds = useFileManagerSelector(
+    (state) =>
+      Object.values(state.entries)
+        .filter((entry) => entry.importInFlight)
+        .map((entry) => entry.vaultId),
+    sameIds,
+  );
   const {
     settings,
     patchSettings,
@@ -111,13 +129,7 @@ export function useVaultListScreen() {
   );
   const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
-  const rewrapActivityRef = useRef<VaultRewrapRun | null>(null);
-  const [rewrapRun, setRewrapRun] = useState<VaultRewrapRun | null>(null);
   const blockOpenVaultIdsRef = useRef(new Set<string>());
-  const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
-    rewrapActivityRef.current = run;
-    setRewrapRun(run);
-  }, []);
   const groupedOrderGenRef = useRef<Map<string, number>>(new Map());
   const rowControlsRef = useRef(new Map<string, ReturnType<typeof vaultRowControls>>());
   const groupCollapsedGenRef = useRef<Map<string, number>>(new Map());
@@ -126,7 +138,7 @@ export function useVaultListScreen() {
   const vaultOrderGenRef = useRef(0);
   const repairGenRef = useRef(0);
   const [groupsRepairBusy, setGroupsRepairBusy] = useState(false);
-  const groupsRepairBudget = useLoadingBudget(groupsRepairBusy, LOADING_BUDGET_MS.default);
+  const groupsRepairLimit = useOperationLimit(groupsRepairBusy);
   const [groupsSanitizeNotice, setGroupsSanitizeNotice] = useState<{
     orphans: number;
     duplicates: number;
@@ -520,7 +532,7 @@ export function useVaultListScreen() {
     vaultService,
   ]);
 
-  usePlainExportSweep(vaultService, settingsOnDisk, vaultRootEpoch);
+  useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch);
 
   useEffect(() => {
     syncWithVaultList(vaults);
@@ -531,6 +543,7 @@ export function useVaultListScreen() {
   const { lifecycleRequest, setLifecycleRequest } = modals;
   const exportFolders = useVaultExportFolders();
   const backupService = useBackupService();
+  const securityService = useVaultSecurityService();
   const jobs = useJobService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
@@ -542,9 +555,32 @@ export function useVaultListScreen() {
     onFailed: (_vaultId, error) => {
       showError(error, "toast.backup_now_failed");
     },
-    onTimedOut: () => {
-      showToast(t("error.operation_timed_out"));
+    onCancelled: () => {
+      showToast(t("toast.backup_now_cancelled"));
     },
+    onStopRefused: (_vaultId, error) => showError(error, "error.job_not_stoppable"),
+  });
+  const [rewrapOutcome, setRewrapOutcome] = useState<VaultRewrapOutcome | null>(null);
+  const rewrapSeqRef = useRef(0);
+  /** The settings window shows this change's screen, so it marks the outcome itself. */
+  const rewrapShown = (target: VaultRewrapTarget) =>
+    modals.settingsVaultId === target.vaultId && modals.settingsArea === target.kind;
+  const rewrap = useVaultRewrapJob(securityService, jobs, {
+    onChanged: (target) => {
+      if (target.nextPreset) updateVaultUnlockPreset(target.vaultId, target.nextPreset);
+      showToast(
+        t(
+          target.kind === "password" ? "vault.change_password.success" : "vault.change_kdf.success",
+        ),
+      );
+      setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error: null });
+    },
+    onFailed: (error, target) => {
+      setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error });
+      if (!rewrapShown(target)) showError(error, "error.settings_save_failed");
+    },
+    onCancelled: () => showToast(t("error.job_cancelled")),
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
   const backupExportFolder = useExportFolder(t("modal.backup.export_picker_title"));
   const backupExport = useBackupExportJob(backupService, jobs, {
@@ -561,9 +597,7 @@ export function useVaultListScreen() {
     onCancelled: () => {
       showToast(t("toast.backup_export_cancelled"));
     },
-    onTimedOut: () => {
-      showToast(t("error.operation_timed_out"));
-    },
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
   const dataFolderService = useDataFolderService();
   const dataFolderExport = useDataFolderExportJob(dataFolderService, jobs, {
@@ -580,14 +614,12 @@ export function useVaultListScreen() {
     onCancelled: () => {
       showToast(t("toast.data_folder_export_cancelled"));
     },
-    onTimedOut: () => {
-      showToast(t("error.operation_timed_out"));
-    },
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
   // The export holds every vault: none may open until it ends.
   blockOpenVaultIdsRef.current = new Set(
     [
-      rewrapRun?.vaultId,
+      rewrap.job?.vaultId,
       backupJob.job?.vaultId,
       ...(dataFolderExport.job ? vaults.map((vault) => vault.id) : []),
     ].filter((id): id is string => id != null),
@@ -598,7 +630,7 @@ export function useVaultListScreen() {
   useEffect(() => {
     if (!lifecycleRequest || !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
-  }, [backupJob.job, dataFolderExport.job, lifecycleRequest, rewrapRun, setLifecycleRequest]);
+  }, [backupJob.job, dataFolderExport.job, lifecycleRequest, rewrap.job, setLifecycleRequest]);
 
   const lifecycle = useVaultLifecycleActions({
     vaults,
@@ -619,8 +651,7 @@ export function useVaultListScreen() {
         format: shownExportJob.format,
         startedAt: shownExportJob.startedAt,
         progress: shownExportJob.progress,
-        stopping: shownExportJob.stopping,
-        budgetMs: shownExportJob.budgetMs,
+        stoppingSince: shownExportJob.stoppingSince,
       }
     : null;
 
@@ -652,31 +683,103 @@ export function useVaultListScreen() {
     () => filterVisibleVaults(vaults, showHiddenVaults),
     [showHiddenVaults, vaults],
   );
-  const pipelineListStatus = useMemo(
-    () => ({
+  const rewrapJob = rewrap.job;
+  const backupNowJob = backupJob.job;
+  const pipelineListStatus = useMemo(() => {
+    const rowWork = { ...lifecycle.pipelineListStatus.rowWork };
+    for (const job of [rewrapJob, backupNowJob]) {
+      if (!job) continue;
+      rowWork[job.vaultId] = vaultRowJobWork({
+        startedAt: job.startedAt,
+        stoppable: job.progress?.stoppable ?? true,
+        stoppingSince: job.stoppingSince,
+      });
+    }
+    return {
       ...lifecycle.pipelineListStatus,
-      passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
-      kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
-      rewrapStartedAt: rewrapRun?.startedAt,
-      rewrapBudgetMs: rewrapRun?.budgetMs,
-      backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
-      backupJobStartedAt: backupJob.job?.startedAt,
-      backupJobBudgetMs: backupJob.job?.budgetMs,
+      passwordChangeVaultIds: rewrapJob?.kind === "password" ? [rewrapJob.vaultId] : undefined,
+      kdfChangeVaultIds: rewrapJob?.kind === "kdf" ? [rewrapJob.vaultId] : undefined,
+      backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
       backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
-      recoveringVaultIds: lifecycle.plainRemoveJob ? [lifecycle.plainRemoveJob.vaultId] : undefined,
-      recoveringStartedAt: lifecycle.plainRemoveJob?.startedAt,
-      recoveringBudgetMs: lifecycle.plainRemoveJob?.budgetMs,
       dataFolderExporting: dataFolderExport.job !== null,
-    }),
-    [
-      backupExport.job,
-      backupJob.job,
-      dataFolderExport.job,
-      lifecycle.pipelineListStatus,
-      lifecycle.plainRemoveJob,
-      rewrapRun,
-    ],
+      rowWork,
+    };
+  }, [
+    backupExport.job,
+    backupNowJob,
+    dataFolderExport.job,
+    lifecycle.pipelineListStatus,
+    rewrapJob,
+  ]);
+
+  /** Stop the work a row shows, whichever owner runs it. */
+  const stopRowWork = useCallback(
+    (vaultId: string) => {
+      if (rewrapJob?.vaultId === vaultId) rewrap.stop();
+      else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
+      else lifecycle.stopVaultWork(vaultId);
+    },
+    [backupJob, backupNowJob, lifecycle, rewrap, rewrapJob],
   );
+
+  // Everything running, for the quit overlay; the counts go to Electron main,
+  // which asks before quitting and keeps the computer awake meanwhile.
+  const closingCount = pipelineListStatus.closingVaultIds?.length ?? 0;
+  useEffect(() => {
+    const nameOf = (vaultId: string) =>
+      vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
+    const items: RunningWorkItem[] = [];
+    for (const [vaultId, work] of Object.entries(pipelineListStatus.rowWork ?? {})) {
+      if (work.stop === null) continue;
+      const vault = vaults.find((item) => item.id === vaultId);
+      const status = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
+      items.push({
+        key: `row:${vaultId}`,
+        label: `${nameOf(vaultId)} · ${t(vaultStatusLabelKey(status, vaultId, pipelineListStatus))}`,
+        startedAt: work.startedAt,
+        stoppingSince: work.stoppingSince,
+        stoppable: work.stop !== "final",
+        stop: () => stopRowWork(vaultId),
+      });
+    }
+    for (const job of [backupExport.job, dataFolderExport.job]) {
+      if (!job) continue;
+      const isBackup = job === backupExport.job;
+      items.push({
+        key: isBackup ? "backup_export" : "data_folder_export",
+        label: isBackup
+          ? `${nameOf(backupExport.job?.vaultId ?? "")} · ${t("modal.backup.export")}`
+          : t("modal.data_folder_export.title"),
+        startedAt: job.startedAt,
+        stoppingSince: job.stoppingSince,
+        stoppable: job.progress?.stoppable ?? true,
+        stop: isBackup ? backupExport.stop : dataFolderExport.stop,
+      });
+    }
+    for (const vaultId of importingVaultIds) {
+      items.push({
+        key: `import:${vaultId}`,
+        label: t("quit.work.files_importing", { name: nameOf(vaultId) }),
+        startedAt: null,
+        stoppingSince: null,
+        stoppable: true,
+        stop: () => cancelImports(vaultId),
+      });
+    }
+    publishRunningWork({ items, closing: closingCount });
+  }, [
+    backupExport.job,
+    backupExport.stop,
+    cancelImports,
+    closingCount,
+    dataFolderExport.job,
+    dataFolderExport.stop,
+    importingVaultIds,
+    pipelineListStatus,
+    stopRowWork,
+    t,
+    vaults,
+  ]);
   const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineListStatus);
   rowControlsRef.current = new Map(
     vaults.map((vault) => [vault.id, vaultRowControls(vault, pipelineListStatus)]),
@@ -695,7 +798,7 @@ export function useVaultListScreen() {
   const handleCreateVault = useCallback(
     (result: CreateVaultResult, password: string) => {
       // Another vault being created only queues this one. The same id still in
-      // flight (a create past its budget) is taken.
+      // flight is taken.
       if (
         vaults.some((vault) => vault.id === result.vaultId) ||
         lifecycle.pipeline.isVaultPipelineBusy(result.vaultId)
@@ -723,14 +826,17 @@ export function useVaultListScreen() {
       const welcome = buildVaultWelcomeFiles(result, { t, locale });
       lifecycle.startCreatePipeline(
         result.vaultId,
-        async () => {
-          await vaultService.createVault({
-            password,
-            unlockPreset: result.unlockPreset,
-            settings: result.settings,
-            importPackage: createVaultImportPackage(result, password),
-            welcome,
-          });
+        async (job) => {
+          await vaultService.createVault(
+            {
+              password,
+              unlockPreset: result.unlockPreset,
+              settings: result.settings,
+              importPackage: createVaultImportPackage(result, password),
+              welcome,
+            },
+            job,
+          );
         },
         {
           onComplete: () => {
@@ -804,7 +910,7 @@ export function useVaultListScreen() {
               }
             })();
           },
-          onError: () => {
+          onRemoved: () => {
             const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
             pendingCreatesRef.current.delete(result.vaultId);
             pendingCreateGroupsRef.current.delete(result.vaultId);
@@ -864,13 +970,6 @@ export function useVaultListScreen() {
       updateVaultSettings,
       vaults,
     ],
-  );
-
-  const handleUnlockPresetSaved = useCallback(
-    (vaultId: string, unlockPreset: Parameters<typeof updateVaultUnlockPreset>[1]) => {
-      updateVaultUnlockPreset(vaultId, unlockPreset);
-    },
-    [updateVaultUnlockPreset],
   );
 
   /** A new vault would land beside a data-folder copy in progress. Core refuses it too. */
@@ -1159,14 +1258,14 @@ export function useVaultListScreen() {
   }, [reloadGroups, showError, vaultGroupService]);
 
   useEffect(() => {
-    if (!groupsRepairBudget.timedOut || !groupsRepairBusy) return;
+    if (!groupsRepairLimit.timedOut || !groupsRepairBusy) return;
     repairGenRef.current += 1;
     setGroupsRepairBusy(false);
     showError(
       new RpcError("rpc_timeout", "vault_group_repair timed out"),
       "error.operation_timed_out",
     );
-  }, [groupsRepairBudget.timedOut, groupsRepairBusy, showError]);
+  }, [groupsRepairLimit.timedOut, groupsRepairBusy, showError]);
 
   const handleVaultGroupAssignmentChange = useCallback(
     async (vaultId: string, groupId: string | null) => {
@@ -1285,11 +1384,6 @@ export function useVaultListScreen() {
       groupsInvalid: groupsInvalid && !groupsInvalidDismissed,
       groupsSanitizeNotice,
       groupsRepairBusy,
-      groupsRepairBudget: {
-        visible: groupsRepairBudget.visible,
-        budgetMs: groupsRepairBudget.budgetMs,
-        remainingMs: groupsRepairBudget.remainingMs,
-      },
       onRepairGroups: () => {
         void handleRepairGroups();
       },
@@ -1301,7 +1395,7 @@ export function useVaultListScreen() {
       onOpenNote: modals.setNoteVaultId,
       onOpenVaultInfo: modals.setVaultInfoVaultId,
       onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => {
-        const run = rewrapActivityRef.current;
+        const run = rewrap.job;
         if (
           run &&
           (area === "password" || area === "kdf") &&
@@ -1325,6 +1419,7 @@ export function useVaultListScreen() {
       onLockVault: lifecycle.handleLockVault,
       onUnlockVault: lifecycle.handleUnlockVault,
       onCloseNow: lifecycle.handleCloseNow,
+      onStopWork: (vault: VaultListItem) => stopRowWork(vault.id),
     },
     importDrop,
     lifecycle: {
@@ -1335,10 +1430,9 @@ export function useVaultListScreen() {
         lifecycle.pipeline.run && lifecycle.pipeline.run.vaultId === modals.lifecycleVault?.id
           ? lifecycle.pipeline.run.activeStep
           : 0,
-      lifecycleBudgetStartedAt:
-        lifecycle.pipeline.run && lifecycle.pipeline.run.vaultId === modals.lifecycleVault?.id
-          ? lifecycle.pipeline.run.startedAt
-          : undefined,
+      lifecycleWork: modals.lifecycleVault
+        ? (pipelineListStatus.rowWork?.[modals.lifecycleVault.id] ?? null)
+        : null,
       lifecycleVerifyErrorKey: lifecycle.credentialErrorKey,
       lifecycleFieldPassword: lifecycle.credentialFieldPassword,
       onLifecycleClose: () => {
@@ -1346,6 +1440,9 @@ export function useVaultListScreen() {
         modals.setLifecycleRequest(null);
       },
       onLifecycleConfirm: lifecycle.handleLifecycleConfirm,
+      onLifecycleStop: () => {
+        if (modals.lifecycleVault) lifecycle.stopVaultWork(modals.lifecycleVault.id);
+      },
       recoveryVault: modals.recoveryVault,
       recoveryOpen: modals.recoveryVaultId !== null,
       onRecoveryClose: () => modals.setRecoveryVaultId(null),
@@ -1402,6 +1499,7 @@ export function useVaultListScreen() {
         backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id
           ? backupJob.job
           : null,
+      onStopSave: backupJob.stop,
       onSaveNow: () => {
         const vault = modals.backupVault;
         if (!vault) return;
@@ -1450,13 +1548,16 @@ export function useVaultListScreen() {
         modals.setSettingsArea(null);
       },
       onVaultSettingsSaved: handleVaultSettingsSaved,
-      onUnlockPresetSaved: handleUnlockPresetSaved,
       onPersistBusyChange: (vaultIds: readonly string[] | null) => {
         settingsPersistVaultIdsRef.current = new Set(vaultIds ?? []);
       },
       onVaultDelete: handleVaultDelete,
       onNotice: showToast,
-      onRewrapRunChange,
+      rewrapJob: rewrap.job,
+      rewrapOutcome,
+      onChangePassword: rewrap.changePassword,
+      onChangeKdf: rewrap.changeKdf,
+      onStopRewrap: rewrap.stop,
       groups,
       onCommitGroupAssignment: async (vaultId: string, assignment: CreateVaultGroupAssignment) => {
         if (assignment.kind === "create") {
@@ -1488,6 +1589,7 @@ export function useVaultListScreen() {
         void modals.setAppSettingsOpen(false);
       },
       onDirtyChange: modals.setAppSettingsDirty,
+      onNotice: showToast,
     },
     groupsModal: {
       open: modals.groupsOpen,

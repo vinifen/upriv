@@ -128,6 +128,18 @@ export type PlainFiles = "chosen" | "whole";
 
 export type WipePattern = "random" | "zeros";
 
+/**
+ * `[auto_close] when_busy`: `wait` closes once nothing keeps the vault open (a
+ * file manager import, a send to a plain-text folder); `close` stops that
+ * work and closes on time.
+ */
+export type AutoCloseWhenBusy = "wait" | "close";
+
+export const AUTO_CLOSE_WHEN_BUSY = [
+  "wait",
+  "close",
+] as const satisfies readonly AutoCloseWhenBusy[];
+
 export interface VaultSectionConfig {
   id: string;
   display_name: string;
@@ -164,6 +176,8 @@ export interface VaultSettingsConfig {
     enabled: boolean;
     /** Minutes without activity inside Upriv before this vault closes. */
     idle_minutes: number;
+    /** What happens when the time is up while work keeps the vault open. */
+    when_busy: AutoCloseWhenBusy;
   };
   file_manager: {
     /** Ask before deleting a file or folder. "Don't ask again" turns it off. */

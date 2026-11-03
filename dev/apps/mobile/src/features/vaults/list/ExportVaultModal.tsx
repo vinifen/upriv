@@ -4,7 +4,6 @@ import {
   DEFAULT_SEVEN_ZIP,
   DEFAULT_VAULT_EXPORT_FORMAT,
   DEFAULT_VAULT_EXPORT_INCLUDE,
-  LOADING_BUDGET_MS,
   VAULT_EXPORT_PROGRESS_COPY,
   exportFilenameSanitizeKind,
   vaultExportFilename,
@@ -29,14 +28,7 @@ import {
   VaultSettingsSevenZipSection,
 } from "@/components/settings";
 import { ExportFolderField } from "@/components/ExportFolderField";
-import {
-  Button,
-  JobProgressBar,
-  LoadingBudgetHint,
-  Modal,
-  ModalFooterActions,
-} from "@/components/ui";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { Button, JobProgressBar, JobStopButton, Modal, ModalFooterActions } from "@/components/ui";
 import { useVaultService } from "@/platform/services";
 import type { VaultExportFolders } from "./hooks/useVaultExportFolders";
 
@@ -181,10 +173,6 @@ export function ExportVaultModal({
   // the window must not start over when the list re-renders (a folder pick).
   const onSettingsLoadErrorRef = useRef(onSettingsLoadError);
   onSettingsLoadErrorRef.current = onSettingsLoadError;
-  // The list owns the export and ends it on timeout; the window only shows the budget.
-  const budget = useLoadingBudget(exporting, running?.budgetMs ?? LOADING_BUDGET_MS.vaultExport, {
-    startedAt: running?.startedAt,
-  });
   const { cancelPick: cancelZipPick } = folders.store_zip;
   const { cancelPick: cancelSevenZipPick } = folders.seven_zip;
   const { cancelPick: cancelPlainPick } = folders.plain_zip;
@@ -340,18 +328,16 @@ export function ExportVaultModal({
     />
   );
 
-  /** The option being written: how far it got, and how long it may still take. */
+  /** The option being written: how far it got, and how long it has run. */
   const runningPanel = running ? (
     <View style={styles.footer}>
       <JobProgressBar
         progress={running.progress}
+        startedAt={running.startedAt}
         label={t("vault.export.dialog.title")}
         copy={VAULT_EXPORT_PROGRESS_COPY}
       />
       <Text style={typography.caption}>{t("vault.export.dialog.background_note")}</Text>
-      {budget.visible ? (
-        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-      ) : null}
     </View>
   ) : null;
 
@@ -369,14 +355,12 @@ export function ExportVaultModal({
       footer={
         <ModalFooterActions layout="confirm">
           {running ? (
-            <Button
-              variant="secondary"
-              label={
-                running.stopping ? t("vault.export.dialog.stopping") : t("vault.export.dialog.stop")
-              }
-              disabled={running.stopping}
-              busy={running.stopping}
-              onPress={onStop}
+            <JobStopButton
+              stoppingSince={running.stoppingSince}
+              stoppable={running.progress?.stoppable ?? true}
+              onStop={onStop}
+              label={t("vault.export.dialog.stop")}
+              stoppingLabel={t("vault.export.dialog.stopping")}
             />
           ) : (
             <Button

@@ -10,37 +10,32 @@ export interface PlainRemoveJobEvents {
   /** The wipe ended. `wipe.kept` files could not be wiped: the vault stays in recovery. */
   onRemoved: (vaultId: string, wipe: PlainWipe) => void;
   onFailed: (error: unknown) => void;
-  /**
-   * The budget or the call's own timeout ran out. Core is told to stop, what
-   * it did not reach stays, and the vault stays in recovery.
-   */
-  onTimedOut: () => void;
+  /** The wipe was stopped: what it reached is gone, the rest stays, the vault stays in recovery. */
+  onCancelled: (vaultId: string) => void;
+  onStopRefused: (vaultId: string, error: unknown) => void;
 }
 
 /**
  * Recovery's Remove the folder, owned by the vault list so the recovery window
  * closes at once and the rest of the app stays usable. One at a time. While
  * `job` is set the list shows that vault as `recovering` and refuses to open
- * it. Its budget grows with the bytes of the folder
- * (`sizedBudgetMs("plainLeftoverRemove")`).
+ * it.
  */
 export function usePlainRemoveJob(
   remove: (vaultId: string, jobId: string) => Promise<PlainWipe>,
   jobs: JobService,
   events: PlainRemoveJobEvents,
 ) {
-  const { job, start: startJob } = useCoreJob<{ vaultId: string }, PlainWipe>(
-    jobs,
-    "plainLeftoverRemove",
-    {
-      onDone: (wipe, { vaultId }) => events.onRemoved(vaultId, wipe),
-      onFailed: (error) => events.onFailed(error),
-      // Nobody stops a wipe by hand: a stop comes from quitting, or from its
-      // own timeout, which `onTimedOut` already reported.
-      onCancelled: () => undefined,
-      onTimedOut: () => events.onTimedOut(),
-    },
-  );
+  const {
+    job,
+    start: startJob,
+    stop,
+  } = useCoreJob<{ vaultId: string }, PlainWipe>(jobs, {
+    onDone: (wipe, { vaultId }) => events.onRemoved(vaultId, wipe),
+    onFailed: (error) => events.onFailed(error),
+    onCancelled: ({ vaultId }) => events.onCancelled(vaultId),
+    onStopRefused: (error, { vaultId }) => events.onStopRefused(vaultId, error),
+  });
 
   /** Wipe the leftover folder of `vaultId`. False while another wipe runs. */
   const start = useCallback(
@@ -48,5 +43,5 @@ export function usePlainRemoveJob(
     [remove, startJob],
   );
 
-  return { job, start };
+  return { job, start, stop };
 }

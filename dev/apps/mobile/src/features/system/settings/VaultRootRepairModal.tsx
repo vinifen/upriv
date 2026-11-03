@@ -24,6 +24,7 @@ import { Button, Modal, Select, type SelectOption } from "@/components/ui";
 import { PolicyRadioOption } from "@/components/settings";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
+import { useDataFolderCopy } from "./useDataFolderCopy";
 
 interface VaultRootRepairModalProps {
   open: boolean;
@@ -77,6 +78,9 @@ export function VaultRootRepairModal({
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dataFolderCopy = useDataFolderCopy((stopError) =>
+    setError(t(mobileErrorI18nKey(stopError, "error.job_not_stoppable"))),
+  );
   const [otherPath, setOtherPath] = useState("");
   const [otherDisk, setOtherDisk] = useState<VaultRootDiskStatus>("needs_folder");
   const [otherReplacePolicy, setOtherReplacePolicy] = useState<IncompleteReplacePolicy | null>(
@@ -197,11 +201,14 @@ export function VaultRootRepairModal({
           });
           rootPath = result.rootPath;
         } else {
-          const result = await vaultRoot.setupAtPath(targetPath, {
-            replaceIncomplete: true,
-            replacePolicy: nextPolicy,
-            bootstrap: { locale: settings.ui.locale },
-          });
+          const result = await vaultRoot
+            .setupAtPath(targetPath, {
+              replaceIncomplete: true,
+              replacePolicy: nextPolicy,
+              bootstrap: { locale: settings.ui.locale },
+              job: dataFolderCopy.begin(targetPath),
+            })
+            .finally(dataFolderCopy.end);
           rootPath = result.rootPath;
           alertIfPrivateRootLeftBehind(
             result.privateRoot,
@@ -229,7 +236,7 @@ export function VaultRootRepairModal({
           setBusy(false);
         });
     },
-    [finishWithRoot, mode, settings.ui.locale, t, targetPath, vaultRoot],
+    [dataFolderCopy, finishWithRoot, mode, settings.ui.locale, t, targetPath, vaultRoot],
   );
 
   const handlePickOtherFolder = useCallback(() => {
@@ -284,11 +291,14 @@ export function VaultRootRepairModal({
         return;
       }
 
-      const { rootPath, privateRoot } = await vaultRoot.setupAtPath(path, {
-        replaceIncomplete: otherReplacePolicy != null,
-        replacePolicy: otherReplacePolicy ?? undefined,
-        bootstrap: { locale: settings.ui.locale },
-      });
+      const { rootPath, privateRoot } = await vaultRoot
+        .setupAtPath(path, {
+          replaceIncomplete: otherReplacePolicy != null,
+          replacePolicy: otherReplacePolicy ?? undefined,
+          bootstrap: { locale: settings.ui.locale },
+          job: dataFolderCopy.begin(path),
+        })
+        .finally(dataFolderCopy.end);
       if (gen !== busyGen.current) return;
       alertIfPrivateRootLeftBehind(
         privateRoot,
@@ -314,6 +324,7 @@ export function VaultRootRepairModal({
         setBusy(false);
       });
   }, [
+    dataFolderCopy,
     finishWithRoot,
     otherGate.blocksPrimary,
     otherPath,
@@ -391,6 +402,8 @@ export function VaultRootRepairModal({
             setConfirmOpen(false);
             setError(t("loading.timed_out"));
           }}
+          copy={dataFolderCopy.copy}
+          onStopCopy={dataFolderCopy.stop}
         />
       }
     >

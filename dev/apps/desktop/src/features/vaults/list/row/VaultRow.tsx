@@ -1,6 +1,6 @@
 import { useMemo, useRef } from "react";
 import { Icon } from "@/components/icons";
-import { LoadingBudgetHint } from "@/components/ui";
+import { ElapsedTime } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   vaultRowControls,
@@ -8,15 +8,19 @@ import {
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
-  vaultPipelineRowBudget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
+  vaultRowButtonRole,
+  vaultRowButtonTwoStep,
   vaultRowChrome,
+  vaultRowWorkClock,
   vaultStatusLabelKey,
   type VaultListViewMode,
   type VaultListItem,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
+import { disarmRowButton, useRowArming } from "@upriv/shared/react";
+import { ROW_ARM_ATTR } from "@/hooks/useRowArmingDismiss";
 import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
 import { useElementWidth } from "@/hooks/useElementWidth";
@@ -34,7 +38,6 @@ import { VaultStatusBadge } from "./VaultStatusBadge";
 import { vaultRowDensityClass } from "../lib/vaultListView";
 import type { VaultListPointerDragHandlers } from "./vaultListPointerDrag";
 import { useAppSettingsContext } from "@/features/system/settings";
-import { useLoadingBudget } from "@upriv/shared/react";
 
 interface VaultRowProps {
   vault: VaultListItem;
@@ -57,6 +60,7 @@ interface VaultRowProps {
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
+  onStopWork: (vault: VaultListItem) => void;
 }
 
 function listWidthEstimate(): number {
@@ -85,6 +89,7 @@ export function VaultRow({
   onLockVault,
   onUnlockVault,
   onCloseNow,
+  onStopWork,
 }: VaultRowProps) {
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
@@ -115,10 +120,9 @@ export function VaultRow({
   const comfortable = vaultRowChrome(rowWidth) === "comfortable" || buttonsBelow;
   const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
-  const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
-  const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
-    startedAt: rowBudget.startedAt,
-  });
+  const work = pipelineListStatus.rowWork?.[vault.id] ?? null;
+  const role = vaultRowButtonRole(status, work);
+  const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
   const canUnlockFromRow =
@@ -126,6 +130,8 @@ export function VaultRow({
   const openOrUnlock = () => {
     if (isReorderActive || isDragging) return;
     if (isOpen) onOpenFileManager(vault);
+    // A click on the row is Unlock, with the button's guard: a click just after Stop turned into Unlock does nothing.
+    else if (role === "unlock") arming.press(() => onUnlockVault(vault));
     else if (canUnlockFromRow) onUnlockVault(vault);
   };
   const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
@@ -134,6 +140,7 @@ export function VaultRow({
     <article
       ref={articleRef}
       {...vaultListDropKeyProps(dropKey)}
+      {...{ [ROW_ARM_ATTR]: vault.id }}
       className={[
         "vault-row relative z-0 flex min-w-0 w-full justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
         buttonsBelow ? "flex-col items-stretch" : "flex-row items-center",
@@ -213,25 +220,23 @@ export function VaultRow({
             </h3>
             <div className="flex min-w-0 items-center gap-2">
               <VaultStatusBadge status={status} labelKey={statusLabelKey} />
-              {openingBudget.visible ? (
-                <LoadingBudgetHint
-                  budgetMs={openingBudget.budgetMs}
-                  remainingMs={openingBudget.remainingMs}
-                  layout="inline"
-                />
-              ) : (
-                <span
-                  className="flex min-w-0 items-center gap-1 text-xs text-on-surface-variant"
-                  title={lastAccessedLabel}
-                >
-                  {!comfortable ? (
-                    <Icon name="clock" size={12} className="shrink-0 text-on-surface-variant" />
-                  ) : null}
-                  <span className="min-w-0 truncate">
-                    {comfortable ? lastAccessedLabel : lastAccessedWhen}
+              <ElapsedTime
+                startedAt={vaultRowWorkClock(work)}
+                layout="inline"
+                fallback={
+                  <span
+                    className="flex min-w-0 items-center gap-1 text-xs text-on-surface-variant"
+                    title={lastAccessedLabel}
+                  >
+                    {!comfortable ? (
+                      <Icon name="clock" size={12} className="shrink-0 text-on-surface-variant" />
+                    ) : null}
+                    <span className="min-w-0 truncate">
+                      {comfortable ? lastAccessedLabel : lastAccessedWhen}
+                    </span>
                   </span>
-                </span>
-              )}
+                }
+              />
             </div>
           </div>
         </div>
@@ -242,26 +247,34 @@ export function VaultRow({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
       >
-        <VaultRowActions
-          vault={vault}
-          pipelineListStatus={pipelineListStatus}
-          includeLockAction={false}
-          onOpenBackups={onOpenBackups}
-          onOpenNote={onOpenNote}
-          onOpenVaultInfo={onOpenVaultInfo}
-          onOpenSettings={onOpenSettings}
-          onExportVault={onExportVault}
-          onOpenFileManager={onOpenFileManager}
-          onLockVault={onLockVault}
-          onUnlockVault={onUnlockVault}
-          onCloseNow={onCloseNow}
-        />
+        {/* Another control in the row puts an armed button back to normal. */}
+        <span className="contents" onPointerDownCapture={() => disarmRowButton()}>
+          <VaultRowActions
+            vault={vault}
+            pipelineListStatus={pipelineListStatus}
+            includeLockAction={false}
+            onOpenBackups={onOpenBackups}
+            onOpenNote={onOpenNote}
+            onOpenVaultInfo={onOpenVaultInfo}
+            onOpenSettings={onOpenSettings}
+            onExportVault={onExportVault}
+            onOpenFileManager={onOpenFileManager}
+            onLockVault={onLockVault}
+            onUnlockVault={onUnlockVault}
+            onCloseNow={onCloseNow}
+          />
+        </span>
         <VaultLockButton
+          vaultId={vault.id}
           status={status}
+          role={role}
+          armed={arming.armed}
+          press={arming.press}
           appearance={comfortable ? "label" : "icon"}
           resumeUnlock={resumeOpen}
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}
+          onStop={() => onStopWork(vault)}
         />
       </div>
     </article>

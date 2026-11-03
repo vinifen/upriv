@@ -13,11 +13,16 @@ export interface ContentImportTree {
   files: ContentImportFile[];
 }
 
+/**
+ * The calls one phone import makes. The create and every file run as the same
+ * core job, so one Stop ends the import at the file in flight, or at the next
+ * one when it comes between calls.
+ */
 export interface ContentTreeImportIo {
-  createVault(input: CreateVaultInput): Promise<VaultListItem>;
+  createVault(input: CreateVaultInput, job: string): Promise<VaultListItem>;
   openSession(id: string, password: string): Promise<void>;
   addDirectory(id: string, logicalPath: string): Promise<void>;
-  addFile(id: string, logicalPath: string, uri: string): Promise<void>;
+  addFile(id: string, logicalPath: string, uri: string, job: string): Promise<void>;
   close(id: string): Promise<void>;
   abort(id: string): Promise<void>;
 }
@@ -201,32 +206,37 @@ export function createContentTreeRegistry() {
 }
 
 /**
- * Create the vault, stream the folder in, then close it.
- * A failure deletes the new vault instead of leaving it open or half-filled.
- * The welcome note is sealed at create, so it is dropped up front when the
- * picked tree already has a root `README.md` file or folder (same rule as core).
+ * Create the vault, stream the folder in, then close it, as the job `job`.
+ * A failure or a stop deletes the new vault instead of leaving it open or
+ * half-filled. The welcome note is sealed at create, so it is dropped up front
+ * when the picked tree already has a root `README.md` file or folder (same
+ * rule as core).
  */
 export async function importContentTree(
   input: CreateVaultInput,
   tree: ContentImportTree,
   io: ContentTreeImportIo,
+  job: string,
 ): Promise<VaultListItem> {
   const hasOwnReadme =
     tree.files.some((file) => isRootWelcomeReadmePath(file.logicalPath)) ||
     tree.directories.some((dir) => isRootWelcomeReadmePath(dir));
-  const created = await io.createVault({
-    password: input.password,
-    unlockPreset: input.unlockPreset,
-    settings: input.settings,
-    welcome: hasOwnReadme ? undefined : input.welcome,
-  });
+  const created = await io.createVault(
+    {
+      password: input.password,
+      unlockPreset: input.unlockPreset,
+      settings: input.settings,
+      welcome: hasOwnReadme ? undefined : input.welcome,
+    },
+    job,
+  );
   try {
     await io.openSession(created.id, input.password);
     for (const directory of tree.directories) {
       await io.addDirectory(created.id, directory);
     }
     for (const file of tree.files) {
-      await io.addFile(created.id, file.logicalPath, file.uri);
+      await io.addFile(created.id, file.logicalPath, file.uri, job);
     }
     await io.close(created.id);
     return created;

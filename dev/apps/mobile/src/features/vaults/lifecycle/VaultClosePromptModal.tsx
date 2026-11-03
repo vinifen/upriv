@@ -1,14 +1,13 @@
 import { useEffect } from "react";
 import { Text } from "react-native";
 import {
-  LOADING_BUDGET_MS,
   vaultClosePromptBodyKey,
   vaultClosePromptTitleKey,
   type VaultClosePrompt,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useOperationLimit } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
-import { Button, LoadingBudgetHint, Modal, ModalFooterActions } from "@/components/ui";
+import { Button, Modal, ModalFooterActions } from "@/components/ui";
 import { useTheme } from "@/theme";
 
 interface VaultClosePromptModalProps {
@@ -42,11 +41,11 @@ export function VaultClosePromptModal({
   const { t } = useTranslation();
   const { typography, colors } = useTheme();
   const open = prompt !== null;
-  const budget = useLoadingBudget(open && saving, LOADING_BUDGET_MS.vaultPipeline);
+  const limit = useOperationLimit(open && saving);
 
   useEffect(() => {
-    if (budget.timedOut) onSaveTimeout();
-  }, [budget.timedOut, onSaveTimeout]);
+    if (limit.timedOut) onSaveTimeout();
+  }, [limit.timedOut, onSaveTimeout]);
 
   if (!prompt) return null;
   const unsaved = prompt.blocker === "unsaved";
@@ -105,9 +104,6 @@ export function VaultClosePromptModal({
       <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
         {t(vaultClosePromptBodyKey(prompt))}
       </Text>
-      {unsaved && budget.visible ? (
-        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-      ) : null}
     </Modal>
   );
 }

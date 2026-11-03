@@ -1223,6 +1223,7 @@ mod tests {
             &packed,
             PASSWORD,
             ImportExtras::default(),
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         open_vault(&root, &imported, PASSWORD).unwrap();
@@ -1283,6 +1284,7 @@ mod tests {
                 &packed,
                 PASSWORD,
                 ImportExtras::default(),
+                &crate::test_support::test_job_id(),
             )
             .unwrap();
             open_vault(&root, &imported, PASSWORD).unwrap();
@@ -1347,7 +1349,7 @@ mod tests {
         let (_tmp, root) = closed_vault(&[("/a.bin", &data), ("/b.bin", &data)]);
         let id = test_job_id();
         let job = Job::start(&id).unwrap();
-        cancel_job(&id);
+        cancel_job(&id).unwrap();
         let copy = VaultSevenZipSection::default();
         let packed = pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job);
         assert!(matches!(job.settle(packed), Err(UprivError::JobCancelled)));
@@ -1364,7 +1366,7 @@ mod tests {
             for _ in 0..1000 {
                 if let Some(status) = job_status(&id_clone) {
                     if status.bytes_done > 0 {
-                        cancel_job(&id_clone);
+                        cancel_job(&id_clone).unwrap();
                         return;
                     }
                 }

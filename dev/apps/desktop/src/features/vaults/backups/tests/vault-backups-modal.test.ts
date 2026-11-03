@@ -2,9 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { LOADING_BUDGET_MS, type VaultBackupEntry, type VaultListItem } from "@upriv/shared";
+import type { VaultBackupEntry, VaultListItem } from "@upriv/shared";
 import type { BackupExportJob } from "@upriv/shared/react";
 import { useExportFolder } from "@/hooks/useExportFolder";
+import { pressStop } from "@/lib/tests/pressStop";
 import { VaultBackupsModal } from "../VaultBackupsModal";
 
 const pickFolder = vi.fn<(initial: string | null, title: string) => Promise<string | null>>();
@@ -79,6 +80,7 @@ function Harness({
     canSaveNow: true,
     saveJob: null,
     onSaveNow: () => {},
+    onStopSave: () => {},
     listRefreshToken: 0,
     onClose: () => {},
     exportFolder,
@@ -112,9 +114,8 @@ function job(keys: readonly string[], overrides: Partial<BackupExportJob> = {}):
     vaultId: "notes",
     keys,
     startedAt: Date.now(),
-    progress: { bytesDone: 512, bytesTotal: 1024 },
-    stopping: false,
-    budgetMs: LOADING_BUDGET_MS.backupExport,
+    progress: { bytesDone: 512, bytesTotal: 1024, stoppable: true },
+    stoppingSince: null,
     ...overrides,
   };
 }
@@ -211,7 +212,7 @@ describe("VaultBackupsModal export", () => {
     expect(rowButton(PLAIN, "modal.backup.export").disabled).toBe(true);
     expect(rowButton(PIN, "action.delete").disabled).toBe(false);
 
-    fireEvent.click(rowButton(PLAIN, "modal.backup.export_stop"));
+    pressStop(rowButton(PLAIN, "modal.backup.export_stop"));
     expect(onStopExport).toHaveBeenCalledOnce();
   });
 
@@ -230,7 +231,7 @@ describe("VaultBackupsModal export", () => {
     await show({ exportJob: job([PLAIN_KEY]), onStopExport });
 
     fireEvent.click(rowButton(PIN, "action.delete"));
-    fireEvent.click(rowButton(PLAIN, "modal.backup.export_stop"));
+    pressStop(rowButton(PLAIN, "modal.backup.export_stop"));
     expect(onStopExport).toHaveBeenCalledOnce();
   });
 
@@ -247,8 +248,18 @@ describe("VaultBackupsModal export", () => {
   });
 
   it("says when the stop is on its way", async () => {
-    await show({ exportJob: job([PLAIN_KEY], { stopping: true }) });
+    await show({ exportJob: job([PLAIN_KEY], { stoppingSince: Date.now() }) });
 
     expect(rowButton(PLAIN, "modal.backup.export_stopping").disabled).toBe(true);
+  });
+
+  it("cannot stop while the file is being put in place", async () => {
+    await show({
+      exportJob: job([PLAIN_KEY], {
+        progress: { bytesDone: 1024, bytesTotal: 1024, stoppable: false },
+      }),
+    });
+
+    expect(rowButton(PLAIN, "modal.backup.export_stop").disabled).toBe(true);
   });
 });

@@ -86,7 +86,6 @@ export function VaultListPage() {
         <VaultGroupsInvalidBanner
           visible={list.groupsInvalid}
           busy={list.groupsRepairBusy}
-          budget={list.groupsRepairBudget}
           onRepair={list.onRepairGroups}
           onDismiss={list.onDismissGroupsInvalid}
         />
@@ -125,6 +124,7 @@ export function VaultListPage() {
           onLockVault={list.onLockVault}
           onUnlockVault={list.onUnlockVault}
           onCloseNow={list.onCloseNow}
+          onStopWork={list.onStopWork}
         />
         {importDrop.isImportDropActive ? (
           <div
@@ -152,6 +152,7 @@ export function VaultListPage() {
         canSaveNow={backups.canSaveNow}
         saveJob={backups.saveJob}
         onSaveNow={backups.onSaveNow}
+        onStopSave={backups.onStopSave}
         listRefreshToken={backups.listRefreshToken}
         onClose={backups.onClose}
         onCreateVaultFromBackup={backups.onCreateVaultFromBackup}
@@ -179,11 +180,14 @@ export function VaultListPage() {
         onClose={settings.onClose}
         pipelineListStatus={list.pipelineListStatus}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
-        onUnlockPresetSaved={settings.onUnlockPresetSaved}
         onPersistBusyChange={settings.onPersistBusyChange}
         onVaultDelete={settings.onVaultDelete}
         onNotice={settings.onNotice}
-        onRewrapRunChange={settings.onRewrapRunChange}
+        rewrapJob={settings.rewrapJob}
+        rewrapOutcome={settings.rewrapOutcome}
+        onChangePassword={settings.onChangePassword}
+        onChangeKdf={settings.onChangeKdf}
+        onStopRewrap={settings.onStopRewrap}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}
       />
@@ -203,6 +207,7 @@ export function VaultListPage() {
         open={appSettings.open}
         onClose={appSettings.onClose}
         onDirtyChange={appSettings.onDirtyChange}
+        onNotice={appSettings.onNotice}
         hasOpenVault={!appConfigEditAllowed("workspace.path", list.vaults, list.pipelineListStatus)}
       />
       <VaultGroupsModal
@@ -222,6 +227,7 @@ export function VaultListPage() {
           !appConfigEditAllowed("data_folder", list.vaults, list.pipelineListStatus)
         }
         exportControls={dataFolder.exportControls}
+        onNotice={appSettings.onNotice}
       />
       <LogsModal open={logs.open} onClose={logs.onClose} />
       <HelpModal open={help.open} onClose={help.onClose} />

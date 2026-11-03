@@ -6,14 +6,26 @@ import { scheduleInterval } from "./schedule";
 /** How often a running job is asked how far it got. */
 export const JOB_PROGRESS_POLL_MS = 1_000;
 
+/** What `job_status` told so far about one job. */
+export interface JobTrack {
+  /** The last answer while it ran; `null` until the first one. */
+  progress: JobProgress | null;
+  /**
+   * When core was first seen running it. `null` while the job is queued: the
+   * request waits for its lane, and that wait is not counted as work.
+   */
+  startedAt: number | null;
+}
+
+const NOT_STARTED: JobTrack = { progress: null, startedAt: null };
+
 /**
- * How far the job `id` got, asked every `JOB_PROGRESS_POLL_MS` while `id` is
- * set. `null` until that job's first answer, and while `id` is `null`.
- * Progress is advisory: a failed ask keeps the last answer, and the job's own
- * request reports how it ended.
+ * Ask how far the job `id` got every `JOB_PROGRESS_POLL_MS` while `id` is
+ * set. A job core does not list yet is queued. Progress is advisory: a failed
+ * ask keeps the last answer, and the job's own request reports how it ended.
  */
-export function useJobProgress(jobs: JobService, id: string | null): JobProgress | null {
-  const [answer, setAnswer] = useState<{ id: string; progress: JobProgress } | null>(null);
+export function useJobProgress(jobs: JobService, id: string | null): JobTrack {
+  const [answer, setAnswer] = useState<{ id: string; track: JobTrack } | null>(null);
 
   useEffect(() => {
     if (id === null) return;
@@ -26,7 +38,17 @@ export function useJobProgress(jobs: JobService, id: string | null): JobProgress
         .status(id)
         .then(
           (progress) => {
-            if (current && progress) setAnswer({ id, progress });
+            if (!current || !progress) return;
+            setAnswer((previous) => ({
+              id,
+              track: {
+                progress,
+                startedAt:
+                  previous?.id === id && previous.track.startedAt !== null
+                    ? previous.track.startedAt
+                    : Date.now(),
+              },
+            }));
           },
           () => {
             /* The next ask may answer. */
@@ -44,5 +66,5 @@ export function useJobProgress(jobs: JobService, id: string | null): JobProgress
     };
   }, [id, jobs]);
 
-  return answer !== null && answer.id === id ? answer.progress : null;
+  return answer !== null && answer.id === id ? answer.track : NOT_STARTED;
 }

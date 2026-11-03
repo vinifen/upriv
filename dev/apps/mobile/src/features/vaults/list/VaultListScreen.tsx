@@ -56,6 +56,7 @@ import {
 import { type I18nKey } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { noteIdleActivity } from "@/lib/idleActivity";
+import { useRowArmingDismiss } from "@/hooks/useRowArmingDismiss";
 import { useTheme } from "@/theme";
 import {
   CONTROL_HEIGHT_MD,
@@ -95,7 +96,6 @@ import {
   Collapse,
   DropdownPanel,
   IconButton,
-  LoadingBudgetHint,
   MenuActionItem,
   MenuGroupLabel,
   Modal,
@@ -284,8 +284,6 @@ export function VaultListScreen() {
     groupsRef,
     groupBusyGenRef,
     repairGenRef,
-    groupBudget,
-    repairBudget,
     sortMode,
     sortDirection,
     viewMode,
@@ -311,8 +309,13 @@ export function VaultListScreen() {
     openCreate,
     closeCreate,
     pipelineStatus,
-    onRewrapRunChange,
-    rewrapRun,
+    stopRowWork,
+    rewrapJob,
+    rewrapOutcome,
+    changePassword,
+    changeKdf,
+    stopRewrap,
+    backupSaveStop,
     handleConfirmExportVault,
     handleStopExportVault,
     handleRowExport,
@@ -338,11 +341,11 @@ export function VaultListScreen() {
     handleNoteChange,
     vaultsRef,
     handleVaultSettingsSaved,
-    handleUnlockPresetSaved,
     handlePersistBusyChange,
     handleCreateVault,
     vaultGroupService,
   } = useVaultListScreen();
+  const armingDismiss = useRowArmingDismiss();
   const { colors, typography, theme } = useTheme();
 
   const [toolbarWidth, setToolbarWidth] = useState(0);
@@ -639,7 +642,7 @@ export function VaultListScreen() {
         onDragCancel={clearDrag}
         onOpenFileManager={openFromVault}
         onOpenSettings={(rowVault, area) => {
-          const run = rewrapRun;
+          const run = rewrapJob;
           if (
             run &&
             (area === "password" || area === "kdf") &&
@@ -654,6 +657,7 @@ export function VaultListScreen() {
         onUnlock={(rowVault) => lifecycle.requestLifecycle(rowVault.id, "unlock")}
         onLock={(rowVault) => lifecycle.requestLifecycle(rowVault.id, "close")}
         onCloseNow={(rowVault) => lifecycle.handleCloseNow(rowVault.id)}
+        onStopWork={(rowVault) => stopRowWork(rowVault.id)}
         onExport={handleRowExport}
         onOpenBackups={(rowVault) => setBackupsVault(rowVault)}
         onOpenNote={(rowVault) => setNoteVaultId(rowVault.id)}
@@ -897,11 +901,13 @@ export function VaultListScreen() {
       onTouchStart={(event) => {
         noteIdleActivity();
         blurVaultListSearchIfOutside(event);
+        armingDismiss.onTouchStart();
       }}
     >
       <CenteredPanel maxWidth={MAX_WIDTH_VAULT_LIST}>
         <View style={styles.listHost}>
           <FlatList
+            onScrollBeginDrag={armingDismiss.onScrollBeginDrag}
             key={`vault-list-${viewMode}-${blockColumns}`}
             data={listData}
             extraData={`${draggingId}|${dragOverId}|${viewMode}|${searchActive}`}
@@ -1154,12 +1160,6 @@ export function VaultListScreen() {
                       <Text style={[typography.body, { color: colors.onErrorContainer }]}>
                         {t("vault.group.invalid_banner")}
                       </Text>
-                      {repairBusy && repairBudget.visible ? (
-                        <LoadingBudgetHint
-                          budgetMs={repairBudget.budgetMs}
-                          remainingMs={repairBudget.remainingMs}
-                        />
-                      ) : null}
                     </View>
                     <Button
                       size="sm"
@@ -1376,15 +1376,18 @@ export function VaultListScreen() {
         open={lifecycleRequest !== null}
         submitting={lifecycle.credentialBusy}
         pipelineStep={lifecycle.credentialPipelineStep}
-        budgetStartedAt={
-          lifecycle.activePipelineVaultId === lifecycle.lifecycleVault?.id
-            ? (lifecycle.activePipelineStartedAt ?? undefined)
-            : undefined
+        work={
+          lifecycle.lifecycleVault
+            ? (pipelineStatus.rowWork[lifecycle.lifecycleVault.id] ?? null)
+            : null
         }
         verifyErrorKey={lifecycle.credentialErrorKey}
         initialPassword={lifecycle.credentialFieldPassword}
         onClose={lifecycle.cancelLifecycle}
         onConfirm={lifecycle.confirmLifecycle}
+        onStop={() => {
+          if (lifecycle.lifecycleVault) stopRowWork(lifecycle.lifecycleVault.id);
+        }}
       />
 
       <VaultRecoveryModal
@@ -1423,7 +1426,11 @@ export function VaultListScreen() {
         }}
         pipelineListStatus={pipelineStatus}
         showToast={show}
-        onRewrapRunChange={onRewrapRunChange}
+        rewrapJob={rewrapJob}
+        rewrapOutcome={rewrapOutcome}
+        onChangePassword={changePassword}
+        onChangeKdf={changeKdf}
+        onStopRewrap={stopRewrap}
         groups={groups}
         onCommitGroupAssignment={handleCommitGroupAssignment}
         onVaultDelete={(vaultId) => {
@@ -1431,7 +1438,6 @@ export function VaultListScreen() {
         }}
         onPersistBusyChange={handlePersistBusyChange}
         onSaved={handleVaultSettingsSaved}
-        onUnlockPresetSaved={handleUnlockPresetSaved}
       />
 
       <ExportVaultModal
@@ -1512,12 +1518,6 @@ export function VaultListScreen() {
         }
       >
         <View style={{ gap: spacing.sm }}>
-          {groupBusy && groupBudget.visible ? (
-            <LoadingBudgetHint
-              budgetMs={groupBudget.budgetMs}
-              remainingMs={groupBudget.remainingMs}
-            />
-          ) : null}
           <SettingsAccordionSection title={t("vault.group.settings.section_general")} defaultOpen>
             <FieldLabel>{t("vault.group.settings.rename")}</FieldLabel>
             <ThemedInput
@@ -1663,6 +1663,7 @@ export function VaultListScreen() {
         canSaveNow={backupsVault !== null && vaultCanSaveBackupNow(backupsVault, pipelineStatus)}
         saveJob={backupSaveJob}
         onSaveNow={handleBackupSaveNow}
+        onStopSave={backupSaveStop}
         listRefreshToken={backupListRefresh}
         onClose={() => setBackupsVault(null)}
         onCreateVaultFromBackup={(stamp, fileName, saved = false) => {
@@ -1697,6 +1698,7 @@ export function VaultListScreen() {
         onClose={() => setSettingsOpen(false)}
         onDirtyChange={setSettingsDirty}
         hasOpenVault={!appConfigEditAllowed("workspace.path", vaults, pipelineStatus)}
+        onNotice={show}
       />
       <VaultGroupsModal
         open={groupsOpen}
@@ -1713,6 +1715,7 @@ export function VaultListScreen() {
         onDirtyChange={setDataFolderDirty}
         vaultActivityBlocksChange={!appConfigEditAllowed("data_folder", vaults, pipelineStatus)}
         exportControls={dataFolderExportControls}
+        onNotice={show}
       />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
@@ -1763,15 +1766,6 @@ export function VaultListScreen() {
               {dragChipLabel}
             </Text>
           </View>
-        </View>
-      ) : null}
-
-      {groupBusy && groupBudget.visible && settingsGroup === null ? (
-        <View pointerEvents="none" style={styles.busyHint}>
-          <LoadingBudgetHint
-            budgetMs={groupBudget.budgetMs}
-            remainingMs={groupBudget.remainingMs}
-          />
         </View>
       ) : null}
     </View>
@@ -1981,13 +1975,6 @@ const styles = StyleSheet.create({
   dragChipText: {
     flexShrink: 1,
     fontWeight: "600",
-  },
-  busyHint: {
-    position: "absolute",
-    left: PAGE_PAD_H,
-    right: PAGE_PAD_H,
-    bottom: spacing.lg,
-    zIndex: 30,
   },
   groupInput: {
     marginTop: spacing.sm,

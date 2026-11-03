@@ -1,6 +1,0 @@
----
-description: Every blocking UI load must use a finite budget and show remaining time — never infinite spinners.
-alwaysApply: true
----
-
-Canonical rule: @.agent/rules/finite-loading-budgets.md — edit there, not here.

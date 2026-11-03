@@ -1,5 +1,3 @@
-import { LOADING_BUDGET_MS } from "../loading/budget";
-
 /** Runtime session state while the app is running. */
 export type VaultSession = "open" | "closing" | "recovery";
 
@@ -81,98 +79,66 @@ export type VaultPipelineListStatus = {
    * edit-policy `backupExportLocked`).
    */
   backupExportVaultIds?: readonly string[];
-  /**
-   * Clock for Back up now. Shared by the Backups modal and the row hint.
-   * Not the FIFO open/create clock.
-   */
-  backupJobStartedAt?: number;
-  /** Budget of that Back up now, grown with the size of `store/`. */
-  backupJobBudgetMs?: number;
   /** Vault whose leftover plain-text folder is being wiped. Displays `recovering`. */
   recoveringVaultIds?: readonly string[];
-  /** Clock for that wipe. Not the FIFO open/create clock. */
-  recoveringStartedAt?: number;
-  /** Budget of that wipe, grown with the bytes of the folder. */
-  recoveringBudgetMs?: number;
   /** Closed vault whose password rewrap is in flight. */
   passwordChangeVaultIds?: readonly string[];
   /** Closed vault whose unlock-RAM rewrap is in flight. */
   kdfChangeVaultIds?: readonly string[];
   /**
-   * Clock for the in-flight password or unlock-RAM rewrap.
-   * Shared by the settings screen and the row hint. Not the FIFO open/create clock.
+   * The work behind each busy status, by vault id: its clock and what the
+   * row's Stop does. A vault with no entry shows its status alone.
    */
-  rewrapStartedAt?: number;
-  /** Budget of that rewrap, sized from `store/`. */
-  rewrapBudgetMs?: number;
-  /** Active FIFO job — shared clock for modal + row budget hints. */
-  activeVaultId?: string;
-  activeStartedAt?: number;
+  rowWork?: Readonly<Record<string, VaultRowWork>>;
 };
+
+/**
+ * What the row's Stop does for its work: `ready` stops it, `final` is the
+ * step it cannot stop (Stop shows disabled), `stopping` waits for core.
+ */
+export type VaultRowStop = "ready" | "final" | "stopping";
+
+/** The work behind a row's busy status. */
+export interface VaultRowWork {
+  /**
+   * When core started it. `null` while it waits for its turn: the row says
+   * Queued… and counts nothing.
+   */
+  startedAt: number | null;
+  /** Show how long it has run. Off for work that is short by nature (an encrypted unlock). */
+  timed: boolean;
+  /** `null` when the row has no Stop for it: a close stops with Close now. */
+  stop: VaultRowStop | null;
+  /** When Stop was asked for; the row counts "Stopping…" from here. */
+  stoppingSince: number | null;
+}
+
+/** Work for a row from a core job's state. */
+export function vaultRowJobWork(job: {
+  startedAt: number | null;
+  stoppable: boolean;
+  stoppingSince: number | null;
+  timed?: boolean;
+}): VaultRowWork {
+  const stop: VaultRowStop =
+    job.stoppingSince !== null ? "stopping" : job.stoppable ? "ready" : "final";
+  return {
+    startedAt: job.startedAt,
+    timed: job.timed ?? true,
+    stop,
+    stoppingSince: job.stoppingSince,
+  };
+}
+
+/** The moment the row's counter counts from, or `null` for no counter. */
+export function vaultRowWorkClock(work: VaultRowWork | null | undefined): number | null {
+  if (!work) return null;
+  if (work.stop === "stopping") return work.stoppingSince;
+  return work.timed ? work.startedAt : null;
+}
 
 /** Password or unlock-RAM rewrap started from vault settings. */
 export type VaultRewrapKind = "password" | "kdf";
-
-/** In-flight rewrap. `startedAt` is the clock for `budgetMs`. */
-export type VaultRewrapRun = {
-  vaultId: string;
-  kind: VaultRewrapKind;
-  startedAt: number;
-  /** `sizedBudgetMs("vaultRewrap")` for this vault's `store/`; the floor until it is measured. */
-  budgetMs: number;
-};
-
-/** Start time of the in-flight job for this vault, if it is the active run. */
-export function pipelineActiveStartedAt(
-  pipeline: VaultPipelineListStatus,
-  vaultId: string,
-): number | undefined {
-  if (pipeline.activeVaultId !== vaultId) return undefined;
-  return pipeline.activeStartedAt;
-}
-
-/**
- * Row budget hint.
- * Opening and creating use the active FIFO clock.
- * Password and unlock-RAM changes use `rewrapStartedAt` and `rewrapBudgetMs`;
- * Back up now uses `backupJobStartedAt` and `backupJobBudgetMs`; the wipe of a
- * leftover folder uses `recoveringStartedAt` and `recoveringBudgetMs`.
- */
-export function vaultPipelineRowBudget(
-  status: VaultDisplayStatus,
-  pipeline: VaultPipelineListStatus,
-  vaultId: string,
-): { active: boolean; budgetMs: number; startedAt?: number } {
-  if (status === "changing_password" || status === "changing_kdf") {
-    const budgetMs = pipeline.rewrapBudgetMs ?? LOADING_BUDGET_MS.vaultRewrap;
-    const startedAt = pipeline.rewrapStartedAt;
-    if (startedAt == null) return { active: false, budgetMs };
-    return { active: true, budgetMs, startedAt };
-  }
-  if (status === "backing_up") {
-    const budgetMs = pipeline.backupJobBudgetMs ?? LOADING_BUDGET_MS.vaultBackupSave;
-    const startedAt = pipeline.backupJobStartedAt;
-    if (startedAt == null) return { active: false, budgetMs };
-    return { active: true, budgetMs, startedAt };
-  }
-  if (status === "recovering") {
-    const budgetMs = pipeline.recoveringBudgetMs ?? LOADING_BUDGET_MS.plainLeftoverRemove;
-    const startedAt = pipeline.recoveringStartedAt;
-    if (startedAt == null) return { active: false, budgetMs };
-    return { active: true, budgetMs, startedAt };
-  }
-  const startedAt = pipelineActiveStartedAt(pipeline, vaultId);
-  if (startedAt == null) {
-    return { active: false, budgetMs: LOADING_BUDGET_MS.vaultPipeline };
-  }
-  if (status === "creating") {
-    return { active: true, budgetMs: LOADING_BUDGET_MS.vaultCreate, startedAt };
-  }
-  if (status === "opening") {
-    return { active: true, budgetMs: LOADING_BUDGET_MS.vaultPipeline, startedAt };
-  }
-  return { active: false, budgetMs: LOADING_BUDGET_MS.vaultPipeline };
-}
 
 export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean {
   return (

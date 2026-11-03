@@ -6,7 +6,7 @@ No React **runtime**, no platform APIs. Each app wires UI + `ServicesProvider` i
 
 **Never add the `react` package here as a runtime or peer dependency** — npm installs those too. This package is installed via `file:../shared`, so its own `node_modules/react` becomes a second React instance under Metro and every hook throws `useState of null`. Ship UI behaviour as pure state machines instead (see `domain/vault-create/wizardState.ts`).
 
-The one exception is `@upriv/shared/react`: hooks both apps import (`useCreateVaultWizard`, `useLoadingBudget`, `useToast`, `useVaultBackups`, `useVaultInfoData`, `useSystemInfoData`, `useVaultPipelineRun`). It is **not** on the main barrel. That subpath may depend on `@types/react` only — never the `react` runtime, and never `@testing-library/react` (its peers install `react` into `shared/node_modules`). Shared `tsconfig` stays without `lib: DOM`; timers and rAF go through `globalThis` (same idea as `delayMs`). Hook tests that need `renderHook` live in the desktop app, which already has one React copy.
+The one exception is `@upriv/shared/react`: hooks both apps import (`useCreateVaultWizard`, `useOperationLimit`, `useElapsed`, `useToast`, `useVaultBackups`, `useVaultInfoData`, `useSystemInfoData`, `useVaultPipelineRun`). It is **not** on the main barrel. That subpath may depend on `@types/react` only — never the `react` runtime, and never `@testing-library/react` (its peers install `react` into `shared/node_modules`). Shared `tsconfig` stays without `lib: DOM`; timers and rAF go through `globalThis` (same idea as `delayMs`). Hook tests that need `renderHook` live in the desktop app, which already has one React copy.
 
 Lint/format for this package uses `dev/js-lint` (install once: `npm install --prefix js-lint` from `dev/`). Rust fmt/clippy is separate (`npm run rust:lint`).
 
@@ -24,7 +24,7 @@ src/
 │   ├── help/            # Help section catalog + search
 │   ├── icons/           # IconName catalog + ICON_GLYPHS (SVG primitives)
 │   ├── info/            # Shared Info field/section types
-│   ├── loading/         # Finite loading budgets
+│   ├── loading/         # Operation limit, no-deadline, elapsed time
 │   ├── logs/            # Log line parsing, sort, tone
 │   ├── system-info/     # System Info snapshot builders
 │   ├── theme/           # Palettes, radii, spacing, CSS custom properties

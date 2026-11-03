@@ -1,8 +1,8 @@
 import { StyleSheet, Text, View } from "react-native";
 import { BACKUP_EXPORT_PROGRESS_COPY, exportFolderIssue } from "@upriv/shared";
-import { useLoadingBudget, type BackupExportJob } from "@upriv/shared/react";
+import type { BackupExportJob } from "@upriv/shared/react";
 import { ExportFolderField } from "@/components/ExportFolderField";
-import { Button, JobProgressBar, LoadingBudgetHint, ModalFooterActions } from "@/components/ui";
+import { Button, JobProgressBar, JobStopButton, ModalFooterActions } from "@/components/ui";
 import type { ExportFolder } from "@/hooks/useExportFolder";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -57,36 +57,29 @@ interface BackupExportProgressProps {
   onStop: () => void;
 }
 
-/** How far this export got, how long it may still take, and its stop. */
+/** How far this export got, how long it has run, and its stop. */
 export function BackupExportProgress({ job, title, onStop }: BackupExportProgressProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
-  const budget = useLoadingBudget(true, job.budgetMs, { startedAt: job.startedAt });
 
   return (
     <View style={styles.panel}>
       {title ? <Text style={[typography.body, styles.title]}>{title}</Text> : null}
       <JobProgressBar
         progress={job.progress}
+        startedAt={job.startedAt}
         label={t("modal.backup.export")}
         copy={BACKUP_EXPORT_PROGRESS_COPY}
       />
       <Text style={typography.caption}>{t("modal.backup.export_background_note")}</Text>
-      {budget.visible ? (
-        <LoadingBudgetHint
-          budgetMs={budget.budgetMs}
-          remainingMs={budget.remainingMs}
-          layout="inline"
-        />
-      ) : null}
       <ModalFooterActions layout="dialog">
-        <Button
-          label={job.stopping ? t("modal.backup.export_stopping") : t("modal.backup.export_stop")}
-          variant="secondary"
+        <JobStopButton
           size="sm"
-          disabled={job.stopping}
-          busy={job.stopping}
-          onPress={onStop}
+          stoppingSince={job.stoppingSince}
+          stoppable={job.progress?.stoppable ?? true}
+          onStop={onStop}
+          label={t("modal.backup.export_stop")}
+          stoppingLabel={t("modal.backup.export_stopping")}
         />
       </ModalFooterActions>
     </View>

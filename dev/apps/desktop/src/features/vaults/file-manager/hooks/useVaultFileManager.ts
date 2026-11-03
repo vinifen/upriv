@@ -16,9 +16,8 @@ import {
   validateFileName,
   persistLogicalFileName,
   LOGICAL_FILE_NAME_MAX_LENGTH,
-  LOADING_APPEAR_DELAY_MS,
-  LOADING_BUDGET_MS,
   attachImportedPath,
+  newJobId,
   dropResolvedPending,
   dropSessionPending,
   foldersToExpandForImportBatch,
@@ -43,12 +42,12 @@ import {
   type FileManagerEntry,
   type FileNameErrorCode,
   type FileTreeNode,
+  type JobStopBy,
   type PendingImportEntry,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
-import { useVaultFileSystemService, useVaultService } from "@/platform/services";
+import { useJobService, useVaultFileSystemService, useVaultService } from "@/platform/services";
 import {
-  useLoadingBudget,
   useFolderFallback,
   useOpenTabContents,
   useToast,
@@ -103,6 +102,7 @@ export function useVaultFileManager({
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
   const vaultService = useVaultService();
+  const jobs = useJobService();
   const { setImportInFlight, handleImportCancel } = useFileManager();
   const vaultId = entry.vaultId;
   const workspace = entry.workspace;
@@ -146,15 +146,11 @@ export function useVaultFileManager({
     () => new Set(activeImportWrites.map((write) => write.path)),
     [activeImportWrites],
   );
-  const editorImportWrite = activeImportWriteForPath(activeImportWrites, workspace.activeTabPath);
-  const importBudget = useLoadingBudget(
-    Boolean(editorImportWrite),
-    LOADING_BUDGET_MS.vaultFsImport,
-    {
-      appearDelayMs: LOADING_APPEAR_DELAY_MS,
-      startedAt: editorImportWrite?.startedAt,
-    },
-  );
+  /** When the file open in the editor started to be written; `null` while it waits. */
+  const editorImportStartedAt =
+    activeImportWriteForPath(activeImportWrites, workspace.activeTabPath)?.startedAt ?? null;
+  /** Core jobs of the files being written now, so Stop reaches them too. */
+  const importJobsRef = useRef(new Set<string>());
   const displayTree = useMemo(
     () =>
       mergePendingIntoTree(
@@ -633,7 +629,13 @@ export function useVaultFileManager({
           importSlots: importFileSlots(desktopProcessorCount(), false),
           importBinaryFile: async (id, parent, name, logical) => {
             if (logical.osPath) {
-              return fs.importFileFromOsPath(id, parent, name, logical.osPath);
+              const job = newJobId();
+              importJobsRef.current.add(job);
+              try {
+                return await fs.importFileFromOsPath(id, parent, name, logical.osPath, job);
+              } finally {
+                importJobsRef.current.delete(job);
+              }
             }
             return fs.importFileFromBytes(
               id,
@@ -827,13 +829,25 @@ export function useVaultFileManager({
     ],
   );
 
-  /** Stop storing the files still waiting; the file being written lands. */
-  const cancelImports = useCallback(() => {
-    importAbortRef.current.abort();
-    setPendingImports([]);
-    commitLandedImportPaths(new Set());
-    setActiveImportWrites([]);
-  }, [commitLandedImportPaths]);
+  /**
+   * Stop the import: the files still waiting are dropped, and the files being
+   * written stop and leave nothing in the vault.
+   */
+  const cancelImports = useCallback(
+    (by: JobStopBy = "user") => {
+      importAbortRef.current.abort();
+      for (const job of importJobsRef.current) {
+        void jobs.cancel(job, by).catch(() => undefined);
+      }
+      setPendingImports([]);
+      commitLandedImportPaths(new Set());
+      setActiveImportWrites([]);
+    },
+    [commitLandedImportPaths, jobs],
+  );
+
+  /** Stop from the file manager's own import notice. */
+  const stopImports = useCallback(() => cancelImports(), [cancelImports]);
 
   // Closing the vault from the list stops its import here.
   useEffect(
@@ -932,7 +946,7 @@ export function useVaultFileManager({
     })();
   }, [dispatch, onDismissConfirmed, saveAllFiles, saveFile, saveFiles, unsavedSaving, workspace]);
 
-  /** Give up on a save past its budget. A write that lands later closes nothing. */
+  /** Give up on a save past `OPERATION_LIMIT_MS`. A write that lands later closes nothing. */
   const abandonUnsavedSave = useCallback(() => {
     unsavedSaveGenRef.current += 1;
     setUnsavedSaving(false);
@@ -1002,7 +1016,8 @@ export function useVaultFileManager({
     importFiles,
     importOsDrop,
     importBusy,
-    importBudget,
+    editorImportStartedAt,
+    stopImports,
     cancelImportAndDismiss,
     toast,
     osFolderAvailable,

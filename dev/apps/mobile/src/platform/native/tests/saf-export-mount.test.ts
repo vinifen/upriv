@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { JOB_ERROR_CODES, RpcError, VAULT_ERROR_CODES, isRpcError } from "@upriv/shared";
+import {
+  JOB_ERROR_CODES,
+  RpcError,
+  VAULT_ERROR_CODES,
+  isRpcError,
+  type JobProgress,
+} from "@upriv/shared";
 
 vi.mock("@/lib/rpc", () => ({
   rpcJobStatus: vi.fn(),
@@ -16,13 +22,12 @@ import { createSafExportMount, type SafExportIo } from "../safExportMount";
 const PICKED = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
 const OTHER = "content://com.android.externalstorage.documents/tree/primary%3AMusic";
 const JOB = "job-phone-copy";
-const BUDGET_MS = 60_000;
 const WRITTEN = { path: "/upriv-saf-export/Notes.zip", size: 4096 };
 
 interface FakeIo extends SafExportIo {
   calls: string[];
   /** Answers for `jobStatus`, oldest first. Empty means the job no longer runs. */
-  progress: Array<{ bytesDone: number; bytesTotal: number } | null>;
+  progress: Array<JobProgress | null>;
 }
 
 function fakeIo(): FakeIo {
@@ -72,9 +77,7 @@ describe("createSafExportMount", () => {
     const mount = createSafExportMount(io);
     mount.hold(PICKED);
 
-    await expect(
-      mount.withExportFolder(` ${PICKED} `, JOB, BUDGET_MS, writer(io)),
-    ).resolves.toEqual(WRITTEN);
+    await expect(mount.withExportFolder(` ${PICKED} `, JOB, writer(io))).resolves.toEqual(WRITTEN);
     expect(io.calls).toEqual([
       `mount ${PICKED}`,
       "write /upriv-saf-export",
@@ -84,7 +87,7 @@ describe("createSafExportMount", () => {
 
     // The field still holds it: the next export writes there again.
     io.calls = [];
-    await mount.withExportFolder(PICKED, JOB, BUDGET_MS, writer(io));
+    await mount.withExportFolder(PICKED, JOB, writer(io));
     expect(io.calls[0]).toBe(`mount ${PICKED}`);
     expect(io.calls).not.toContain(`release ${PICKED}`);
   });
@@ -93,30 +96,29 @@ describe("createSafExportMount", () => {
     const io = fakeIo();
     const mount = createSafExportMount(io);
 
-    await mount.withExportFolder("/storage/emulated/0/Download", JOB, BUDGET_MS, writer(io));
+    await mount.withExportFolder("/storage/emulated/0/Download", JOB, writer(io));
     expect(io.calls).toEqual(["write /storage/emulated/0/Download"]);
   });
 
-  it("keeps the tree mounted until core stops after a timed-out call", async () => {
+  it("keeps the tree mounted until core stops after a failed bridge call", async () => {
     const io = fakeIo();
     io.progress = [
-      { bytesDone: 1, bytesTotal: 10 },
-      { bytesDone: 2, bytesTotal: 10 },
+      { bytesDone: 1, bytesTotal: 10, stoppable: true },
+      { bytesDone: 2, bytesTotal: 10, stoppable: true },
     ];
     const mount = createSafExportMount(io);
     mount.hold(PICKED);
-    const timeout = new RpcError("rpc_timeout", "invoke timeout");
+    const lost = new RpcError("bridge_invoke_failed", "bridge call failed");
 
     await expect(
       mount.withExportFolder(
         PICKED,
         JOB,
-        BUDGET_MS,
         writer(io, async () => {
-          throw timeout;
+          throw lost;
         }),
       ),
-    ).rejects.toBe(timeout);
+    ).rejects.toBe(lost);
     // Core is still removing its partial file through the mount until its job ends.
     expect(io.calls).toEqual([
       `mount ${PICKED}`,
@@ -140,7 +142,6 @@ describe("createSafExportMount", () => {
       mount.withExportFolder(
         PICKED,
         JOB,
-        BUDGET_MS,
         writer(io, async () => {
           throw stopped;
         }),
@@ -157,8 +158,8 @@ describe("createSafExportMount", () => {
     mount.hold(OTHER);
     const held = heldWrite(io);
 
-    const first = mount.withExportFolder(PICKED, JOB, BUDGET_MS, held.write);
-    const second = mount.withExportFolder(OTHER, "job-other", BUDGET_MS, writer(io));
+    const first = mount.withExportFolder(PICKED, JOB, held.write);
+    const second = mount.withExportFolder(OTHER, "job-other", writer(io));
     await expect(second).rejects.toSatisfy(
       (error: unknown) => isRpcError(error) && error.code === VAULT_ERROR_CODES.VAULT_BUSY,
     );
@@ -180,16 +181,12 @@ describe("createSafExportMount", () => {
     const mount = createSafExportMount(io);
     mount.hold(PICKED);
 
-    await expect(mount.withExportFolder(PICKED, JOB, BUDGET_MS, writer(io))).rejects.toBe(
-      unreachable,
-    );
+    await expect(mount.withExportFolder(PICKED, JOB, writer(io))).rejects.toBe(unreachable);
     expect(io.calls).toEqual([`mount ${PICKED}`]);
 
     mountFails = false;
     io.calls = [];
-    await expect(mount.withExportFolder(PICKED, JOB, BUDGET_MS, writer(io))).resolves.toEqual(
-      WRITTEN,
-    );
+    await expect(mount.withExportFolder(PICKED, JOB, writer(io))).resolves.toEqual(WRITTEN);
     expect(io.calls[0]).toBe(`mount ${PICKED}`);
   });
 
@@ -218,7 +215,7 @@ describe("createSafExportMount", () => {
     mount.hold(PICKED);
     const held = heldWrite(io);
 
-    const running = mount.withExportFolder(PICKED, JOB, BUDGET_MS, held.write);
+    const running = mount.withExportFolder(PICKED, JOB, held.write);
     mount.release(PICKED);
     expect(io.calls).not.toContain(`release ${PICKED}`);
 

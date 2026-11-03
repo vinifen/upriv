@@ -4,8 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DATA_FOLDER_EXPORT_ERROR_CODES,
   JOB_ERROR_CODES,
-  LOADING_BUDGET_MS,
-  RPC_TIMEOUT_CODE,
   RpcError,
   type DataFolderService,
   type JobProgress,
@@ -58,13 +56,13 @@ function events(): DataFolderExportJobEvents & {
   onExported: ReturnType<typeof vi.fn>;
   onFailed: ReturnType<typeof vi.fn>;
   onCancelled: ReturnType<typeof vi.fn>;
-  onTimedOut: ReturnType<typeof vi.fn>;
+  onStopRefused: ReturnType<typeof vi.fn>;
 } {
   return {
     onExported: vi.fn(),
     onFailed: vi.fn(),
     onCancelled: vi.fn(),
-    onTimedOut: vi.fn(),
+    onStopRefused: vi.fn(),
   };
 }
 
@@ -150,7 +148,7 @@ describe("useDataFolderExportJob", () => {
 
   it("shows the progress core reports for its job", async () => {
     vi.useFakeTimers();
-    const progress = { bytesDone: 10, bytesTotal: 40 };
+    const progress = { bytesDone: 10, bytesTotal: 40, stoppable: true };
     const exportTo = vi.fn<DataFolderService["exportTo"]>(
       () => new Promise<VaultPathWriteResult>(() => undefined),
     );
@@ -186,7 +184,7 @@ describe("useDataFolderExportJob", () => {
     act(() => {
       result.current.stop();
     });
-    expect(result.current.job?.stopping).toBe(true);
+    expect(result.current.job?.stoppingSince).not.toBeNull();
     expect(runner.cancel).toHaveBeenCalledTimes(1);
     expect(runner.cancel).toHaveBeenCalledWith(jobOf(exportTo), "user");
 
@@ -223,7 +221,7 @@ describe("useDataFolderExportJob", () => {
     expect(result.current.written).toBeNull();
   });
 
-  it("gives up after the budget, stops its job in core, and ignores a late result", async () => {
+  it("has no time limit: it waits for the zip however long it takes", async () => {
     vi.useFakeTimers();
     const run = deferred<VaultPathWriteResult>();
     const exportTo = vi.fn<DataFolderService["exportTo"]>(() => run.promise);
@@ -234,39 +232,36 @@ describe("useDataFolderExportJob", () => {
     act(() => {
       result.current.start("/media/usb", ZIP);
     });
-    act(() => {
-      vi.advanceTimersByTime(LOADING_BUDGET_MS.dataFolderExport);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12 * 60 * 60 * 1_000);
     });
-    expect(result.current.job).toBeNull();
-    expect(on.onTimedOut).toHaveBeenCalledTimes(1);
-    expect(runner.cancel).toHaveBeenCalledTimes(1);
-    expect(runner.cancel).toHaveBeenCalledWith(jobOf(exportTo), "timeout");
+    expect(result.current.job).not.toBeNull();
+    expect(runner.cancel).not.toHaveBeenCalled();
 
     await act(async () => {
       run.resolve(written);
     });
-    expect(on.onExported).not.toHaveBeenCalled();
-    expect(result.current.job).toBeNull();
-    expect(result.current.written).toBeNull();
+    expect(on.onExported).toHaveBeenCalledWith(written);
   });
 
-  it("stops its job in core when the call times out before the budget", async () => {
-    const run = deferred<VaultPathWriteResult>();
-    const exportTo = vi.fn<DataFolderService["exportTo"]>(() => run.promise);
+  it("keeps running when core refuses the stop while the zip is put in place", async () => {
+    const refusal = new RpcError(JOB_ERROR_CODES.NOT_STOPPABLE, "finishing");
     const runner = jobs();
+    runner.cancel.mockRejectedValueOnce(refusal);
     const on = events();
+    const exportTo = vi.fn<DataFolderService["exportTo"]>(
+      () => new Promise<VaultPathWriteResult>(() => undefined),
+    );
     const { result } = renderHook(() => useDataFolderExportJob(service(exportTo), runner, on));
 
     act(() => {
       result.current.start("/media/usb", ZIP);
     });
     await act(async () => {
-      run.reject(new RpcError(RPC_TIMEOUT_CODE, "invoke timeout"));
+      result.current.stop();
     });
-    await waitFor(() => expect(result.current.job).toBeNull());
-    expect(runner.cancel).toHaveBeenCalledWith(jobOf(exportTo), "timeout");
-    expect(on.onTimedOut).toHaveBeenCalledTimes(1);
-    expect(on.onFailed).not.toHaveBeenCalled();
+    expect(on.onStopRefused).toHaveBeenCalledWith(refusal);
+    expect(result.current.job?.stoppingSince).toBeNull();
   });
 
   it("does nothing without a service", () => {

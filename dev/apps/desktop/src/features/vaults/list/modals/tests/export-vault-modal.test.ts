@@ -2,12 +2,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  LOADING_BUDGET_MS,
-  type VaultExportRequest,
-  type VaultExportRun,
-  type VaultListItem,
-} from "@upriv/shared";
+import type { VaultExportRequest, VaultExportRun, VaultListItem } from "@upriv/shared";
+import { pressStop } from "@/lib/tests/pressStop";
 import { useVaultExportFolders } from "../../hooks/useVaultExportFolders";
 import { ExportVaultModal } from "../ExportVaultModal";
 
@@ -270,8 +266,8 @@ describe("ExportVaultModal", () => {
       running: {
         format: "seven_zip",
         startedAt: Date.now(),
-        progress: { bytesDone: 512, bytesTotal: 2048 },
-        budgetMs: LOADING_BUDGET_MS.vaultExport,
+        progress: { bytesDone: 512, bytesTotal: 2048, stoppable: true },
+        stoppingSince: null,
       },
     });
     await capabilitiesLoaded();
@@ -373,23 +369,35 @@ describe("ExportVaultModal", () => {
       format: "store_zip" as const,
       startedAt: Date.now(),
       progress: null,
-      budgetMs: LOADING_BUDGET_MS.vaultExport,
+      stoppingSince: null,
     };
     const { rerender } = render(createElement(Harness, { onConfirm: vi.fn(), onStop, running }));
     await capabilitiesLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: "vault.export.dialog.stop" }));
+    pressStop(screen.getByRole("button", { name: "vault.export.dialog.stop" }));
     expect(onStop).toHaveBeenCalledTimes(1);
 
     rerender(
       createElement(Harness, {
         onConfirm: vi.fn(),
         onStop,
-        running: { ...running, stopping: true },
+        running: { ...running, stoppingSince: Date.now() },
       }),
     );
     const stopping = screen.getByRole("button", { name: "vault.export.dialog.stopping" });
     expect((stopping as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("ignores a press on Stop right after it took Export's place", async () => {
+    const onStop = vi.fn();
+    show({
+      onStop,
+      running: { format: "store_zip", startedAt: null, progress: null, stoppingSince: null },
+    });
+    await capabilitiesLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: "vault.export.dialog.stop" }));
+    expect(onStop).not.toHaveBeenCalled();
   });
 
   it("shows a running .zip export in the .zip option", async () => {
@@ -398,7 +406,7 @@ describe("ExportVaultModal", () => {
         format: "store_zip",
         startedAt: Date.now(),
         progress: null,
-        budgetMs: LOADING_BUDGET_MS.vaultExport,
+        stoppingSince: null,
       },
     });
     await capabilitiesLoaded();

@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
+import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { VaultSettingsSection } from "@/components/settings";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useLoadingBudget, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { desktopErrorI18nKey } from "@/lib/errorMessages";
+import { useOperationLimit, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
-  LOADING_BUDGET_MS,
   appSettingsEqual,
   isRpcError,
   shouldBumpVaultRootEpoch,
@@ -41,7 +41,17 @@ interface AppSettingsModalProps {
   onDirtyChange?: (dirty: boolean) => void;
   /** Disable Clear on workspace path while any vault session is open. */
   hasOpenVault?: boolean;
+  /** List toast. A save keeps running after the window closes and reports here. */
+  onNotice?: (message: string) => void;
 }
+
+/** A save in flight, or one that failed, shown again when the window reopens. */
+type PendingAppSave = {
+  config: AppSettingsConfig;
+  showHidden: boolean;
+  /** `null` while it runs; the error line once it failed. */
+  failure: string | null;
+};
 
 /**
  * System settings for the **active** vault-root (language, general UI, vault list, groups, logging, hidden vaults).
@@ -52,9 +62,12 @@ export function AppSettingsModal({
   onClose,
   onDirtyChange,
   hasOpenVault = false,
+  onNotice,
 }: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
+  const openRef = useRef(open);
+  openRef.current = open;
   const vaultRootService = useVaultRootService();
   const {
     settings,
@@ -78,8 +91,12 @@ export function AppSettingsModal({
   /** True after the user patches workspace this modal session — skip live Context sync. */
   const workspaceTouchedRef = useRef(false);
   const commitSaveLock = useRef(false);
+  /** Bumped only when a save runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const saveBusyGen = useRef(0);
-  const saveBudget = useLoadingBudget(saveBusy, LOADING_BUDGET_MS.settingsSave);
+  const saveLimit = useOperationLimit(saveBusy);
+  const [pendingSave, setPendingSave] = useState<PendingAppSave | null>(null);
+  const pendingSaveRef = useRef(pendingSave);
+  pendingSaveRef.current = pendingSave;
 
   const isDirty = useMemo(
     () =>
@@ -97,9 +114,11 @@ export function AppSettingsModal({
     if (!open) return;
     if (openedSessionRef.current) return;
     openedSessionRef.current = true;
-    workspaceTouchedRef.current = false;
-    setDraft(settings);
-    setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
+    // A save still running, or one that failed, shows its values again.
+    const pending = pendingSaveRef.current;
+    workspaceTouchedRef.current = pending !== null;
+    setDraft(pending?.config ?? settings);
+    setDraftShowHiddenVaultsSession(pending?.showHidden ?? showHiddenVaultsSession);
   }, [open, settings, showHiddenVaultsSession]);
 
   // Keep draft.app aligned with live Context so Save never sends a stale vault-root.
@@ -163,16 +182,14 @@ export function AppSettingsModal({
 
   useEffect(() => {
     if (!open) {
+      // A save in flight keeps running; its outcome comes back as a list toast.
       openedSessionRef.current = false;
       workspaceTouchedRef.current = false;
-      saveBusyGen.current += 1;
-      commitSaveLock.current = false;
       setDraft(null);
       setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
-      setSaveBusy(false);
     }
   }, [open, showHiddenVaultsSession]);
 
@@ -187,12 +204,14 @@ export function AppSettingsModal({
   }, []);
 
   useEffect(() => {
-    if (!saveBudget.timedOut || !saveBusy) return;
+    if (!saveLimit.timedOut || !saveBusy) return;
     saveBusyGen.current += 1;
     commitSaveLock.current = false;
     setSaveBusy(false);
-    showError(new Error("operation timed out"), "error.operation_timed_out");
-  }, [saveBudget.timedOut, saveBusy, showError]);
+    setPendingSave(null);
+    if (openRef.current) showError(new Error("operation timed out"), "error.operation_timed_out");
+    else onNotice?.(t("error.operation_timed_out"));
+  }, [saveLimit.timedOut, saveBusy, showError, onNotice, t]);
 
   const dismissFooterConfirm = useCallback(() => {
     setDiscardConfirmOpen(false);
@@ -252,6 +271,11 @@ export function AppSettingsModal({
   }, [open, settingsOnDisk, onClose]);
 
   const requestClose = () => {
+    // Values already being saved are not unsaved.
+    if (saveBusy) {
+      handleClose();
+      return;
+    }
     if (discardConfirmOpen || saveConfirmOpen) {
       dismissFooterConfirm();
       return;
@@ -317,16 +341,23 @@ export function AppSettingsModal({
       app: { ...settings.app },
       workspace: workspaceForSave,
     });
+    const showHidden = draftShowHiddenVaultsSession;
     setSaveBusy(true);
+    setPendingSave({ config: normalized, showHidden, failure: null });
+    let failure: string | null = null;
     void (async () => {
       try {
         if (!appSettingsEqual(normalized, settings)) {
           await replaceSettings(normalized);
           if (generation !== saveBusyGen.current) return;
-          setDraft(normalized);
+          if (openRef.current) setDraft(normalized);
         }
         if (generation !== saveBusyGen.current) return;
-        setShowHiddenVaultsSession(draftShowHiddenVaultsSession);
+        setShowHiddenVaultsSession(showHidden);
+        if (!openRef.current) {
+          onNotice?.(t("modal.app_settings.saved_closed"));
+          return;
+        }
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
@@ -337,18 +368,21 @@ export function AppSettingsModal({
         if (shouldBumpVaultRootEpoch(error)) {
           // Context already toasted + bumped Gate epoch; dismiss so Setup/Repair is usable.
           setDraft(settings);
-          handleClose();
+          if (openRef.current) handleClose();
           return;
         }
         const fallback =
           isRpcError(error) && error.code === "invalid_request"
             ? APP_SETTINGS_ERROR_I18N_KEYS.INVALID_REQUEST
             : APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED;
-        showError(error, fallback);
+        failure = t(desktopErrorI18nKey(error, fallback));
+        if (openRef.current) showError(error, fallback);
+        else onNotice?.(failure);
       } finally {
         if (generation === saveBusyGen.current) {
           commitSaveLock.current = false;
           setSaveBusy(false);
+          setPendingSave(failure ? { config: normalized, showHidden, failure } : null);
         }
       }
     })();
@@ -365,20 +399,22 @@ export function AppSettingsModal({
     <p className="text-on-surface-variant">{t("modal.app_settings.save_confirm")}</p>
   ) : savedVisible ? (
     <p className="text-vault-open">{t("modal.settings.saved")}</p>
+  ) : saveBusy && saveLimit.visible ? (
+    <p className="text-on-surface-variant" role="status">
+      {t("modal.settings.saving")}
+    </p>
+  ) : pendingSave?.failure ? (
+    <p className="text-on-error-container" role="alert">
+      {pendingSave.failure}
+    </p>
   ) : null;
-  const showFooterStatus = Boolean(footerStatus) || saveBudget.visible;
+  const showFooterStatus = Boolean(footerStatus);
 
   const footer = (
     <div className={showFooterStatus ? "flex flex-col gap-3" : undefined}>
       {showFooterStatus ? (
         <div className="text-sm" aria-live="polite">
           {footerStatus}
-          {saveBudget.visible ? (
-            <LoadingBudgetHint
-              budgetMs={saveBudget.budgetMs}
-              remainingMs={saveBudget.remainingMs}
-            />
-          ) : null}
         </div>
       ) : null}
       <div className="flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">

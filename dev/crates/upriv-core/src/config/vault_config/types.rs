@@ -150,6 +150,20 @@ pub struct VaultAutoCloseSection {
     /// Load and save clamp this to [`IDLE_MINUTES_MIN`]..=[`IDLE_MINUTES_MAX`].
     #[serde(default = "default_idle_minutes")]
     pub idle_minutes: u32,
+    #[serde(default)]
+    pub when_busy: AutoCloseWhenBusy,
+}
+
+/// What auto-close does when its time is up while work keeps the vault open
+/// (a file importing into the file manager).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoCloseWhenBusy {
+    /// Close as soon as nothing keeps the vault open. New work may still start.
+    #[default]
+    Wait,
+    /// Stop that work and close on time.
+    Close,
 }
 
 impl Default for VaultAutoCloseSection {
@@ -157,6 +171,7 @@ impl Default for VaultAutoCloseSection {
         Self {
             enabled: false,
             idle_minutes: 15,
+            when_busy: AutoCloseWhenBusy::Wait,
         }
     }
 }

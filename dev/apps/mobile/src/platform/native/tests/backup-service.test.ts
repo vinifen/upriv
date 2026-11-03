@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SIZED_BUDGET_CEILING_MS } from "@upriv/shared";
 
 const WRITTEN = { path: "/upriv-saf-export/upriv-backups-notes.zip", size: 4096 };
 const PICKED = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
@@ -29,9 +28,7 @@ describe("nativeBackupService.exportTo", () => {
     mocks.rpcBackupExport.mockReset().mockResolvedValue(WRITTEN);
     mocks.withExportFolder
       .mockReset()
-      .mockImplementation((_dir, _job, _budget, write: (dir: string) => Promise<unknown>) =>
-        write(MOUNTED),
-      );
+      .mockImplementation((_dir, _job, write: (dir: string) => Promise<unknown>) => write(MOUNTED));
   });
 
   it("writes through the export mount, so nothing is staged in app storage", async () => {
@@ -39,12 +36,7 @@ describe("nativeBackupService.exportTo", () => {
       nativeBackupService.exportTo("notes", ["a.zip", "saves/b.zip"], PICKED, "job-1"),
     ).resolves.toEqual(WRITTEN);
 
-    expect(mocks.withExportFolder).toHaveBeenCalledWith(
-      PICKED,
-      "job-1",
-      SIZED_BUDGET_CEILING_MS,
-      expect.any(Function),
-    );
+    expect(mocks.withExportFolder).toHaveBeenCalledWith(PICKED, "job-1", expect.any(Function));
     expect(mocks.rpcBackupExport).toHaveBeenCalledWith(
       "notes",
       ["a.zip", "saves/b.zip"],

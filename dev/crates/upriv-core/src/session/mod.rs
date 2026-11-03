@@ -15,8 +15,8 @@ use crate::store::{OpenedStore, VaultHeader, VaultIndex};
 
 mod jobs;
 
-pub use jobs::{cancel_job, job_status, stop_all_jobs, JobStatus};
-pub(crate) use jobs::{Job, JobGauge};
+pub use jobs::{cancel_job, job_status, stop_all_jobs, JobStatus, JobStop};
+pub(crate) use jobs::{Job, JobKind, ProgressReader};
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const BLOCK_DURATION: Duration = Duration::from_secs(60);
@@ -338,13 +338,11 @@ pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
 }
 
 /// Where an in-flight close of this vault is. `None` when no close is running.
-pub fn vault_close_progress_at(vault_dir: &Path) -> Option<CloseProgress> {
-    CLOSING.lock().ok().and_then(|g| {
-        g.get(vault_dir).map(|closing| CloseProgress {
-            phase: closing.phase,
-            backup: closing.backup.status(),
-        })
-    })
+pub fn vault_close_phase_at(vault_dir: &Path) -> Option<ClosePhase> {
+    CLOSING
+        .lock()
+        .ok()
+        .and_then(|g| g.get(vault_dir).map(|closing| closing.phase))
 }
 
 /// Make the close running for this vault finish the Close now way. False when
@@ -568,22 +566,11 @@ impl ClosePhase {
     }
 }
 
-/// Where an in-flight close is, read by the UI while `vault_close` runs. The
-/// backup's total is the size of `store/`, so the UI sizes its wait from it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CloseProgress {
-    pub phase: ClosePhase,
-    /// The close backup zip. Zero until it has listed `store/`, and while
-    /// backups are off.
-    pub backup: JobStatus,
-}
-
 /// One close in flight.
 struct Closing {
     phase: ClosePhase,
     /// Set once this close should finish the Close now way.
     hurry: Arc<AtomicBool>,
-    backup: JobGauge,
 }
 
 /// Mark `vault_dir` as closing until dropped (covers flush after `take_session`).
@@ -599,14 +586,13 @@ impl ClosingGuard {
             .lock()
             .map_err(|_| session_lock_poisoned("closing lock poisoned"))?;
         let hurry = Arc::new(AtomicBool::new(false));
-        // Close now ends the backup, and the UI reads how far it got.
+        // Close now ends the backup.
         let backup = Job::stopped_by(Arc::clone(&hurry));
         guard.insert(
             vault_dir.to_path_buf(),
             Closing {
                 phase: ClosePhase::Flush,
                 hurry: Arc::clone(&hurry),
-                backup: backup.gauge(),
             },
         );
         Ok(Self {
@@ -880,51 +866,33 @@ mod tests {
     }
 
     #[test]
-    fn close_progress_follows_guard() {
+    fn close_phase_follows_guard() {
         let dir = PathBuf::from(format!(
             "/upriv-test-close-phase-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        let phase = |dir: &Path| vault_close_progress_at(dir).map(|progress| progress.phase);
-        assert_eq!(vault_close_progress_at(&dir), None);
+        assert_eq!(vault_close_phase_at(&dir), None);
         {
             let guard = ClosingGuard::enter(&dir).expect("enter closing");
-            assert_eq!(phase(&dir), Some(ClosePhase::Flush));
+            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Flush));
             guard.set_phase(ClosePhase::Backup);
-            assert_eq!(phase(&dir), Some(ClosePhase::Backup));
+            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Backup));
             assert!(is_vault_closing_at(&dir));
         }
-        assert_eq!(vault_close_progress_at(&dir), None);
+        assert_eq!(vault_close_phase_at(&dir), None);
         assert!(!is_vault_closing_at(&dir));
     }
 
     #[test]
-    fn close_progress_reports_the_backup_bytes() {
+    fn close_now_stops_the_close_backup() {
         let dir = PathBuf::from(format!(
-            "/upriv-test-close-bytes-{}-{:?}",
+            "/upriv-test-close-backup-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         let guard = ClosingGuard::enter(&dir).expect("enter closing");
-        let backup = |dir: &Path| vault_close_progress_at(dir).map(|progress| progress.backup);
-        assert_eq!(
-            backup(&dir),
-            Some(JobStatus {
-                bytes_done: 0,
-                bytes_total: 0
-            })
-        );
-        guard.backup_job().set_total(2048);
-        guard.backup_job().advance(512);
-        assert_eq!(
-            backup(&dir),
-            Some(JobStatus {
-                bytes_done: 512,
-                bytes_total: 2048
-            })
-        );
-        // Close now stops the backup the guard hands out.
+        assert!(!guard.backup_job().is_stopped());
         guard.hurry().store(true, Ordering::Relaxed);
         assert!(guard.backup_job().is_stopped());
     }

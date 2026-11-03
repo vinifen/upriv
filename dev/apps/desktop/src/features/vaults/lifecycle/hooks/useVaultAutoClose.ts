@@ -1,4 +1,9 @@
-import type { IdleAutoCloseWarning, IdleLockResult, VaultListItem } from "@upriv/shared";
+import type {
+  AutoCloseWhenBusy,
+  IdleAutoCloseWarning,
+  IdleLockResult,
+  VaultListItem,
+} from "@upriv/shared";
 import { useIdleAutoClose, type IdleSessionEvent } from "@upriv/shared/react";
 import { isElectronRenderer } from "@/lib/invoke";
 import { useVaultService } from "@/platform/services";
@@ -7,7 +12,7 @@ interface UseVaultAutoCloseOptions {
   vaults: VaultListItem[];
   /** General setting. Off: sleep counts. On: only time Upriv is running counts. */
   keepOpenOnWake: boolean;
-  onLock: (vaultId: string) => Promise<IdleLockResult>;
+  onLock: (vaultId: string, whenBusy: AutoCloseWhenBusy) => Promise<IdleLockResult>;
   onWarn: (warnings: readonly IdleAutoCloseWarning[]) => boolean;
 }
 

@@ -31,7 +31,7 @@ export function useAppLogs(open: boolean) {
     }
   }, [logService]);
 
-  /** Invalidate in-flight list/get so a budget timeout can clear the spinner. */
+  /** Invalidate in-flight list/get so `OPERATION_LIMIT_MS` can clear the spinner. */
   const cancelLoading = useCallback(() => {
     loadGen.current += 1;
     setLoading(false);

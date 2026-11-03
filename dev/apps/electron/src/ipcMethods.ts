@@ -60,7 +60,7 @@ export const ELECTRON_IPC_METHODS = [
   "vault_rename",
   "vault_delete",
   "vault_export",
-  "vault_plain_export_sweep",
+  "vault_unfinished_sweep",
   "vault_export_capabilities",
   "vault_import_zip",
   "vault_import_7z",

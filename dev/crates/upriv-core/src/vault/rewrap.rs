@@ -9,6 +9,10 @@
 //! header commit run outside that lock. Retention of that zip runs only after
 //! the header commit succeeds. Desktop and Android run the whole call on the
 //! rewrap worker, not the close worker.
+//!
+//! A change is a job the person can stop until its header commit: a stop
+//! removes the safety zip it wrote and leaves `store/` and the password as they
+//! were. The commit itself refuses a stop ([`Job::final_step`]).
 
 use std::path::{Path, PathBuf};
 
@@ -19,8 +23,8 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{
     check_unlock_allowed, ensure_vault_session_closed, is_vault_closing_at, is_vault_open_at,
-    record_unlock_failure, record_unlock_success, with_unlock_lock, with_vault_dir_lock,
-    PreparingGuard,
+    record_unlock_failure, record_unlock_success, with_unlock_lock, with_vault_dir_lock, Job,
+    JobKind, PreparingGuard,
 };
 use crate::store::{
     content_hash_hex, header_bytes, open_store, rewrap_header, sealed_index_bytes, VaultHeader,
@@ -29,6 +33,7 @@ use crate::store::{
 use crate::time::utc_timestamp_iso_millis;
 
 use super::backup::{backup_before_rewrap, prune_after_rewrap};
+use super::partial::{discard_partial, PartialWork};
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
 
 /// How far [`commit_rewrap`] publishes the new header and index.
@@ -49,29 +54,44 @@ enum RewrapKind<'a> {
     Preset(crate::store::KdfUnlockPreset),
 }
 
-/// Rewrap `store/` under `new_password`. The unlock cost stays the one in the header.
+/// Rewrap `store/` under `new_password`, as the job `job_id`. The unlock cost
+/// stays the one in the header.
 pub fn change_vault_password(
     root: &VaultRoot,
     vault_id: &str,
     current_password: &[u8],
     new_password: &[u8],
+    job_id: &str,
 ) -> Result<()> {
-    rewrap(
-        root,
-        vault_id,
-        current_password,
-        RewrapKind::Password(new_password),
-    )
+    Job::run(job_id, JobKind::Rewrap, Some(vault_id), |job| {
+        rewrap(
+            root,
+            vault_id,
+            current_password,
+            RewrapKind::Password(new_password),
+            job,
+        )
+    })
 }
 
-/// Rewrap `store/` at `preset`. The password stays `current_password`.
+/// Rewrap `store/` at `preset`, as the job `job_id`. The password stays
+/// `current_password`.
 pub fn change_vault_kdf(
     root: &VaultRoot,
     vault_id: &str,
     current_password: &[u8],
     preset: crate::store::KdfUnlockPreset,
+    job_id: &str,
 ) -> Result<()> {
-    rewrap(root, vault_id, current_password, RewrapKind::Preset(preset))
+    Job::run(job_id, JobKind::Rewrap, Some(vault_id), |job| {
+        rewrap(
+            root,
+            vault_id,
+            current_password,
+            RewrapKind::Preset(preset),
+            job,
+        )
+    })
 }
 
 fn rewrap(
@@ -79,6 +99,7 @@ fn rewrap(
     vault_id: &str,
     current_password: &[u8],
     kind: RewrapKind<'_>,
+    job: &Job,
 ) -> Result<()> {
     if current_password.is_empty() {
         return Err(UprivError::WrongPassword);
@@ -133,16 +154,21 @@ fn rewrap(
             }
         };
 
+        job.ensure_running()?;
         // Zip the current body before any header byte changes. A failure here
         // leaves `store/` as it was. Older zips stay until the header commit.
-        if backup_before_rewrap(root, vault_id).is_err() {
-            log_event(
-                LogLevel::Warn,
-                "vault_rewrap_backup_failed",
-                &[("id", vault_id)],
-            );
-            return Err(UprivError::VaultBackupFailed);
-        }
+        let safety_zip = match backup_before_rewrap(root, vault_id, job) {
+            Ok(zip) => zip,
+            Err(_) if job.is_stopped() => return Err(UprivError::JobCancelled),
+            Err(_) => {
+                log_event(
+                    LogLevel::Warn,
+                    "vault_rewrap_backup_failed",
+                    &[("id", vault_id)],
+                );
+                return Err(UprivError::VaultBackupFailed);
+            }
+        };
 
         let next_header = with_unlock_lock(|| {
             rewrap_header(
@@ -156,6 +182,12 @@ fn rewrap(
         })?;
         let index_bytes = sealed_index_bytes(&next_header, &index_key, &index)?;
         let header_file = header_bytes(&next_header)?;
+        // From here the change always finishes. A stop that came first ends it
+        // as if it never ran: no header byte changed, and its zip goes.
+        if let Err(stopped) = job.final_step() {
+            discard_partial(&safety_zip, PartialWork::Backup);
+            return Err(stopped);
+        }
         // HeaderCopy is the commit: the old password no longer opens the store.
         // A later index or metadata write must not report that the change failed.
         commit_rewrap(&store, &header_file, &index_bytes, RewrapStep::HeaderCopy)?;
@@ -316,10 +348,11 @@ mod tests {
 
     use super::*;
     use crate::host_fs::HostFsQuery;
+    use crate::session::cancel_job;
     use crate::store::{
         read_logical_file, seed_plaintext, KdfUnlockPreset, DATA_DIR_NAME, SEED_LOGICAL_PATH,
     };
-    use crate::test_support::vault_root_with;
+    use crate::test_support::{test_job_id, vault_root_with};
     use crate::vault::{close_vault, create_vault, list_backups, open_vault};
 
     const OLD: &[u8] = b"pass-word-ok";
@@ -382,14 +415,14 @@ mode = "encrypted_dir"
         let blobs = data_files(&store);
         drop(before);
 
-        let same = change_vault_password(&root, "notes", OLD, OLD);
+        let same = change_vault_password(&root, "notes", OLD, OLD, &test_job_id());
         assert!(matches!(
             same,
             Err(UprivError::RewrapUnchanged(RewrapUnchangedKind::Password))
         ));
         assert!(list_backups(&root, "notes").unwrap().is_empty());
 
-        change_vault_password(&root, "notes", OLD, NEW).unwrap();
+        change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         assert_eq!(data_files(&store), blobs);
         assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
         let after = open_store(&store, NEW).unwrap();
@@ -432,14 +465,14 @@ mode = "encrypted_dir"
         let vault_dir = root.vault_dir("notes").unwrap();
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
         let blobs = data_files(&store);
-        let same = change_vault_kdf(&root, "notes", OLD, KdfUnlockPreset::M32);
+        let same = change_vault_kdf(&root, "notes", OLD, KdfUnlockPreset::M32, &test_job_id());
         assert!(matches!(
             same,
             Err(UprivError::RewrapUnchanged(RewrapUnchangedKind::UnlockRam))
         ));
         assert!(list_backups(&root, "notes").unwrap().is_empty());
 
-        change_vault_kdf(&root, "notes", OLD, KdfUnlockPreset::M64).unwrap();
+        change_vault_kdf(&root, "notes", OLD, KdfUnlockPreset::M64, &test_job_id()).unwrap();
         assert_eq!(data_files(&store), blobs);
         assert!(!list_backups(&root, "notes").unwrap().is_empty());
         let after = open_store(&store, OLD).unwrap();
@@ -474,7 +507,7 @@ mode = "encrypted_dir"
         let vault_dir = root.vault_dir("notes").unwrap();
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
         let header = crate::host_fs::read(VaultHeader::path(&store)).unwrap();
-        let wrong = change_vault_password(&root, "notes", b"nope", NEW);
+        let wrong = change_vault_password(&root, "notes", b"nope", NEW, &test_job_id());
         assert!(matches!(wrong, Err(UprivError::WrongPassword)));
         assert_eq!(
             crate::host_fs::read(VaultHeader::path(&store)).unwrap(),
@@ -484,7 +517,7 @@ mode = "encrypted_dir"
         for _ in 0..4 {
             let _ = record_unlock_failure(&vault_dir);
         }
-        let blocked = change_vault_password(&root, "notes", OLD, NEW);
+        let blocked = change_vault_password(&root, "notes", OLD, NEW, &test_job_id());
         assert!(matches!(
             blocked,
             Err(UprivError::VaultUnlockBlocked { .. })
@@ -506,7 +539,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", OLD).unwrap();
-        let err = change_vault_password(&root, "notes", OLD, NEW);
+        let err = change_vault_password(&root, "notes", OLD, NEW, &test_job_id());
         assert!(matches!(err, Err(UprivError::VaultMustBeClosed)));
         close_vault(&root, "notes").unwrap();
     }
@@ -527,9 +560,59 @@ mode = "encrypted_dir"
             crate::host_fs::remove_dir_all(&backups).unwrap();
         }
         crate::host_fs::write(&backups, b"not-a-directory").unwrap();
-        let err = change_vault_password(&root, "notes", OLD, NEW);
+        let err = change_vault_password(&root, "notes", OLD, NEW, &test_job_id());
         assert!(matches!(err, Err(UprivError::VaultBackupFailed)));
         open_store(vault_dir.join(crate::paths::STORE_DIR_NAME), OLD).unwrap();
+    }
+
+    #[test]
+    fn a_stopped_change_keeps_the_password_and_writes_no_zip() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            OLD,
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let before = list_backups(&root, "notes").unwrap().len();
+        let job = test_job_id();
+        cancel_job(&job).unwrap();
+        let err = change_vault_password(&root, "notes", OLD, NEW, &job);
+        assert!(matches!(err, Err(UprivError::JobCancelled)));
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), before);
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        open_store(&store, OLD).unwrap();
+    }
+
+    #[test]
+    fn a_stop_after_the_safety_zip_removes_it_and_changes_nothing() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            OLD,
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let before = list_backups(&root, "notes").unwrap().len();
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        // The zip is written, then the stop arrives before the commit.
+        let zip = backup_before_rewrap(&root, "notes", &job).unwrap();
+        assert!(zip.host_is_file());
+        cancel_job(&id).unwrap();
+        assert!(matches!(job.final_step(), Err(UprivError::JobCancelled)));
+        discard_partial(&zip, PartialWork::Backup);
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), before);
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        open_store(&store, OLD).unwrap();
     }
 
     #[test]
@@ -638,7 +721,7 @@ mode = "encrypted_dir"
         let mut saved = load_vault_config(&vault_dir).unwrap();
         saved.vault.note = "kept".into();
         crate::config::save_vault_config_checked(&root, "notes", &saved).unwrap();
-        change_vault_password(&root, "notes", OLD, NEW).unwrap();
+        change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         let after = load_vault_config(&vault_dir).unwrap();
         assert_eq!(after.vault.note, "kept");
         assert!(after.security.password_changed_at.is_some());
@@ -657,7 +740,7 @@ mode = "encrypted_dir"
         let previous_stamp = before.backed_up_stamp.clone().expect("close stamp");
         let backups_before = list_backups(&root, "notes").unwrap().len();
 
-        change_vault_password(&root, "notes", OLD, NEW).unwrap();
+        change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         let cleared = load_vault_persistence(&vault_dir).unwrap().unwrap();
         assert!(cleared.backed_up_stamp.is_none());
         assert!(cleared.backed_up_index_hash.is_none());
@@ -694,7 +777,7 @@ mode = "encrypted_dir"
         let (_tmp, root) = vault_root_with(&[]);
         let (_vault_dir, names) = two_close_backups(&root);
         let oldest = names.last().expect("oldest close zip").clone();
-        backup_before_rewrap(&root, "notes").unwrap();
+        backup_before_rewrap(&root, "notes", &Job::untracked()).unwrap();
         let after = list_backups(&root, "notes").unwrap();
         assert_eq!(after.len(), 3);
         assert!(after.iter().any(|entry| entry.file_name == oldest));
@@ -705,7 +788,7 @@ mode = "encrypted_dir"
         let (_tmp, root) = vault_root_with(&[]);
         let (vault_dir, names) = two_close_backups(&root);
         let oldest = names.last().expect("oldest close zip").clone();
-        change_vault_password(&root, "notes", OLD, NEW).unwrap();
+        change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         let after = list_backups(&root, "notes").unwrap();
         assert_eq!(after.len(), 2);
         assert!(after.iter().all(|entry| entry.file_name != oldest));
@@ -728,7 +811,7 @@ mode = "encrypted_dir"
         let mut locked = restore.clone();
         locked.set_mode(0o555);
         crate::host_fs::set_permissions(&index_dir, locked).unwrap();
-        let err = change_vault_password(&root, "notes", OLD, NEW);
+        let err = change_vault_password(&root, "notes", OLD, NEW, &test_job_id());
         crate::host_fs::set_permissions(&index_dir, restore).unwrap();
         if err.is_ok() {
             return;
@@ -751,7 +834,7 @@ mode = "encrypted_dir"
         crate::host_fs::remove_file(&persistence).unwrap();
         crate::host_fs::create_dir(&persistence).unwrap();
 
-        change_vault_password(&root, "notes", OLD, NEW).unwrap();
+        change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
         open_store(&store, NEW).unwrap();
         assert!(matches!(

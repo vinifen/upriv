@@ -69,13 +69,12 @@ export function vaultExportPending(
 /** A vault export in flight, as its Export window shows it. */
 export interface VaultExportRun {
   format: VaultExportFormat;
-  startedAt: number;
+  /** When core started it; `null` while it waits for its lane (queued). */
+  startedAt: number | null;
   /** `null` until core first answers `job_status`. */
   progress: JobProgress | null;
-  /** Stop export was pressed; the export call has not settled yet. */
-  stopping?: boolean;
-  /** `sizedBudgetMs("vaultExport")` for the bytes core measured. The list enforces it. */
-  budgetMs: number;
+  /** When Stop export was pressed; the export call has not settled yet. `null` until then. */
+  stoppingSince: number | null;
 }
 
 // eslint-disable-next-line no-control-regex

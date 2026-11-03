@@ -36,6 +36,10 @@ declare global {
       retrievePortalDrop?(key: string): Promise<string[]>;
       /** Logical processors. `0` or missing means use `navigator.hardwareConcurrency`. */
       logicalProcessors?(): number;
+      /** Running jobs and closing vaults: main asks before quit and keeps the computer awake. */
+      reportWork?(report: { jobs: number; closing: number }): void;
+      /** Close now from the quit overlay. */
+      quitNow?(): void;
     };
   }
 }

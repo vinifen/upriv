@@ -16,9 +16,10 @@ import {
   createVaultWizardInitialState,
   createVaultWizardReducer,
   firstInvalidCreateVaultField,
+  isJobCancelled,
   isRpcError,
-  isRpcTimeout,
   MODAL_OPEN_MS,
+  newJobId,
   NO_VAULT_GROUPS,
   resolveCreateVaultCloseIntent,
   resolveCreateVaultFocusTarget,
@@ -72,10 +73,14 @@ export interface UseCreateVaultWizardOptions {
    */
   onCreate: (result: CreateVaultResult, password: string) => void;
   onClose: () => void;
+  /** A `.7z` test runs as the core job `job`; it has no time limit, and Stop ends it. */
   testImportPassword: (
     password: string,
     importFile: { path: string; fileName: string; kind?: "file" | "backup" },
+    job: string,
   ) => Promise<{ ok: boolean; embedded: EmbeddedVaultSettings | null }>;
+  /** Ask core to stop the job `job` (`job_cancel`). */
+  stopJob: (job: string) => Promise<void>;
   /** Classify a `.zip` and load the settings it carries. A `.7z` waits for its password. */
   readImportPackageSettings?: (importFile: {
     path: string;
@@ -100,6 +105,7 @@ export function useCreateVaultWizard<
   onCreate,
   onClose,
   testImportPassword,
+  stopJob,
   readImportPackageSettings,
   onVaultRootFailure,
 }: UseCreateVaultWizardOptions) {
@@ -132,6 +138,19 @@ export function useCreateVaultWizard<
   const deferFocusOnOpen = useRef(false);
   /** Invalidates in-flight import-password probes (unmount, reopen, re-test). */
   const passwordTestGen = useRef(0);
+  /** The core job of the `.7z` test in flight. */
+  const passwordTestJob = useRef<string | null>(null);
+  /** When the test in flight was sent; the step counts from here. */
+  const [passwordTestStartedAt, setPasswordTestStartedAt] = useState<number | null>(null);
+  const stopJobRef = useRef(stopJob);
+  stopJobRef.current = stopJob;
+  /** A test nobody waits for any more (closed wizard) must not keep the import lane. */
+  const dropPasswordTest = useCallback(() => {
+    passwordTestGen.current += 1;
+    const job = passwordTestJob.current;
+    passwordTestJob.current = null;
+    if (job) void stopJobRef.current(job).catch(() => undefined);
+  }, []);
   const existingDisplayNamesRef = useRef(existingDisplayNames);
   existingDisplayNamesRef.current = existingDisplayNames;
   /** Draft when the import path was chosen, before embedded settings replace untouched fields. */
@@ -171,13 +190,13 @@ export function useCreateVaultWizard<
       if (wasOpen.current) {
         settingsSnapshot.current = null;
         settingsPath.current = null;
-        passwordTestGen.current += 1;
+        dropPasswordTest();
         settingsGen.current += 1;
         dispatch({ type: "closed" });
       }
     }
     wasOpen.current = open;
-  }, [open, existingOrders, initialDraft, initialStep]);
+  }, [open, existingOrders, initialDraft, initialStep, dropPasswordTest]);
 
   useEffect(() => {
     if (!acceptSettings.current) {
@@ -248,10 +267,10 @@ export function useCreateVaultWizard<
 
   useEffect(() => {
     return () => {
-      passwordTestGen.current += 1;
+      dropPasswordTest();
       settingsGen.current += 1;
     };
-  }, []);
+  }, [dropPasswordTest]);
 
   const patchDraft = useCallback((patch: Partial<CreateVaultDraft>) => {
     dispatch({ type: "draftPatched", patch });
@@ -278,24 +297,37 @@ export function useCreateVaultWizard<
     const generation = (passwordTestGen.current += 1);
     dispatch({ type: "importPasswordTestStarted" });
     const password = state.draft.password;
+    const job = newJobId();
+    passwordTestJob.current = job;
+    setPasswordTestStartedAt(Date.now());
     void (async () => {
       let ok = false;
       let embedded: EmbeddedVaultSettings | null = null;
       let unavailable = false;
-      let timedOut = false;
+      let stopped = false;
       try {
-        const probed = await testImportPassword(password, {
-          path: state.draft.importFilePath,
-          fileName: state.draft.importFileName,
-          kind: state.draft.importKind,
-        });
+        const probed = await testImportPassword(
+          password,
+          {
+            path: state.draft.importFilePath,
+            fileName: state.draft.importFileName,
+            kind: state.draft.importKind,
+          },
+          job,
+        );
         ok = probed.ok;
         embedded = probed.embedded;
       } catch (error) {
-        timedOut = isRpcTimeout(error);
+        stopped = isJobCancelled(error);
         unavailable = !(isRpcError(error) && error.code === VAULT_ERROR_CODES.WRONG_PASSWORD);
       }
+      if (passwordTestJob.current === job) passwordTestJob.current = null;
       if (passwordTestGen.current !== generation) return;
+      setPasswordTestStartedAt(null);
+      if (stopped) {
+        dispatch({ type: "importPasswordTestStopped" });
+        return;
+      }
       dispatch({ type: "importPasswordTestFinished", ok, unavailable });
       if (ok && embedded) {
         dispatch({
@@ -305,11 +337,14 @@ export function useCreateVaultWizard<
           existingDisplayNames: existingDisplayNamesRef.current,
         });
       }
-      // A timed-out probe can still finish in the daemon. Drop this generation
-      // so a late callback cannot replace the timeout with success.
-      if (timedOut) passwordTestGen.current += 1;
     })();
   }, [state.draft, testImportPassword]);
+
+  /** Stop the `.7z` test in flight. Its own call ends it, with nothing marked or filled. */
+  const stopTestImportPassword = useCallback(() => {
+    const job = passwordTestJob.current;
+    if (job) void stopJob(job).catch(() => undefined);
+  }, [stopJob]);
 
   const handleClose = useCallback(() => {
     dispatch({ type: "closed" });
@@ -449,6 +484,7 @@ export function useCreateVaultWizard<
     draft: state.draft,
     currentStep: state.currentStep,
     testingPassword: state.testingPassword,
+    passwordTestStartedAt: state.testingPassword ? passwordTestStartedAt : null,
     discardConfirmOpen: state.discardConfirmOpen,
     ...view,
     patchDraft,
@@ -457,6 +493,7 @@ export function useCreateVaultWizard<
     handleNext,
     handleCreate,
     handleTestImportPassword,
+    stopTestImportPassword,
     requestClose,
     handleDiscardAndClose,
     dismissFooterConfirm,

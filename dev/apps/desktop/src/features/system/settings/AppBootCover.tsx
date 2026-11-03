@@ -16,7 +16,7 @@ const BOOT_THEME_STYLE = {
 interface AppBootCoverProps {
   /** Settings and the first vault-root resolve settled — fade out and unmount. */
   done: boolean;
-  /** Budgeted status / retry under the logo; `null` while the launch is still quick. */
+  /** Status / retry under the logo; `null` while the launch is still quick. */
   status: ReactNode;
 }
 

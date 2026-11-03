@@ -16,6 +16,7 @@ import {
   type FileManagerEntry,
   type FileManagerShell,
   type FileManagerState,
+  type JobStopBy,
   type VaultFileSystemService,
   type VaultListItem,
   type VaultWorkspaceAction,
@@ -42,10 +43,13 @@ export interface FileManagerController {
    * a dismiss started. Await this before `vault_close`.
    */
   flushWorkspaceSnapshot: (vaultId: string) => Promise<void>;
-  /** Stop storing the files still waiting in this vault's import; the file being written lands. */
-  cancelImports: (vaultId: string) => void;
+  /**
+   * Stop this vault's import: the files still waiting are dropped, and the
+   * ones being written stop and leave nothing. `by` goes to core's log.
+   */
+  cancelImports: (vaultId: string, by?: JobStopBy) => void;
   /** The file manager of `vaultId` answers `cancelImports`. Returns the call that stops answering. */
-  handleImportCancel: (vaultId: string, cancel: () => void) => () => void;
+  handleImportCancel: (vaultId: string, cancel: (by: JobStopBy) => void) => () => void;
   /** Vault closed/deleted — tear down in-memory file session (do not write). */
   purgeForVaultClose: (vaultId: string) => void;
   /** Drop file-manager tabs for vaults that are gone or no longer open. */
@@ -66,7 +70,7 @@ export function FileManagerProvider({
   const [store] = useState(() => createFileManagerStore());
   /** Layout writes by vault, so a close right after a dismiss waits for its write. */
   const [layoutWrites] = useState(() => new Map<string, Promise<void>>());
-  const [importCancels] = useState(() => new Map<string, () => void>());
+  const [importCancels] = useState(() => new Map<string, (by: JobStopBy) => void>());
 
   const controller = useMemo<FileManagerController>(() => {
     const getEntry = (vaultId: string) => store.getState().entries[vaultId] ?? null;
@@ -100,8 +104,8 @@ export function FileManagerProvider({
         const entry = getEntry(vaultId);
         await (entry ? writeLayout(vaultId, entry.workspace) : layoutWrites.get(vaultId));
       },
-      cancelImports(vaultId) {
-        importCancels.get(vaultId)?.();
+      cancelImports(vaultId, by = "user") {
+        importCancels.get(vaultId)?.(by);
       },
       handleImportCancel(vaultId, cancel) {
         importCancels.set(vaultId, cancel);

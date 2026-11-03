@@ -6,14 +6,15 @@ import {
   currentWorkspaceSystem,
   errorOnPasswordField,
   idleWarningText,
+  type AutoCloseWhenBusy,
   type IdleAutoCloseWarning,
   type IdleLockResult,
   isRpcError,
   isVaultCredentialChallengeI18nKey,
   isVaultPipelineDisplayBusy,
-  LOADING_BUDGET_MS,
-  sizedBudgetMs,
   vaultExportFilename,
+  vaultRowJobWork,
+  type VaultRowWork,
   vaultExportSavedAs,
   normalizeVaultSettingsConfig,
   plainFolderClassI18nKey,
@@ -117,7 +118,11 @@ export function useVaultLifecycleActions({
     dispatchWorkspace,
     openFromVault,
   } = useFileManager();
-  const pipeline = useVaultPipelineRun(desktopErrorI18nKey);
+  const pipeline = useVaultPipelineRun({
+    errorToI18nKey: desktopErrorI18nKey,
+    jobs,
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
+  });
   const closingHold = useClosingDisplayHold();
   const pipelineBackgroundRef = useRef(false);
   const vaultsRef = useRef(vaults);
@@ -222,9 +227,7 @@ export function useVaultLifecycleActions({
       showToast(t("toast.vault_export_cancelled"));
       setExportVaultId(null);
     },
-    onTimedOut: () => {
-      showToast(t("error.operation_timed_out"));
-    },
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
   const exportJobVaultId = vaultExport.job?.vaultId ?? null;
   const plainRemove = usePlainRemoveJob(rpcVaultPlainRemove, jobs, {
@@ -239,7 +242,8 @@ export function useVaultLifecycleActions({
       showToast(t("toast.recovery_discarded"));
     },
     onFailed: (error) => showError(error, "error.unexpected"),
-    onTimedOut: () => showToast(t("error.operation_timed_out")),
+    onCancelled: () => showToast(t("toast.recovery_stopped")),
+    onStopRefused: (_vaultId, error) => showError(error, "error.job_not_stoppable"),
   });
   const { start: startPlainRemove } = plainRemove;
   const lifecycleRequestRef = useRef(lifecycleRequest);
@@ -316,6 +320,54 @@ export function useVaultLifecycleActions({
     setLifecycleRequest(null);
   }, [exportJobVaultId, lifecycleRequest, setLifecycleRequest]);
 
+  const plainRemoveJob = plainRemove.job;
+  const rowWork = useMemo(() => {
+    const work: Record<string, VaultRowWork> = {};
+    // Waiting here, not sent yet: Stop drops it from the queue. A close has no Stop.
+    for (const waiting of pipeline.queued) {
+      if (waiting.kind === "close") continue;
+      work[waiting.vaultId] = { startedAt: null, timed: false, stop: "ready", stoppingSince: null };
+    }
+    const run = pipeline.runWork;
+    const runKind = pipeline.run?.kind;
+    if (run && runKind === "close") {
+      work[run.vaultId] = {
+        startedAt: run.startedAt,
+        timed: true,
+        stop: null,
+        stoppingSince: null,
+      };
+    } else if (run) {
+      // An encrypted unlock is short by nature; filling a plain-text folder is not.
+      const mode = vaults.find((vault) => vault.id === run.vaultId)?.storageMode;
+      const timed = runKind !== "open" || (mode !== undefined && storageModeIsPlaintext(mode));
+      work[run.vaultId] = vaultRowJobWork({ ...run, timed });
+    }
+    const exportJob = vaultExport.job;
+    if (exportJob) {
+      work[exportJob.vaultId] = vaultRowJobWork({
+        startedAt: exportJob.startedAt,
+        stoppable: exportJob.progress?.stoppable ?? true,
+        stoppingSince: exportJob.stoppingSince,
+      });
+    }
+    if (plainRemoveJob) {
+      work[plainRemoveJob.vaultId] = vaultRowJobWork({
+        startedAt: plainRemoveJob.startedAt,
+        stoppable: plainRemoveJob.progress?.stoppable ?? true,
+        stoppingSince: plainRemoveJob.stoppingSince,
+      });
+    }
+    return work;
+  }, [
+    pipeline.queued,
+    pipeline.run?.kind,
+    pipeline.runWork,
+    plainRemoveJob,
+    vaultExport.job,
+    vaults,
+  ]);
+
   const pipelineListStatus = useMemo(
     () => ({
       openingVaultIds: pipeline.openingVaultIds,
@@ -325,9 +377,9 @@ export function useVaultLifecycleActions({
       creatingVaultIds: pipeline.creatingVaultIds,
       queuedVaultIds: pipeline.queuedVaultIds,
       queuedOpenVaultIds: pipeline.queuedOpenVaultIds,
+      recoveringVaultIds: plainRemoveJob ? [plainRemoveJob.vaultId] : undefined,
       closeNowVaultIds,
-      activeVaultId: pipeline.run?.vaultId,
-      activeStartedAt: pipeline.run?.startedAt,
+      rowWork,
     }),
     [
       closeNowVaultIds,
@@ -339,9 +391,29 @@ export function useVaultLifecycleActions({
       pipeline.openingVaultIds,
       pipeline.queuedOpenVaultIds,
       pipeline.queuedVaultIds,
-      pipeline.run?.startedAt,
-      pipeline.run?.vaultId,
+      plainRemoveJob,
+      rowWork,
     ],
+  );
+
+  /**
+   * Stop the work a row shows: an open or a create (waiting or running), a
+   * vault export, or the removal of a leftover folder. Core has the last word:
+   * a stop it refuses comes back as a toast.
+   */
+  const stopVaultWork = useCallback(
+    (vaultId: string) => {
+      if (pipeline.isVaultPipelineBusy(vaultId)) {
+        pipeline.stop(vaultId);
+        return;
+      }
+      if (vaultExport.job?.vaultId === vaultId) {
+        vaultExport.stop();
+        return;
+      }
+      if (plainRemove.job?.vaultId === vaultId) plainRemove.stop();
+    },
+    [pipeline, plainRemove, vaultExport],
   );
 
   const revertCloseFailure = useCallback(
@@ -449,7 +521,7 @@ export function useVaultLifecycleActions({
         stepCount: lifecycleService.openingStepCount,
         presentation: "background",
         failureMode: "advance",
-        runPipeline: lifecycleService.runOpeningPipeline.bind(lifecycleService),
+        runPipeline: (id, onStep, job) => lifecycleService.runOpeningPipeline(id, onStep, job),
         onComplete: () => {
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
@@ -513,11 +585,19 @@ export function useVaultLifecycleActions({
           if (lifecycleRequestRef.current?.vaultId === vaultId) setLifecycleRequest(null);
           handlePipelineError(vaultId, "open", errorI18nKey);
         },
-        onTimeout: () => {
-          if (isCredentialVerifying(vaultId)) {
-            return;
-          }
+        onStopped: () => {
+          // The vault stays closed; the typed password goes with the attempt.
+          clearCredentialVerify(vaultId);
+          unlockRetainPasswordsRef.current.delete(vaultId);
           lifecycleService.clearPasswordInSession(vaultId);
+          setTypedCredential((current) => (current?.vaultId === vaultId ? null : current));
+          if (lifecycleRequestRef.current?.vaultId === vaultId) {
+            setCredentialBusy(false);
+            setCredentialErrorKey(null);
+            setLifecycleRequest(null);
+          }
+          pipelineBackgroundRef.current = false;
+          showToast(t("error.job_cancelled"));
         },
       });
     },
@@ -540,14 +620,17 @@ export function useVaultLifecycleActions({
     ],
   );
 
+  /**
+   * Create or import a vault as a core job. `onRemoved` runs when the vault
+   * was not made: it failed, or the person stopped it and core removed it.
+   */
   const startCreatePipeline = useCallback(
     (
       vaultId: string,
-      runCreate: () => Promise<void>,
+      runCreate: (job: string) => Promise<void>,
       hooks: {
         onComplete: () => void;
-        onError: () => void;
-        onAbandoned?: (ok: boolean) => void;
+        onRemoved: () => void;
       },
     ) => {
       pipelineBackgroundRef.current = true;
@@ -556,32 +639,23 @@ export function useVaultLifecycleActions({
         kind: "create",
         stepCount: 1,
         presentation: "background",
-        budgetMs: LOADING_BUDGET_MS.vaultCreate,
         failureMode: "advance",
-        invalidateOnTimeout: true,
-        runPipeline: async () => {
-          await runCreate();
-        },
+        runPipeline: (_id, _onStep, job) => runCreate(job),
         onComplete: () => {
           hooks.onComplete();
           notifyPipelineComplete(vaultId, "create");
         },
         onError: (errorI18nKey) => {
-          hooks.onError();
+          hooks.onRemoved();
           dismissToast();
           showToast(t(errorI18nKey), 8000);
           pipelineBackgroundRef.current = false;
         },
-        onTimeout: () => {
-          hooks.onError();
-          showToast(t("error.operation_timed_out"));
+        onStopped: () => {
+          hooks.onRemoved();
+          dismissToast();
+          showToast(t("error.job_cancelled"));
           pipelineBackgroundRef.current = false;
-        },
-        onAbandoned: (ok) => {
-          hooks.onAbandoned?.(ok);
-          if (!ok) return;
-          hooks.onComplete();
-          notifyPipelineComplete(vaultId, "create");
         },
       });
     },
@@ -642,7 +716,7 @@ export function useVaultLifecycleActions({
         stepCount: lifecycleService.closingStepCount,
         presentation: "background",
         failureMode: "advance",
-        runPipeline: async (vaultId, onStep, growBudget) => {
+        runPipeline: async (vaultId, onStep) => {
           // This job owns the flag. Idle close does not keep a sticky toast.
           pipelineBackgroundRef.current = false;
           closingHold.begin(vault.id);
@@ -656,7 +730,6 @@ export function useVaultLifecycleActions({
               : source === "auto_close"
                 ? "auto"
                 : "user",
-            (bytes) => growBudget(sizedBudgetMs("vaultClose", bytes)),
           );
           plainCloseRef.current = outcome.plain;
           backupFailureRef.current = outcome.backupFailed
@@ -713,9 +786,6 @@ export function useVaultLifecycleActions({
             },
             { immediate },
           );
-        },
-        onTimeout: () => {
-          forgetCloseNow(vault.id);
         },
         onError: (errorI18nKey) => {
           forgetCloseNow(vault.id);
@@ -1154,7 +1224,7 @@ export function useVaultLifecycleActions({
   );
 
   const lockVaultWhenIdle = useCallback(
-    async (vaultId: string): Promise<IdleLockResult> => {
+    async (vaultId: string, whenBusy: AutoCloseWhenBusy): Promise<IdleLockResult> => {
       const vault = vaultsRef.current.find((item) => item.id === vaultId);
       if (!vault || !canRunIdleAutoClose(vault)) return "wait";
       if (pipeline.isVaultPipelineBusy(vault.id) || closingHold.holdIds.includes(vault.id)) {
@@ -1163,6 +1233,11 @@ export function useVaultLifecycleActions({
       const entry = getEntry(vault.id);
       const intent = entry ? fileManagerDismissIntent(entry) : "dismiss";
       if (intent === "import_in_progress") {
+        // `close`: the import stops, and the next pass closes once it has ended.
+        if (whenBusy === "close") {
+          cancelFileManagerImports(vault.id, "auto_close");
+          return "wait";
+        }
         if (!importCloseNoticeRef.current.has(vault.id)) {
           importCloseNoticeRef.current.add(vault.id);
           showIdleNotice(t("toast.auto_close_after_import", { name: vault.displayName }));
@@ -1196,6 +1271,7 @@ export function useVaultLifecycleActions({
       return started ? "started" : "wait";
     },
     [
+      cancelFileManagerImports,
       closingHold.holdIds,
       dispatchWorkspace,
       fs,
@@ -1452,11 +1528,12 @@ export function useVaultLifecycleActions({
     handleUnlockVault,
     handleExportVault,
     handleConfirmExportVault,
-    /** The vault export in flight; the list enforces its budget whether its window is open or not. */
+    /** The vault export in flight; it keeps running whether its window is open or not. */
     exportJob: vaultExport.job,
     handleStopExportVault: vaultExport.stop,
     /** The wipe of a leftover folder in flight; its row shows `recovering`. */
     plainRemoveJob: plainRemove.job,
+    stopVaultWork,
     handleLifecycleConfirm,
     handleRecoveryAction,
     handleVaultDelete,

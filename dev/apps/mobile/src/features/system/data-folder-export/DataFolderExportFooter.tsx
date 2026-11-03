@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui";
+import { Button, JobStopButton } from "@/components/ui";
 import { ModalFooterActions } from "@/components/ui/ModalFooterActions";
 import { useTranslation } from "@/i18n";
 import type {
@@ -22,16 +22,12 @@ export function DataFolderExportFooter({ controls, destination }: DataFolderExpo
   return (
     <ModalFooterActions layout="confirm">
       {job ? (
-        <Button
-          variant="secondary"
-          label={
-            job.stopping
-              ? t("modal.data_folder_export.stopping")
-              : t("modal.data_folder_export.stop")
-          }
-          disabled={job.stopping}
-          busy={job.stopping}
-          onPress={onStop}
+        <JobStopButton
+          stoppingSince={job.stoppingSince}
+          stoppable={job.progress?.stoppable ?? true}
+          onStop={onStop}
+          label={t("modal.data_folder_export.stop")}
+          stoppingLabel={t("modal.data_folder_export.stopping")}
         />
       ) : (
         <Button

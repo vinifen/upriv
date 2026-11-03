@@ -4,8 +4,9 @@ export type {
   VaultDisplayStatus,
   VaultPipelineListStatus,
   VaultRewrapKind,
-  VaultRewrapRun,
   VaultRow,
+  VaultRowStop,
+  VaultRowWork,
   VaultSession,
 } from "./types";
 export {
@@ -25,12 +26,12 @@ export {
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
   listHasVaultBlockingWorkspaceClear,
-  pipelineActiveStartedAt,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   storageModeIsPlaintext,
   vaultDeleteHold,
-  vaultPipelineRowBudget,
+  vaultRowJobWork,
+  vaultRowWorkClock,
 } from "./types";
 export type { VaultLifecycleIntent, VaultLifecycleRequest } from "./lifecycle";
 export { canRunIdleAutoClose } from "./lifecycle";

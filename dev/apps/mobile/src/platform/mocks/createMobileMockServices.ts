@@ -349,7 +349,7 @@ export function createMobileMockServices(): AppServices {
       async exportCapabilities() {
         return { sevenZip: true };
       },
-      async sweepPlainExports() {},
+      async sweepUnfinished() {},
     },
 
     vaultGroups: mockGroups.service,

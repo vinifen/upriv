@@ -153,7 +153,8 @@ fn stdio_light_rpc_completes_while_vault_create_runs() {
                     "order": 1
                 },
                 "storage": { "mode": "encrypted_dir" }
-            }
+            },
+            "job": "stdio-concurrent-create"
         }
     });
     writeln!(stdin, "{create}").expect("write create");
@@ -226,6 +227,8 @@ fn stdio_app_shutdown_exits_cleanly() {
     let response: serde_json::Value =
         serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
     assert_eq!(response["ok"], true);
+    // Electron ends stdin once the quit answered.
+    drop(stdin);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -277,14 +280,15 @@ fn daemon_with_open_vault(
                 "settings": {
                     "vault": { "id": "left-open", "display_name": "Left Open", "order": 1 },
                     "storage": { "mode": "encrypted_dir" }
-                }
+                },
+                "job": "stdio-left-open-create"
             }
         }),
         serde_json::json!({
             "type": "request",
             "id": 2,
             "method": "vault_open",
-            "params": { "id": "left-open", "password": "pass-word-ok" }
+            "params": { "id": "left-open", "password": "pass-word-ok", "job": "stdio-left-open" }
         }),
         serde_json::json!({
             "type": "request",
@@ -377,9 +381,38 @@ fn stdio_close_now_quit_closes_open_vaults_with_no_backup() {
     let response: serde_json::Value =
         serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
     assert_eq!(response["ok"], true, "{response}");
+    drop(stdin);
 
     wait_for_exit(&mut child);
     assert_eq!(closed_vault_backups(root.path()), 0);
+}
+
+#[test]
+fn stdio_a_quit_answers_job_status_while_it_closes_and_can_turn_into_close_now() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (mut child, mut stdin, mut stdout, _stderr) = daemon_with_open_vault(root.path());
+
+    for request in [
+        r#"{"type":"request","id":10,"method":"app_shutdown","params":{}}"#,
+        r#"{"type":"request","id":11,"method":"job_status","params":{"job":"none"}}"#,
+        r#"{"type":"request","id":12,"method":"app_shutdown","params":{"now":true}}"#,
+    ] {
+        writeln!(stdin, "{request}").expect("write request");
+    }
+    stdin.flush().expect("flush stdin");
+    let mut answered = std::collections::BTreeSet::new();
+    while answered.len() < 3 {
+        let response: serde_json::Value =
+            serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
+        assert_eq!(response["ok"], true, "{response}");
+        answered.insert(response["id"].as_u64().expect("id"));
+    }
+    assert_eq!(answered, [10, 11, 12].into_iter().collect());
+    drop(stdin);
+
+    wait_for_exit(&mut child);
+    // Closed either way: the hurry may land after a small vault already closed.
+    assert!(closed_vault_backups(root.path()) <= 1);
 }
 
 #[test]

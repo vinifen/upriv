@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LOADING_BUDGET_MS } from "@upriv/shared";
+import { OPERATION_LIMIT_MS } from "@upriv/shared";
 import { I18nProvider } from "@/i18n";
 import type { FileManagerApi } from "../../hooks/useVaultFileManager";
 import { FileManagerDialogs } from "../FileManagerDialogs";
@@ -81,7 +81,7 @@ describe("FileManagerDialogs unsaved prompt", () => {
     expect(fm.dispatch).not.toHaveBeenCalled();
   });
 
-  it("gives up on a save past its budget", async () => {
+  it("gives up on a save past the operation limit", async () => {
     vi.useFakeTimers();
     try {
       const fm = renderUnsavedPrompt(true);
@@ -90,7 +90,7 @@ describe("FileManagerDialogs unsaved prompt", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(LOADING_BUDGET_MS.vaultPipeline + 1_000);
+        await vi.advanceTimersByTimeAsync(OPERATION_LIMIT_MS + 1_000);
       });
       expect(fm.abandonUnsavedSave).toHaveBeenCalledTimes(1);
     } finally {

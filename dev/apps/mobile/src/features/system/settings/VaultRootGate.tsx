@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 import {
-  LOADING_BUDGET_MS,
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
   isVaultRootGoneError,
@@ -14,8 +13,8 @@ import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useLoadingBudget } from "@upriv/shared/react";
-import { Button, LoadingBudgetHint, Modal, ModalFooterActions } from "@/components/ui";
+import { useOperationLimit } from "@upriv/shared/react";
+import { Button, Modal, ModalFooterActions } from "@/components/ui";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootSetupScreen } from "./VaultRootSetupScreen";
@@ -50,7 +49,7 @@ function pathFromRpcError(error: unknown): string {
  * - inspect `unreadable` / `io_error` → AliasRecovery
  * - custom_root empty path → recover from active alias or run recovery
  * - M8: needs_setup + valid default root → single retry
- * - Loading / applying budgets with retry
+ * - Loading / applying limits with retry
  * - Launch cover (`AppBootCover`) until settings and the first resolve settle
  * - Epoch soft-block while re-resolve runs after a mutation
  * - Resolve errors localized via `mobileErrorI18nKey`
@@ -72,7 +71,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     getSettingsSnapshot,
   } = useAppSettingsContext();
   const [ready, setReady] = useState(false);
-  /** Starts true so the launch resolve runs under the `vaultRootResolve` budget. */
+  /** Starts true so the launch resolve runs under `OPERATION_LIMIT_MS`. */
   const [applying, setApplying] = useState(true);
   /** Latched once the launch settles; `AppBootCover` covers everything until then. */
   const [booted, setBooted] = useState(false);
@@ -638,28 +637,27 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     aliasInvalidPath === null &&
     resolveError === null;
 
-  const settingsBudget = useLoadingBudget(
+  const settingsLimit = useOperationLimit(
     showLoadingSettings && !settingsLoadTimedOut && !settingsLoadFailed,
-    LOADING_BUDGET_MS.settingsLoad,
   );
-  const applyingBudget = useLoadingBudget(showApplying, LOADING_BUDGET_MS.vaultRootResolve);
+  const applyingLimit = useOperationLimit(showApplying);
 
   useEffect(() => {
-    if (!settingsBudget.timedOut || !showLoadingSettings) return;
+    if (!settingsLimit.timedOut || !showLoadingSettings) return;
     setSettingsLoadTimedOut(true);
-  }, [settingsBudget.timedOut, showLoadingSettings]);
+  }, [settingsLimit.timedOut, showLoadingSettings]);
 
   useEffect(() => {
     if (settingsReady) setSettingsLoadTimedOut(false);
   }, [settingsReady]);
 
   useEffect(() => {
-    if (!applyingBudget.timedOut || !showApplying) return;
+    if (!applyingLimit.timedOut || !showApplying) return;
     resolveGen.current += 1;
     setApplying(false);
     setReady(false);
     setResolveError(tRef.current("modal.vault_root_setup.error_timeout"));
-  }, [applyingBudget.timedOut, showApplying]);
+  }, [applyingLimit.timedOut, showApplying]);
 
   const bootSettled =
     settingsReady &&
@@ -698,8 +696,8 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   };
 
   const settingsLoadStuck = settingsLoadTimedOut || settingsLoadFailed;
-  const settingsLoadVisible = showLoadingSettings && (settingsBudget.visible || settingsLoadStuck);
-  const applyingVisible = showApplying && applyingBudget.visible;
+  const settingsLoadVisible = showLoadingSettings && (settingsLimit.visible || settingsLoadStuck);
+  const applyingVisible = showApplying && applyingLimit.visible;
 
   const settingsLoadStatus = (
     <GateLoadingStatus
@@ -710,14 +708,11 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             ? t("error.service_unavailable")
             : t("modal.vault_root_setup.loading_settings")
       }
-      budget={settingsLoadStuck ? null : settingsBudget}
       onRetry={settingsLoadStuck ? retrySettingsLoad : undefined}
     />
   );
 
-  const applyingStatus = (
-    <GateLoadingStatus message={t("modal.vault_root_setup.busy")} budget={applyingBudget} />
-  );
+  const applyingStatus = <GateLoadingStatus message={t("modal.vault_root_setup.busy")} />;
 
   const overlayStyle = [styles.overlay, { backgroundColor: colors.modalScrim }];
 
@@ -869,23 +864,18 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
 
 interface GateLoadingStatusProps {
   message: string;
-  budget?: { budgetMs: number; remainingMs: number } | null;
   onRetry?: () => void;
 }
 
-/** Spinner + budget, or Retry once stuck. Reads the theme where it renders (cover vs overlay). */
-function GateLoadingStatus({ message, budget, onRetry }: GateLoadingStatusProps) {
+/** Spinner, or Retry once stuck. Reads the theme where it renders (cover vs overlay). */
+function GateLoadingStatus({ message, onRetry }: GateLoadingStatusProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   return (
     <>
       {onRetry ? null : <ActivityIndicator size="large" color={colors.accent} />}
       <Text style={[typography.bodyMuted, styles.overlayText]}>{message}</Text>
-      {onRetry ? (
-        <Button label={t("action.retry")} variant="primary" onPress={onRetry} />
-      ) : budget ? (
-        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-      ) : null}
+      {onRetry ? <Button label={t("action.retry")} variant="primary" onPress={onRetry} /> : null}
     </>
   );
 }

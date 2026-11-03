@@ -1,4 +1,4 @@
-import { SIZED_BUDGET_CEILING_MS, type DataFolderService } from "@upriv/shared";
+import type { DataFolderService } from "@upriv/shared";
 import { rpcDataFolderExport } from "@/lib/rpc";
 import { nativeSafExportMount } from "./safExportMount";
 
@@ -9,7 +9,7 @@ import { nativeSafExportMount } from "./safExportMount";
  */
 export const nativeDataFolderService: DataFolderService = {
   exportTo: (destDir, name, job) =>
-    nativeSafExportMount.withExportFolder(destDir, job, SIZED_BUDGET_CEILING_MS, (dir) =>
+    nativeSafExportMount.withExportFolder(destDir, job, (dir) =>
       rpcDataFolderExport(dir, name, job),
     ),
 };

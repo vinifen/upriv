@@ -64,6 +64,10 @@ pub(super) struct UiToml {
     pub(super) lifecycle_keep_open_on_wake: bool,
     /// Close now asks first. Default true.
     pub(super) lifecycle_confirm_close_now: bool,
+    /// Stop on a vault row needs a second click. Default true.
+    pub(super) lifecycle_confirm_stop: bool,
+    /// Lock on a vault row needs a second click. Default false.
+    pub(super) lifecycle_confirm_lock: bool,
 }
 
 impl Default for UiToml {
@@ -91,6 +95,8 @@ impl Default for UiToml {
             lifecycle_open_file_manager_on_open: false,
             lifecycle_keep_open_on_wake: false,
             lifecycle_confirm_close_now: true,
+            lifecycle_confirm_stop: true,
+            lifecycle_confirm_lock: false,
         }
     }
 }
@@ -119,6 +125,8 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
         lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
         lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
+        lifecycle_confirm_stop: ui.lifecycle_confirm_stop,
+        lifecycle_confirm_lock: ui.lifecycle_confirm_lock,
     }
 }
 
@@ -162,6 +170,8 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
         lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
         lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
+        lifecycle_confirm_stop: ui.lifecycle_confirm_stop,
+        lifecycle_confirm_lock: ui.lifecycle_confirm_lock,
     }
 }
 
@@ -433,11 +443,14 @@ last_opened_vault = "kept"
         assert!(settings.ui.vault_list_show_group_settings_button);
         assert!(settings.ui.vault_list_show_drag);
         assert!(settings.ui.vault_list_allow_drag_into_group);
-        // Omitted lifecycle prefs default false, except the Close now question.
+        // Omitted lifecycle prefs default false, except the Close now question
+        // and the second click on a row's Stop.
         assert!(!settings.ui.lifecycle_close_modal_on_submit);
         assert!(!settings.ui.lifecycle_open_file_manager_on_open);
         assert!(!settings.ui.lifecycle_keep_open_on_wake);
         assert!(settings.ui.lifecycle_confirm_close_now);
+        assert!(settings.ui.lifecycle_confirm_stop);
+        assert!(!settings.ui.lifecycle_confirm_lock);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
         // Vault-root mode/path never come from TOML.
@@ -458,12 +471,16 @@ lifecycle_close_modal_on_submit = true
 lifecycle_open_file_manager_on_open = true
 lifecycle_keep_open_on_wake = true
 lifecycle_confirm_close_now = false
+lifecycle_confirm_stop = false
+lifecycle_confirm_lock = true
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.ui.lifecycle_close_modal_on_submit);
         assert!(settings.ui.lifecycle_open_file_manager_on_open);
         assert!(settings.ui.lifecycle_keep_open_on_wake);
         assert!(!settings.ui.lifecycle_confirm_close_now);
+        assert!(!settings.ui.lifecycle_confirm_stop);
+        assert!(settings.ui.lifecycle_confirm_lock);
         let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));

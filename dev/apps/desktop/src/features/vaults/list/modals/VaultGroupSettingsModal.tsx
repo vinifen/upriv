@@ -9,14 +9,13 @@ import {
   VaultSettingsSection,
 } from "@/components/settings";
 import { Icon } from "@/components/icons";
-import { Button, LoadingBudgetHint, Modal, SwitchRow } from "@/components/ui";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { Button, Modal, SwitchRow } from "@/components/ui";
+import { useOperationLimit } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import {
   GROUPED_VAULT_SORT_MODES,
-  LOADING_BUDGET_MS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   validateDisplayName,
   normalizeStoredName,
@@ -81,7 +80,7 @@ export function VaultGroupSettingsModal({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const deleteConfirmRef = useRevealWhen<HTMLDivElement>(deleteOpen);
   const [error, setError] = useState<string | null>(null);
-  const budget = useLoadingBudget(busy, LOADING_BUDGET_MS.default);
+  const limit = useOperationLimit(busy);
 
   useEffect(() => {
     if (!open || !group) {
@@ -109,12 +108,12 @@ export function VaultGroupSettingsModal({
   }, [open, group]);
 
   useEffect(() => {
-    if (!budget.timedOut || !busy) return;
+    if (!limit.timedOut || !busy) return;
     busyGen.current += 1;
     onBusyTimeout?.();
     setBusy(false);
     setError(t("error.operation_timed_out"));
-  }, [budget.timedOut, busy, onBusyTimeout, t]);
+  }, [limit.timedOut, busy, onBusyTimeout, t]);
 
   const validation = validateDisplayName(displayName);
   const canSave = Boolean(group) && !validation && !busy;
@@ -359,9 +358,6 @@ export function VaultGroupSettingsModal({
           )}
         </VaultSettingsSection>
 
-        {budget.visible ? (
-          <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-        ) : null}
         {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
       </div>
     </Modal>

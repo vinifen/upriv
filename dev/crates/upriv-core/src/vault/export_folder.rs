@@ -15,9 +15,11 @@ use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use crate::paths::VaultRoot;
+use crate::runtime_state::UnfinishedWork;
 use crate::session::Job;
 
-use super::partial::{discard_partial, PartialWork};
+use super::partial::discard_partial;
+use super::unfinished::{forget_file, partial_work, record_file};
 
 /// Suffix of an export file that is still being written.
 pub(super) const PART_SUFFIX: &str = ".upriv-part";
@@ -164,42 +166,48 @@ impl NumberedExportTarget {
         })
     }
 
-    /// The file the export is written as until it is complete.
-    pub(super) fn partial(&self) -> &Path {
-        &self.partial
-    }
-
     /// Write the export into its partial with `write`, then move it to its
-    /// free name. On any failure the partial is removed and logged as `work`;
-    /// a failure after a stop reads as the stop.
+    /// free name. The partial is recorded as `work` of `vault_id` before its
+    /// first byte ([`record_file`]). On any failure it is removed; a failure
+    /// after a stop reads as the stop.
     pub(super) fn write(
         &self,
         root: &VaultRoot,
         job: &Job,
-        work: PartialWork,
+        work: UnfinishedWork,
+        vault_id: Option<&str>,
         write: impl FnOnce(&Path) -> Result<u64>,
     ) -> Result<ExportedFile> {
-        self.write_clearing(root, job, write, |partial| discard_partial(partial, work))
+        let removal = partial_work(work);
+        self.write_clearing(root, job, work, vault_id, write, |partial| {
+            discard_partial(partial, removal)
+        })
     }
 
-    /// [`Self::write`], with `clear` deciding how a failure gets rid of the partial.
+    /// [`Self::write`], with `clear` deciding how a failure gets rid of the
+    /// partial. `clear` returns false while the partial is still there, so its
+    /// record stays for the next launch.
     pub(super) fn write_clearing(
         &self,
         root: &VaultRoot,
         job: &Job,
+        work: UnfinishedWork,
+        vault_id: Option<&str>,
         write: impl FnOnce(&Path) -> Result<u64>,
-        clear: impl FnOnce(&Path),
+        clear: impl FnOnce(&Path) -> bool,
     ) -> Result<ExportedFile> {
+        record_file(root, work, vault_id, &self.partial, job)?;
         let installed = (|| {
             let size = job.settle(write(&self.partial))?;
             job.ensure_running()?;
             let (path, number) = self.name.install(&self.dir, &self.partial, self.number)?;
             Ok(ExportedFile { path, size, number })
         })();
-        installed.map_err(|error| {
-            clear(&self.partial);
-            unreachable_folder_as_io(error, root)
-        })
+        let partial_gone = installed.is_ok() || clear(&self.partial);
+        if partial_gone {
+            forget_file(root, &self.partial);
+        }
+        installed.map_err(|error| unreachable_folder_as_io(error, root))
     }
 }
 

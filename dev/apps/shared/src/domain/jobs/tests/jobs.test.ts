@@ -27,11 +27,15 @@ describe("newJobId", () => {
 });
 
 describe("parseJobStatus", () => {
-  it("reads a running job", () => {
+  it("reads a running job, stoppable unless core says otherwise", () => {
     expect(parseJobStatus({ running: true, bytesDone: 5, bytesTotal: 10 })).toEqual({
       bytesDone: 5,
       bytesTotal: 10,
+      stoppable: true,
     });
+    expect(
+      parseJobStatus({ running: true, bytesDone: 5, bytesTotal: 10, stoppable: false }),
+    ).toEqual({ bytesDone: 5, bytesTotal: 10, stoppable: false });
   });
 
   it("is null when the job does not run or the answer is not an object", () => {

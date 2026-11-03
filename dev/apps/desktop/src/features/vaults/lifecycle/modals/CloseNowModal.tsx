@@ -1,34 +1,56 @@
 import { useEffect, useState } from "react";
-import { closeNowNoticeKeys, storageModeIsPlaintext, type VaultListItem } from "@upriv/shared";
+import {
+  closeNowNoticeKeys,
+  closeNowQuitNoticeKeys,
+  storageModeIsPlaintext,
+  type VaultListItem,
+} from "@upriv/shared";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 
+/** What Close now acts on: one vault, or every vault and job as Upriv quits. */
+export type CloseNowTarget =
+  | {
+      kind: "vault";
+      vault: VaultListItem;
+      /** An editor tab in this vault has unsaved changes. */
+      unsaved: boolean;
+    }
+  | { kind: "quit" };
+
 interface CloseNowModalProps {
-  vault: VaultListItem | null;
-  /** An editor tab in this vault has unsaved changes. */
-  unsaved: boolean;
+  target: CloseNowTarget | null;
   /** The setting is on, so "Don't ask again" has something to turn off. */
   asks: boolean;
   onCancel: () => void;
   onConfirm: (dontAskAgain: boolean) => void;
 }
 
-/** What Close now skips, before it runs. */
-export function CloseNowModal({ vault, unsaved, asks, onCancel, onConfirm }: CloseNowModalProps) {
+/**
+ * What Close now skips, before it runs: the one window for a vault's Close now
+ * and the quit's, with the same "Don't ask again" (`lifecycle_confirm_close_now`).
+ */
+export function CloseNowModal({ target, asks, onCancel, onConfirm }: CloseNowModalProps) {
   const { t } = useTranslation();
   const [dontAskAgain, setDontAskAgain] = useState(false);
-  const vaultId = vault?.id;
+  const targetKey = target?.kind === "vault" ? `vault:${target.vault.id}` : (target?.kind ?? null);
 
   useEffect(() => {
     setDontAskAgain(false);
-  }, [vaultId]);
+  }, [targetKey]);
+
+  const quit = target?.kind === "quit";
+  const notices =
+    target?.kind === "vault"
+      ? closeNowNoticeKeys(storageModeIsPlaintext(target.vault.storageMode))
+      : closeNowQuitNoticeKeys();
 
   return (
     <Modal
-      open={vault !== null}
-      title={t("modal.close_now.title")}
+      open={target !== null}
+      title={t(quit ? "modal.close_now.quit_title" : "modal.close_now.title")}
       titleIcon="lock"
-      contextTitle={vault?.displayName}
+      contextTitle={target?.kind === "vault" ? target.vault.displayName : undefined}
       onClose={onCancel}
       panelClassName="max-w-md"
       rootClassName="z-[130]"
@@ -43,17 +65,17 @@ export function CloseNowModal({ vault, unsaved, asks, onCancel, onConfirm }: Clo
         </div>
       }
     >
-      {vault ? (
+      {target ? (
         <div className="flex flex-col gap-3">
           <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("modal.close_now.intro")}
+            {t(quit ? "modal.close_now.quit_intro" : "modal.close_now.intro")}
           </p>
           <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm leading-relaxed text-on-surface-variant">
-            {closeNowNoticeKeys(storageModeIsPlaintext(vault.storageMode)).map((key) => (
+            {notices.map((key) => (
               <li key={key}>{t(key)}</li>
             ))}
           </ul>
-          {unsaved ? (
+          {target.kind === "vault" && target.unsaved ? (
             <p className="text-sm font-medium leading-relaxed text-on-surface">
               {t("modal.close_now.unsaved")}
             </p>

@@ -295,7 +295,7 @@ Related: PRD §3.3.1, **RF-45**, **RF-49**, **RF-49b**.
 - Second `open` on same or other PC → clear error.
 - The app can always close. When it goes away without `app_shutdown` (a crash, a kill, or closing it again during a quit), the daemon sees stdin end or a write fail, closes every open vault the way `app_shutdown` does, and exits.
 - The quit dialog's Close now sends `app_shutdown` with `now`: the same close as `vault_close` with `reason=now`, on every open vault. Electron gives it `SHUTDOWN_NOW_TIMEOUT_MS` (30 s), then stops the daemon. A vault it did not reach is a dirty close (§7), and a plaintext folder stays for recovery. `app_shutdown` waits for a close already running on another thread, and with `now` tells it to hurry first.
-- `open()` first waits up to `LOCK_HOLDER_WAIT` (8 min, inside the open's 10 minute budget) for another process to let go, so a new launch opens the vault once the previous daemon is done. A holder that stays gets the error.
+- `open()` first waits up to `LOCK_HOLDER_WAIT` (8 min, shown as Queued, and Stop ends it) for another process to let go, so a new launch opens the vault once the previous daemon is done. A holder that stays gets the error.
 - With the lock in hand, `open()` removes any `.zip.partial` backup a killed process left. A killed daemon also leaves a dirty close (§7).
 
 Related: PRD **RF-54**.
@@ -444,6 +444,8 @@ file_manager_dock_expanded = false
 # lifecycle_close_modal_on_submit = false    # optional; close the unlock dialog on Confirm
 # lifecycle_open_file_manager_on_open = false # optional; open file manager after unlock if no other modal
 # lifecycle_confirm_close_now = true          # optional; ask before Close now
+# lifecycle_confirm_stop = true               # optional; a row's Stop takes a second click
+# lifecycle_confirm_lock = false              # optional; a row's Lock takes a second click
 
 [logging]
 enabled = true
@@ -474,7 +476,9 @@ last_opened_vault = "my-encrypted-notes"
 | `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
 | `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, the unlock password dialog closes on Confirm (progress on the row). |
 | `lifecycle_open_file_manager_on_open` | `[ui].lifecycle_open_file_manager_on_open` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, after unlock succeeds open the in-app file manager if no other modal is open. |
-| `lifecycle_confirm_close_now` | `[ui].lifecycle_confirm_close_now` | Yes (General) | Explicit **Save** in System settings, or at once from Don't ask again in the Close now window. Default `true`. When `false`, Close now runs without its window, unless an editor tab has unsaved changes. |
+| `lifecycle_confirm_close_now` | `[ui].lifecycle_confirm_close_now` | Yes (General) | Explicit **Save** in System settings, or at once from Don't ask again in the Close now window. Default `true`. One Close now window serves a vault's Close now and the quit window's: it lists what Close now skips, and its Don't ask again turns this off for both. When `false`, Close now runs without that window, unless an editor tab has unsaved changes. |
+| `lifecycle_confirm_stop` | `[ui].lifecycle_confirm_stop` | Yes (General) | Explicit **Save** in System settings. Default `true`. A vault row's Stop turns red on the first click and stops on a second within 4 s; off, one click stops. Windows always stop on one click. |
+| `lifecycle_confirm_lock` | `[ui].lifecycle_confirm_lock` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, a vault row's Lock takes the same second click. Unlock never does: it only opens its password window. |
 | `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
 | `always_show_hidden_vaults` | `[ui].always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
 | `vault_list_show_drag` | `[ui].vault_list_show_drag` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows vertical drag grips on the vault list; off hides grips only (order/sort unchanged). |
@@ -586,6 +590,7 @@ wipe_pattern = "random"           # hidden default
 [auto_close]
 enabled = true
 idle_minutes = 15
+when_busy = "wait"                # or "close": stop a file manager import, then close
 
 [file_manager]
 confirm_delete = true             # ask before deleting a file or folder
@@ -774,6 +779,7 @@ Configuration **is not immutable** after vault creation. User can change `[seven
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable automatic close |
 | `idle_minutes` | u32 | `15` | Idle time until close. The app uses 1..=1440. A save writes that range |
+| `when_busy` | `"wait"` \| `"close"` | `"wait"` | What a due auto-close does while files still import into that vault's file manager: wait for them, or stop the import (`job_cancel` with `by=auto_close`) and close |
 
 Sixty seconds before the lock, the app shows one notice. That lead is fixed; it is not a vault setting. A 1-minute idle warns 30 seconds before, so the notice is not shown on every action. Several vaults that reach the notice together share one toast. A notice waits while another idle toast is still on screen.
 
@@ -785,7 +791,7 @@ The clock is the device time since the last action inside Upriv. It lives in the
 
 **Sleep and time away.** General setting `lifecycle_keep_open_on_wake` (default off). Off: that time counts, and a vault can already be auto-closed when the user comes back. On: only time the process is actually running counts. Desktop sleep is `powerMonitor` suspend/resume. The phone treats leaving the app as a pause. A vault that was already due while Upriv was on screen still closes. Killing the process is a dirty close, not an auto-close.
 
-**When the deadline is reached:** wait for an import or a pipeline job already running for that vault. Save unsaved editor drafts, then run the same close as a manual lock (`reason=auto` on `vault_closed`). No dialog. A failure restarts that vault's clock only. After a successful auto-close the row says Auto-closed until the vault is opened again or locked by hand.
+**When the deadline is reached:** an open or close already running or waiting for that vault is waited for (a retry every 5 s). A file manager import is waited for with `when_busy = "wait"`; with `"close"` it stops (`job_cancel` with `by=auto_close` for the file being written) and the close follows. Save unsaved editor drafts, then run the same close as a manual lock (`reason=auto` on `vault_closed`). No dialog. A failure restarts that vault's clock only. After a successful auto-close the row says Auto-closed until the vault is opened again or locked by hand.
 
 ### 3.3 Path resolution
 
@@ -1095,10 +1101,10 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Vault config** | Wide modal | ⚙ button |
 | **Backups** | Medium modal | 💾 button |
 | **Recovery** | Modal; Remove the folder then runs on the row as `recovering` | Detection on startup / listing |
-| **Closing** | Row badge + modal (if open) + finite budget | During flush into `store/` |
-| **Opening** | Row badge + unlock dialog (while open) + finite budget | During Argon2 unlock |
+| **Closing** | Row badge + elapsed time; Close now under More options | During flush into `store/` |
+| **Opening** | Row badge + unlock dialog (while open), elapsed time on a plain-text fill, Stop in place of Unlock | During Argon2 unlock |
 
-**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock dialog while it is open; lock opens no dialog); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
+**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock dialog while it is open; lock opens no dialog); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. A waiting vault says Queued until its turn; Stop drops a waiting open or create from the queue, and a running one through `job_cancel`. A close has no Stop (aborting a flush would risk an inconsistent store); Close now hurries it. Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
 
 **Pipeline — errors and stuck states:**
 
@@ -1107,7 +1113,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **FIFO queue** | `useVaultPipelineRun` queues jobs; the list shows `opening` / `closing` / `creating` | Daemon RPC `vault_open` / `vault_close` / `vault_create` |
 | **User-facing errors** | i18n toast; `revertCloseFailure` on a failed close | Rust codes mirrored in `VAULT_ERROR_CODES` |
 | **No cancel mid-flush** | PRD RF-UI-10 | Aborting a flush would risk an inconsistent store |
-| **IPC timeout** | `vault_open`: `LOADING_BUDGET_MS.vaultPipeline` (10 min). `vault_create`: `vaultCreate` (20 min). `vault_close`: `SIZED_BUDGET_CEILING_MS` (12 h) | The UI ends a close first: at `vaultPipeline`, or at `sizedBudgetMs("vaultClose")` once `vault_close_phase` reports the bytes of the backup (`waitForClose`) |
+| **IPC timeout** | `vault_open`, `vault_create`, and `vault_close`: none (`NO_DEADLINE_MS`) | Open and create are jobs with Stop; a close has Close now. While a close runs the row reads `vault_close_phase` (`syncing`, `backing_up`, …) and shows the elapsed time |
 | **State after a failure** | A failed close keeps the session open | `store/` is unchanged |
 | **Queue after an error** | `failureMode: "advance"` starts the next job | No slot stays taken |
 
@@ -1183,7 +1189,7 @@ ui/
 
 **Backup export.** `backup_export` takes the backups' keys (`stamps`, each `backupEntryKey`), the folder chosen in the Backups window (`destDir`), and a `job`. One backup is copied under its own name; several go into one Stored zip, `upriv-backups-<id>.zip`, whose entries are those files (a pin sharing its name with the copy in `backups/` is `saves-<file name>`). Like a vault export it never replaces a file or a partial already using the name: it takes the next free number (`upriv-backups-<id> 2.zip`) and logs `backup_export_numbered` (`id`, `number`). It refuses a folder inside a `.upriv`. Progress counts the bytes of the backups copied. Backups are frozen files, so the vault may be open and every other export stays free; delete and rename of that vault refuse with `vault_config_busy` until the export ends, and the settings window locks both with copy naming the export (`backupExportVaultIds`, edit-policy `backupExportLocked`, `vaultDeleteHold`). The export holds the zips it reads (`BackupExportGuard`): `backup_delete` and `backup_promote` of one of them refuse with `backup_exporting`, and close retention leaves it for a later close. It runs on the same lane as `vault_export`.
 
-**Jobs.** `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, and `vault_plain_remove` each carry a `job` id the UI makes with `newJobId`, and each runs through `useCoreJob`. `job_status` reports the bytes that job has done, and its budget grows with them (`sizedBudgetMs`); `job_cancel` stops it, and a stop for a job still waiting for its lane is kept, so it ends as soon as it starts. A stopped job fails with `job_cancelled` and leaves no file: the export's `.upriv-part`, the save's `.partial`, or the data folder's `.zip.upriv-part` is removed, and a plain-text export's is overwritten first. A stopped `vault_plain_remove` leaves the leftover files it did not reach. When the UI gives up on one of these, by its budget or by the call's own `rpc_timeout` (whichever comes first), it sends `job_cancel` for it, so core does not keep holding the vault. `app_shutdown` stops every running job, and any that starts after it. The log records each stop (`job_cancel` with `by=user|timeout`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
+**Jobs.** Work the person can stop is a job: `vault_open` (and `vault_plain_confirm`), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_change_kdf`, and `vault_root_setup_path` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done and whether it can still stop, and stays `null` while the job waits for its lane, which the UI shows as Queued. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password or unlock-RAM change removes its safety zip and leaves the header as it was, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
 
 ### 8.4 Launch
 

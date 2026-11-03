@@ -302,6 +302,16 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.lifecycle_confirm_close_now),
         },
         {
+          id: "lifecycle_confirm_stop",
+          label: t("modal.info.field.lifecycle_confirm_stop"),
+          value: yesNo(t, ui.lifecycle_confirm_stop),
+        },
+        {
+          id: "lifecycle_confirm_lock",
+          label: t("modal.info.field.lifecycle_confirm_lock"),
+          value: yesNo(t, ui.lifecycle_confirm_lock),
+        },
+        {
           id: "always_show_hidden_vaults",
           label: t("modal.info.field.always_show_hidden_vaults"),
           value: yesNo(t, ui.always_show_hidden_vaults),

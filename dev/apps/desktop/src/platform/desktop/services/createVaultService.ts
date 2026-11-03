@@ -17,7 +17,7 @@ export const desktopCreateVaultService: CreateVaultService = {
     return { path, fileName };
   },
 
-  async testImportPackagePassword(password, importFile) {
+  async testImportPackagePassword(password, importFile, job) {
     if (!importFile?.path) return { ok: false, embedded: null };
     if (importFile.kind === "backup" || importFile.fileName.toLowerCase().endsWith(".zip")) {
       return { ok: true, embedded: null };
@@ -26,6 +26,7 @@ export const desktopCreateVaultService: CreateVaultService = {
       archivePath: importFile.path,
       archivePassword: password,
       kind: "seven_zip",
+      job,
     });
     return { ok: probed.ok, embedded: probed.ok ? probed.embedded : null };
   },

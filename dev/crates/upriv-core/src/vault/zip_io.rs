@@ -608,17 +608,22 @@ pub(super) fn zip_files_to_path(
     finish_zip_file(zip, dest)
 }
 
-/// Extract a `.zip` of `store/` into `dest`. Rejects path escape.
-pub fn unzip_store_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
-    unzip_store_reader(Cursor::new(bytes), dest, bytes.len() as u64)
+/// Extract a `.zip` of `store/` into `dest`. Rejects path escape. Each read
+/// fails once `job` is asked to stop.
+pub fn unzip_store_bytes(bytes: &[u8], dest: &Path, job: &Job) -> Result<()> {
+    let len = bytes.len() as u64;
+    job.set_total(len);
+    unzip_store_reader(job.progress_reader(Cursor::new(bytes)), dest, len)
 }
 
-/// Extract a zip file into `dest`, copying each entry without a second full buffer.
-pub fn unzip_store_path(path: &Path, dest: &Path) -> Result<()> {
+/// Extract a zip file into `dest`, copying each entry without a second full
+/// buffer. Each read fails once `job` is asked to stop.
+pub fn unzip_store_path(path: &Path, dest: &Path, job: &Job) -> Result<()> {
     let file =
         File::open(path).map_err(|error| super::import::map_archive_open_error(path, error))?;
     let len = file.metadata()?.len();
-    unzip_store_reader(buffered_zip_reader(file)?, dest, len)
+    job.set_total(len);
+    unzip_store_reader(job.progress_reader(buffered_zip_reader(file)?), dest, len)
 }
 
 /// Ciphertext barely compresses. A much larger unpack is a zip bomb, not a store export.
@@ -1059,7 +1064,7 @@ mod tests {
         crate::host_fs::write(src.join("data").join("a.blob"), b"cipher").unwrap();
         let zipped = zip_dir(&src);
         let dest = tmp.path().join("out");
-        unzip_store_bytes(&zipped, &dest).unwrap();
+        unzip_store_bytes(&zipped, &dest, &Job::untracked()).unwrap();
         assert_eq!(
             crate::host_fs::read(dest.join("header").join("vault.header")).unwrap(),
             b"header-bytes"
@@ -1117,7 +1122,7 @@ mod tests {
         assert!(readme.contains("Size: 18 B"));
         assert!(readme.contains("The zip file is a little larger."));
         let dest = tmp.path().join("out");
-        unzip_store_bytes(&zipped, &dest).unwrap();
+        unzip_store_bytes(&zipped, &dest, &Job::untracked()).unwrap();
         assert!(!dest.join("config.toml").host_exists());
         assert!(!dest.join("README.md").host_exists());
         assert!(!dest.join(STORE_DANGER_FILE_NAME).host_exists());
@@ -1142,7 +1147,12 @@ mod tests {
         zip.finish().unwrap();
         drop(zip);
         let tmp = tempfile::tempdir().unwrap();
-        let err = unzip_store_bytes(&cursor.into_inner(), &tmp.path().join("out")).unwrap_err();
+        let err = unzip_store_bytes(
+            &cursor.into_inner(),
+            &tmp.path().join("out"),
+            &Job::untracked(),
+        )
+        .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
     }
 
@@ -1157,7 +1167,12 @@ mod tests {
             zip.finish().unwrap();
             drop(zip);
             let tmp = tempfile::tempdir().unwrap();
-            let err = unzip_store_bytes(&cursor.into_inner(), &tmp.path().join("out")).unwrap_err();
+            let err = unzip_store_bytes(
+                &cursor.into_inner(),
+                &tmp.path().join("out"),
+                &Job::untracked(),
+            )
+            .unwrap_err();
             assert!(
                 matches!(err, UprivError::VaultStoreInvalid { .. }),
                 "{name}"
@@ -1176,7 +1191,7 @@ mod tests {
         drop(zip);
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
-        let err = unzip_store_bytes(&cursor.into_inner(), &dest).unwrap_err();
+        let err = unzip_store_bytes(&cursor.into_inner(), &dest, &Job::untracked()).unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         assert!(!dest.join("header").join("vault.header").host_exists());
     }
@@ -1193,7 +1208,8 @@ mod tests {
         let bytes = cursor.into_inner();
         assert!(bytes.len() < 8 * 1024);
         let tmp = tempfile::tempdir().unwrap();
-        let err = unzip_store_bytes(&bytes, &tmp.path().join("out")).unwrap_err();
+        let err =
+            unzip_store_bytes(&bytes, &tmp.path().join("out"), &Job::untracked()).unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
     }
 

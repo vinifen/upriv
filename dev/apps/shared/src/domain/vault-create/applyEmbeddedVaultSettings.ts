@@ -1,6 +1,6 @@
 import { normalizeWorkspaceTable } from "../workspace";
 import { uniqueDisplayName } from "../vault/displayName";
-import { parseKdfUnlockPreset } from "../vault-settings";
+import { AUTO_CLOSE_WHEN_BUSY, parseKdfUnlockPreset } from "../vault-settings";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
 import { createVaultChoosesKdf } from "../vault-settings/kdf";
 import type { CreateVaultDraft } from "./types";
@@ -143,6 +143,7 @@ export function parseEmbeddedVaultSettings(
   const plainFiles =
     oneOf(str(settings.storage.plain_files) ?? "", ["chosen", "whole"] as const) ?? "chosen";
   const backupMode = oneOf(str(settings.backup.mode) ?? "", ["keep_last", "keep_all"] as const);
+  const whenBusy = oneOf(str(settings.auto_close.when_busy) ?? "", AUTO_CLOSE_WHEN_BUSY) ?? "wait";
   const wipePattern = oneOf(str(settings.security.wipe_pattern) ?? "", [
     "random",
     "zeros",
@@ -213,6 +214,7 @@ export function parseEmbeddedVaultSettings(
       auto_close: {
         enabled: autoEnabled,
         idle_minutes: idle,
+        when_busy: whenBusy,
       },
       file_manager: { confirm_delete: confirmDelete },
       seven_zip: {

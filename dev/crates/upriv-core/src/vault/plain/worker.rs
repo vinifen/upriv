@@ -96,8 +96,9 @@ pub(super) struct Worker {
     wipe: WipeOptions,
     schedule: Mutex<Schedule>,
     wake: Condvar,
-    /// Stops the pass that is running. Only close sets it.
-    cancel: AtomicBool,
+    /// Stops the pass that is running. Close sets it; while the folder fills
+    /// on open it is that open's job stop, so a Stop ends the fill too.
+    cancel: Arc<AtomicBool>,
     /// One pass at a time, from the thread or from [`run_now`].
     gate: Mutex<()>,
     thread: Mutex<Option<JoinHandle<()>>>,
@@ -153,8 +154,14 @@ impl Worker {
 }
 
 /// Make the worker for a vault whose folder is being filled. It can be
-/// cancelled from here on; [`start`] gives it its thread.
-pub(super) fn register(vault_id: &str, dir: &Path, wipe: WipeOptions) -> Arc<Worker> {
+/// cancelled from here on, by close or through `cancel`; [`start`] gives it
+/// its thread.
+pub(super) fn register(
+    vault_id: &str,
+    dir: &Path,
+    wipe: WipeOptions,
+    cancel: Arc<AtomicBool>,
+) -> Arc<Worker> {
     let worker = Arc::new(Worker {
         vault_id: vault_id.to_string(),
         dir: dir.to_path_buf(),
@@ -166,7 +173,7 @@ pub(super) fn register(vault_id: &str, dir: &Path, wipe: WipeOptions) -> Arc<Wor
             stop: false,
         }),
         wake: Condvar::new(),
-        cancel: AtomicBool::new(false),
+        cancel,
         gate: Mutex::new(()),
         thread: Mutex::new(None),
     });

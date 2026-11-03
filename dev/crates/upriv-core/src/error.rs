@@ -179,14 +179,18 @@ pub enum UprivError {
     #[error("close every vault and wait for its work to finish before exporting the data folder")]
     DataFolderBusy,
 
-    /// A vault export, Back up now, or the data-folder export was stopped,
-    /// by the person or by its time limit. Its partial file was removed.
+    /// A job was stopped: by the person, by an auto-close set to close on
+    /// time, or because Upriv is quitting. What it had written was removed.
     #[error("job cancelled")]
     JobCancelled,
 
     /// A job id is malformed or already names a running job.
     #[error("job id is malformed or already running")]
     JobIdInvalid,
+
+    /// The job is in its last step, which always finishes once it begins.
+    #[error("this work can no longer be stopped")]
+    JobNotStoppable,
 
     /// The data folder is being exported. Another export, a new vault, and a
     /// backup delete or pin wait until it ends.

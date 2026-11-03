@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod error;
+mod failure;
 pub mod host_fs;
 pub mod lockfile;
 pub mod logging;
@@ -37,7 +38,7 @@ pub use config::{
 };
 pub use error::{Result, RewrapUnchangedKind, UprivError};
 pub use paths::{
-    active_alias_is_unmounted_saf, app_home_dir, deactivate_app_home_alias,
+    active_alias_is_unmounted_saf, app_home_dir, copy_data_folder_into, deactivate_app_home_alias,
     default_vault_root_anchor, detect_app_distribution, discover_vault_root_upward,
     display_name_to_vault_id, distribution_str, env_default_root_anchor, init_app_distribution,
     initialize_vault_root, initialize_vault_root_with_bootstrap, inspect_vault_root_at,
@@ -53,35 +54,36 @@ pub use paths::{
 pub use runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
 pub use session::{
     cancel_job, is_data_folder_export_running, is_unlock_in_flight, job_status, open_session_ids,
-    stop_all_jobs, vault_activity_blocks_root_switch, ClosePhase, CloseProgress, JobStatus,
+    stop_all_jobs, vault_activity_blocks_root_switch, ClosePhase, JobStatus, JobStop,
 };
 pub use store::{KdfUnlockPreset, FORMAT_VERSION as STORE_FORMAT_VERSION};
 pub use time::{utc_filename_stamp, utc_timestamp_iso_millis, utc_ymdhms};
 pub use vault::{
     abort_import_vault, backup_zip_file, change_vault_kdf, change_vault_password, close_all_vaults,
-    close_all_vaults_now, close_progress, close_vault, close_vault_auto, close_vault_now,
-    confirm_plain_destination, create_vault, create_vault_with_welcome, delete_backups,
-    delete_vault, export_backups, export_data_folder, export_logical_seven_zip, export_plain_zip,
-    export_store_zip, fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder,
-    fs_import_from_os_path, fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_preview_fits,
-    fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
-    fs_write_from_reader, fs_write_range, hurry_close, import_from_backup,
+    close_all_vaults_now, close_phase, close_vault, close_vault_auto, close_vault_now,
+    confirm_plain_destination, create_vault, create_vault_as_job, delete_backups, delete_vault,
+    export_backups, export_data_folder, export_logical_seven_zip, export_plain_zip,
+    export_store_zip, finish_import_session, fs_create_file, fs_create_folder, fs_delete,
+    fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_mkdir, fs_move, fs_os_path,
+    fs_preview_fits, fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate,
+    fs_write_file, fs_write_from_reader, fs_write_range, hurry_close, hurry_quit,
     import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
     import_logical_seven_zip, import_logical_seven_zip_path, import_slots,
-    import_store_from_archive_path, import_store_tree, import_store_zip, ingest_import_directory,
+    import_store_from_archive_path, import_store_zip, ingest_import_directory,
     ingest_import_reader, list_backups, list_vaults, load_vault_persistence, open_import_session,
-    open_vault, open_vault_confirmed, parse_backup_import_path, parse_embedded_settings,
-    plain_deletions, plain_destination, plain_leftover, plain_send, plain_status, plain_sync,
-    plain_unsend, probe_import_zip_bytes, probe_import_zip_path, probe_logical_seven_zip,
-    probe_logical_seven_zip_path, probe_store_zip, promote_backup_save, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, remove_plain_leftover, rename_vault,
-    save_backup_now, set_plain_observer, seven_zip_export_available, sweep_plain_exports,
-    vault_list_item, vault_store_on_disk_bytes, BackupEntry, CloseVaultOutcome, DataFolderExport,
-    EmbeddedVaultSettings, ExportInclude, ExportedFile, ImportExtras, ImportZipProbe,
-    OpenVaultOutcome, PlainCloseSummary, PlainDestination, PlainFolderClass, PlainLeftover,
-    PlainObserver, PlainPlace, PlainStatus, PlainSyncReport, PlainTotals, PlainUnsend, PlainWipe,
-    VaultListItem, VaultPersistence, VaultRenameResult, VaultWelcome, ZipImportClass,
-    WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH,
+    open_vault, open_vault_as_job, open_vault_confirmed, parse_backup_import_path,
+    parse_embedded_settings, plain_deletions, plain_destination, plain_leftover, plain_send,
+    plain_status, plain_sync, plain_unsend, probe_import_zip_bytes, probe_import_zip_path,
+    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, promote_backup_save,
+    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
+    remove_plain_leftover, rename_vault, save_backup_now, set_plain_observer,
+    seven_zip_export_available, sweep_unfinished, vault_list_item, vault_store_on_disk_bytes,
+    BackupEntry, CloseVaultOutcome, DataFolderExport, EmbeddedVaultSettings, ExportInclude,
+    ExportedFile, ImportExtras, ImportZipProbe, OpenVaultOutcome, PlainCloseSummary,
+    PlainDestination, PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus,
+    PlainSyncReport, PlainTotals, PlainUnsend, PlainWipe, VaultListItem, VaultPersistence,
+    VaultRenameResult, VaultWelcome, ZipImportClass, WELCOME_FILE_MAX_BYTES,
+    WELCOME_README_LOGICAL_PATH,
 };
 
 /// Application version (from repo-root `VERSION`, set in build.rs).

@@ -70,10 +70,16 @@ export type UprivCoreNativeModule = {
    */
   revealInFileManager(osPath: string): void;
   /**
-   * Stream one `content://` file into an open import session.
+   * Stream one `content://` file into an open import session, as the job
+   * `job` (`job_cancel` stops it).
    * Returns the UniFFI JSON envelope (`{ ok, result | error }`).
    */
-  importContentUri(vaultId: string, logicalPath: string, contentUri: string): Promise<string>;
+  importContentUri(
+    vaultId: string,
+    logicalPath: string,
+    contentUri: string,
+    job: string,
+  ): Promise<string>;
 };
 
 /**

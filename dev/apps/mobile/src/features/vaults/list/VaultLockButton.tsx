@@ -1,11 +1,12 @@
-import { Pressable, Text, View } from "react-native";
+import { Animated, Pressable, Text, View } from "react-native";
 import {
-  isVaultPipelineDisplayBusy,
   isVaultOpenCredentialResumeStatus,
   type VaultDisplayStatus,
+  type VaultRowButtonRole,
   vaultStatusI18nKey,
 } from "@upriv/shared";
-import { Icon } from "@/components/icons";
+import { Icon, type IconName } from "@/components/icons";
+import { usePulseOpacity } from "@/hooks/usePulseOpacity";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
 import { mixHex, radii } from "@/theme/tokens";
@@ -16,83 +17,129 @@ const LOCK_ICON_SIZE = 44;
 
 interface VaultLockButtonProps {
   status: VaultDisplayStatus;
+  role: VaultRowButtonRole;
+  /** The first tap armed the button; the next one runs it. */
+  armed: boolean;
+  /** Runs an action through the row's arming. */
+  press: (action: () => void) => void;
   layout?: "inline" | "block";
-  /** Compact / small screens — lock / unlock glyph instead of the 9rem label. */
+  /** Compact / small screens — glyph instead of the 9rem label. */
   appearance?: "label" | "icon";
   /** Waiting open can reopen the password dialog. A queued close cannot. */
   resumeUnlock?: boolean;
   onLock?: () => void;
   onUnlock?: () => void;
+  onStop?: () => void;
 }
 
-/** Desktop `VaultLockButton` — label on wide rows, icon on compact chrome. */
+function roleCopy(
+  role: VaultRowButtonRole,
+  armed: boolean,
+  status: VaultDisplayStatus,
+): { icon: IconName; label: I18nKey; hint: I18nKey | null } {
+  switch (role) {
+    case "stop":
+      return armed
+        ? { icon: "close", label: "action.confirm_stop", hint: "action.press_again_to_stop" }
+        : { icon: "close", label: "action.stop", hint: null };
+    case "stop_final":
+      return { icon: "close", label: "action.stop", hint: "action.stop_final" };
+    case "stopping":
+      return { icon: "close", label: "vault.status.stopping", hint: null };
+    case "lock":
+      return armed
+        ? { icon: "lock", label: "action.confirm_lock", hint: "action.press_again_to_lock" }
+        : { icon: "lock", label: "action.lock", hint: null };
+    case "unlock":
+      return { icon: "lock-open", label: "action.unlock", hint: null };
+    case "busy":
+      return { icon: "lock-open", label: vaultStatusI18nKey[status] as I18nKey, hint: null };
+  }
+}
+
+/**
+ * The row's open/close button. While the row's work can stop it is Stop, in
+ * the same place. A tap goes through the row's arming, so it may wait for a
+ * second tap (System settings); armed, it turns red and pulses.
+ */
 export function VaultLockButton({
   status,
+  role,
+  armed,
+  press,
   layout = "inline",
   appearance = "label",
   resumeUnlock,
   onLock,
   onUnlock,
+  onStop,
 }: VaultLockButtonProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const isOpen = status === "open";
-  const pipelineBusy = isVaultPipelineDisplayBusy(status);
-  const resumeOpenCredential = resumeUnlock ?? isVaultOpenCredentialResumeStatus(status);
+  const pulse = usePulseOpacity(armed);
   const iconOnly = appearance === "icon" && layout !== "block";
-  const label = pipelineBusy
-    ? t(vaultStatusI18nKey[status] as I18nKey)
-    : isOpen
-      ? t("action.lock")
-      : t("action.unlock");
-  // Desktop: open = primary@30% on surfaceContainerHighest; closed/busy = highest only.
-  const unlockSurface = colors.surfaceContainerHighest;
-  const lockSurface = mixHex(colors.surfaceContainerHighest, colors.primary, 0.3);
-  const backgroundColor = pipelineBusy ? unlockSurface : isOpen ? lockSurface : unlockSurface;
+  const copy = roleCopy(role, armed, status);
+  const resumeOpenCredential =
+    role === "busy" && (resumeUnlock ?? isVaultOpenCredentialResumeStatus(status));
+  const inert =
+    role === "stop_final" || role === "stopping" || (role === "busy" && !resumeOpenCredential);
+  // Desktop: open = primary@30% on surfaceContainerHighest; armed = error container.
+  const backgroundColor = armed
+    ? colors.errorContainer
+    : role === "lock"
+      ? mixHex(colors.surfaceContainerHighest, colors.primary, 0.3)
+      : colors.surfaceContainerHighest;
+  const foreground = armed ? colors.onErrorContainer : colors.onSurface;
+  const label = t(copy.label);
+
+  const run = () => {
+    if (role === "stop") press(() => onStop?.());
+    else if (role === "lock") press(() => onLock?.());
+    else if (role === "unlock") press(() => onUnlock?.());
+    else if (resumeOpenCredential) onUnlock?.();
+  };
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{
-        busy: pipelineBusy,
-        disabled: pipelineBusy && !resumeOpenCredential,
-      }}
-      disabled={pipelineBusy && !resumeOpenCredential}
-      onPress={() => {
-        if (pipelineBusy && !resumeOpenCredential) return;
-        if (isOpen) onLock?.();
-        else onUnlock?.();
-      }}
-      style={({ pressed }) => ({
-        height: layout === "block" ? 40 : LOCK_HEIGHT,
-        width: layout === "block" ? "100%" : iconOnly ? LOCK_ICON_SIZE : LOCK_WIDTH,
-        borderRadius: radii.md,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor,
-        opacity: pipelineBusy ? 0.7 : pressed ? 0.88 : 1,
-      })}
+    <Animated.View
+      style={{ opacity: armed ? pulse : 1, width: layout === "block" ? "100%" : undefined }}
     >
-      {iconOnly ? (
-        <Icon name={isOpen ? "lock" : "lock-open"} size={20} color={colors.onSurface} />
-      ) : (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%" }}>
-          <Icon name={isOpen ? "lock" : "lock-open"} size={18} color={colors.onSurface} />
-          <Text
-            numberOfLines={1}
-            style={{
-              color: colors.onSurface,
-              fontFamily: "monospace",
-              fontSize: 14,
-              fontWeight: "500",
-              flexShrink: 1,
-            }}
-          >
-            {label}
-          </Text>
-        </View>
-      )}
-    </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint={copy.hint ? t(copy.hint) : undefined}
+        accessibilityState={{ busy: role === "busy" || role === "stopping", disabled: inert }}
+        disabled={inert}
+        onPress={run}
+        style={({ pressed }) => ({
+          height: layout === "block" ? 40 : LOCK_HEIGHT,
+          width: layout === "block" ? "100%" : iconOnly ? LOCK_ICON_SIZE : LOCK_WIDTH,
+          borderRadius: radii.md,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor,
+          opacity: inert || role === "busy" ? 0.7 : pressed ? 0.88 : 1,
+        })}
+      >
+        {iconOnly ? (
+          <Icon name={copy.icon} size={20} color={foreground} />
+        ) : (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%" }}>
+            <Icon name={copy.icon} size={18} color={foreground} />
+            <Text
+              numberOfLines={1}
+              style={{
+                color: foreground,
+                fontFamily: "monospace",
+                fontSize: 14,
+                fontWeight: "500",
+                flexShrink: 1,
+              }}
+            >
+              {label}
+            </Text>
+          </View>
+        )}
+      </Pressable>
+    </Animated.View>
   );
 }

@@ -219,10 +219,10 @@ describe("createLiveVaultFileSystemService", () => {
     const importOsFile = vi.fn(async () => ({ path: "/pack.zip", revision: 4 }));
     const writeRange = vi.fn(async () => 1);
     const fs = createLiveVaultFileSystemService(rpcStub({ importOsFile, writeRange }));
-    await expect(fs.importFileFromOsPath("v", "/", "pack.zip", "/tmp/pack.zip")).resolves.toBe(
-      "/pack.zip",
-    );
-    expect(importOsFile).toHaveBeenCalledWith("v", "/", "pack.zip", "/tmp/pack.zip");
+    await expect(
+      fs.importFileFromOsPath("v", "/", "pack.zip", "/tmp/pack.zip", "job-1"),
+    ).resolves.toBe("/pack.zip");
+    expect(importOsFile).toHaveBeenCalledWith("v", "/", "pack.zip", "/tmp/pack.zip", "job-1");
     expect(writeRange).not.toHaveBeenCalled();
   });
 

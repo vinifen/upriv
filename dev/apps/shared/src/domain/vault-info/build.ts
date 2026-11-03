@@ -282,6 +282,11 @@ export function buildVaultInfoSections(
             : t("modal.info.value.no"),
         },
         {
+          id: "auto_close_when_busy",
+          label: t("modal.info.field.auto_close_when_busy"),
+          value: t(`modal.settings.field.auto_close.when_busy.${settings.auto_close.when_busy}`),
+        },
+        {
           id: "file_manager_confirm_delete",
           label: t("modal.settings.field.file_manager.confirm_delete"),
           value: yesNo(t, settings.file_manager.confirm_delete),

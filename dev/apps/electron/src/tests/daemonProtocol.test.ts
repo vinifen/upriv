@@ -4,16 +4,17 @@ import {
   SHELL_ONLY_RPC_COMMANDS,
 } from "../../../shared/src/domain/core-rpc/commands";
 import contract from "../../../shared/src/domain/core-rpc/tests/rpc-methods.json";
-import { LOADING_BUDGET_MS } from "../../../shared/src/domain/loading/budget";
+import { OPERATION_LIMIT_MS } from "../../../shared/src/domain/loading/limits";
 import { ELECTRON_IPC_METHODS } from "../ipcMethods";
 import {
+  DEFAULT_RPC_TIMEOUT_MS,
   MAX_STDOUT_BUFFER_CHARS,
   SHUTDOWN_METHOD,
   SHUTDOWN_NOW_TIMEOUT_MS,
-  SHUTDOWN_TIMEOUT_MS,
   formatRpcError,
   parseDaemonStdoutLine,
   rpcTimeoutErrorMessage,
+  settleInvoke,
   shouldArmRpcTimeout,
   stdoutBufferExceeded,
 } from "../daemonProtocol";
@@ -52,16 +53,29 @@ describe("daemon protocol helpers", () => {
     expect(parseDaemonStdoutLine('{"type":"ready"}')).toEqual({ type: "ready" });
   });
 
-  it("gives app_shutdown the vault-pipeline budget so close_all can flush", () => {
-    expect(SHUTDOWN_TIMEOUT_MS).toBe(600_000);
+  it("waits for a call with no timeout of its own as long as the shared operation limit", () => {
+    expect(DEFAULT_RPC_TIMEOUT_MS).toBe(OPERATION_LIMIT_MS);
   });
 
-  it("gives the quit dialog's Close now the budget its overlay counts down", () => {
-    expect(SHUTDOWN_NOW_TIMEOUT_MS).toBe(LOADING_BUDGET_MS.quitCloseNow);
+  it("gives the quit's Close now a short, finite wait", () => {
+    expect(shouldArmRpcTimeout(SHUTDOWN_NOW_TIMEOUT_MS)).toBe(true);
+    expect(SHUTDOWN_NOW_TIMEOUT_MS).toBeLessThan(OPERATION_LIMIT_MS);
   });
 
   it("flags an oversized stdout buffer", () => {
     expect(stdoutBufferExceeded(MAX_STDOUT_BUFFER_CHARS)).toBe(false);
     expect(stdoutBufferExceeded(MAX_STDOUT_BUFFER_CHARS + 1)).toBe(true);
+  });
+
+  it("answers a failed invoke with its wire text instead of throwing", async () => {
+    await expect(settleInvoke(async () => ({ id: "notes" }))).resolves.toEqual({
+      ok: true,
+      value: { id: "notes" },
+    });
+    await expect(
+      settleInvoke(async () => {
+        throw new Error("wrong_password: wrong password");
+      }),
+    ).resolves.toEqual({ ok: false, error: "wrong_password: wrong password" });
   });
 });

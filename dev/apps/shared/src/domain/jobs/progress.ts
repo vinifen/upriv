@@ -2,25 +2,39 @@ import type { I18nKey } from "../../i18n/catalog";
 import type { I18nParams } from "../../i18n/types";
 import { formatBytes } from "../format/bytes";
 
-/** How far a running job got (`job_status`). */
-export interface JobProgress {
+/** How many bytes a job moved, of how many. */
+export interface JobBytes {
   bytesDone: number;
   /** `0` until the job has measured its work. */
   bytesTotal: number;
 }
 
-/** Wire `job_status`. `null` once the job ended, or before it started. */
+/** How far a running job got (`job_status`). */
+export interface JobProgress extends JobBytes {
+  /** False once the job is in its last step: a stop is refused from then on. */
+  stoppable: boolean;
+}
+
+/**
+ * Wire `job_status`. `null` before the job started (it waits for its lane) and
+ * once it ended; the request's own reply tells the two apart.
+ */
 export function parseJobStatus(raw: unknown): JobProgress | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const record = raw as { running?: unknown; bytesDone?: unknown; bytesTotal?: unknown };
+  const record = raw as {
+    running?: unknown;
+    bytesDone?: unknown;
+    bytesTotal?: unknown;
+    stoppable?: unknown;
+  };
   if (record.running !== true) return null;
   const bytesDone = typeof record.bytesDone === "number" ? record.bytesDone : 0;
   const bytesTotal = typeof record.bytesTotal === "number" ? record.bytesTotal : 0;
-  return { bytesDone, bytesTotal };
+  return { bytesDone, bytesTotal, stoppable: record.stoppable !== false };
 }
 
 /** Whole percent done, or `null` while the work is still being measured. */
-export function jobProgressPercent(progress: JobProgress | null): number | null {
+export function jobProgressPercent(progress: JobBytes | null): number | null {
   if (!progress || progress.bytesTotal <= 0) return null;
   const ratio = Math.min(1, Math.max(0, progress.bytesDone / progress.bytesTotal));
   return Math.floor(ratio * 100);
@@ -30,7 +44,7 @@ export function jobProgressPercent(progress: JobProgress | null): number | null 
  * Every byte is copied and the job is still running: it is flushing the file
  * to disk, checking it, and moving it into place.
  */
-export function jobProgressFinishing(progress: JobProgress | null): boolean {
+export function jobProgressFinishing(progress: JobBytes | null): boolean {
   return progress !== null && progress.bytesTotal > 0 && progress.bytesDone >= progress.bytesTotal;
 }
 
@@ -43,7 +57,7 @@ export interface JobProgressCopy {
 
 /** What a running job shows now: still measuring, the bytes done of the total, or finishing. */
 export function jobProgressLine(
-  progress: JobProgress | null,
+  progress: JobBytes | null,
   copy: JobProgressCopy,
 ): { key: I18nKey; params?: I18nParams } {
   if (jobProgressFinishing(progress)) return { key: copy.finishing };

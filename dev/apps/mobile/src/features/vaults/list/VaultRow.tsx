@@ -5,9 +5,11 @@ import {
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
-  vaultPipelineRowBudget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
+  vaultRowButtonRole,
+  vaultRowButtonTwoStep,
+  vaultRowWorkClock,
   vaultStatusI18nKey,
   vaultStatusLabelKey,
   VAULT_ROW_DENSITY,
@@ -16,9 +18,10 @@ import {
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
-import { LoadingBudgetHint, TextWidthProbe } from "@/components/ui";
+import { ElapsedTime, TextWidthProbe } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { useLoadingBudget, useRowButtonStack } from "@upriv/shared/react";
+import { useRowArming, useRowButtonStack } from "@upriv/shared/react";
+import { claimRowArmTouch } from "@/hooks/useRowArmingDismiss";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
 import { useVaultRowChrome } from "@/hooks/useVaultRowChrome";
@@ -61,6 +64,8 @@ interface VaultRowProps {
   onUnlock: (vault: VaultListItem) => void;
   onLock: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
+  /** Stop the work the row shows (`pipelineListStatus.rowWork`). */
+  onStopWork: (vault: VaultListItem) => void;
   onExport: (vault: VaultListItem) => void;
   onOpenBackups: (vault: VaultListItem) => void;
   onOpenNote: (vault: VaultListItem) => void;
@@ -88,6 +93,7 @@ export function VaultRow({
   onUnlock,
   onLock,
   onCloseNow,
+  onStopWork,
   onExport,
   onOpenBackups,
   onOpenNote,
@@ -115,20 +121,21 @@ export function VaultRow({
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
   const lastAccessedText =
     variant === "block" || comfortable ? lastAccessedLabel : lastAccessedWhen;
-  const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
-  const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
-    startedAt: rowBudget.startedAt,
-  });
-  const lastAccessedOrBudget = openingBudget.visible ? (
-    <LoadingBudgetHint
-      budgetMs={openingBudget.budgetMs}
-      remainingMs={openingBudget.remainingMs}
+  const work = pipelineListStatus.rowWork?.[vault.id] ?? null;
+  const role = vaultRowButtonRole(status, work);
+  const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
+  const claimTouch = () => claimRowArmTouch(vault.id);
+  // The work's elapsed time takes the last-accessed text's place.
+  const lastAccessedOrElapsed = (
+    <ElapsedTime
+      startedAt={vaultRowWorkClock(work)}
       layout="inline"
+      fallback={
+        <Text style={[typography.caption, styles.meta]} numberOfLines={1}>
+          {lastAccessedText}
+        </Text>
+      }
     />
-  ) : (
-    <Text style={[typography.caption, styles.meta]} numberOfLines={1}>
-      {lastAccessedText}
-    </Text>
   );
   const showGrip = dragEnabled;
   const gripDisabled = vaultRowControls(vault, pipelineListStatus).dragBlocked;
@@ -215,7 +222,7 @@ export function VaultRow({
         <VaultStatusBadge status={status} labelKey={statusLabelKey} />
         <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
           {!comfortable ? <Icon name="clock" size={12} color={colors.onSurfaceVariant} /> : null}
-          {lastAccessedOrBudget}
+          {lastAccessedOrElapsed}
         </View>
       </View>
     </View>
@@ -241,7 +248,7 @@ export function VaultRow({
       <View style={styles.blockMetaRow}>
         <VaultStatusBadge status={status} labelKey={statusLabelKey} />
         <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
-          {lastAccessedOrBudget}
+          {lastAccessedOrElapsed}
         </View>
       </View>
     </View>
@@ -253,8 +260,26 @@ export function VaultRow({
   const openOrUnlock = () => {
     if (isDragging) return;
     if (isOpen) onOpenFileManager(vault);
+    // A tap on the row is Unlock, with the button's guard: a tap just after Stop turned into Unlock does nothing.
+    else if (role === "unlock") arming.press(() => onUnlock(vault));
     else if (canUnlockFromRow) onUnlock(vault);
   };
+  const lockButton = (layout: "inline" | "block") => (
+    <View onTouchStart={claimTouch} style={layout === "block" ? styles.blockLock : null}>
+      <VaultLockButton
+        status={status}
+        role={role}
+        armed={arming.armed}
+        press={arming.press}
+        layout={layout}
+        appearance={layout === "block" || comfortable ? "label" : "icon"}
+        resumeUnlock={resumeOpen}
+        onLock={() => onLock(vault)}
+        onUnlock={() => onUnlock(vault)}
+        onStop={() => onStopWork(vault)}
+      />
+    </View>
+  );
   const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
   const activateLabel = isOpen
     ? t("action.open_upriv")
@@ -299,16 +324,12 @@ export function VaultRow({
               onDragCancel={onDragCancel}
             />
           ) : null}
-          {blockIdentity}
+          <View style={styles.blockIdentityTouch} onTouchStart={claimTouch}>
+            {blockIdentity}
+          </View>
           {actions}
         </View>
-        <VaultLockButton
-          status={status}
-          layout="block"
-          resumeUnlock={resumeOpen}
-          onLock={() => onLock(vault)}
-          onUnlock={() => onUnlock(vault)}
-        />
+        {lockButton("block")}
       </Pressable>
     );
   }
@@ -335,7 +356,7 @@ export function VaultRow({
       ]}
     >
       {dropRing}
-      <View style={styles.rowTop}>
+      <View style={styles.rowTop} onTouchStart={claimTouch}>
         {showGrip ? (
           <VaultDragHandle
             disabled={gripDisabled}
@@ -351,13 +372,7 @@ export function VaultRow({
       </View>
       <View style={styles.rowButtons}>
         {actions}
-        <VaultLockButton
-          status={status}
-          appearance={comfortable ? "label" : "icon"}
-          resumeUnlock={resumeOpen}
-          onLock={() => onLock(vault)}
-          onUnlock={() => onUnlock(vault)}
-        />
+        {lockButton("inline")}
       </View>
     </Pressable>
   );
@@ -421,6 +436,9 @@ const styles = StyleSheet.create({
   },
   blockTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   blockIdentity: { flex: 1, minWidth: 0, gap: 6 },
+  /** Carries the identity's flex so the touch marker does not change the layout. */
+  blockIdentityTouch: { flex: 1, minWidth: 0 },
+  blockLock: { alignSelf: "stretch" },
   blockTitleRow: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 0 },
   blockTitleText: {
     flex: 1,

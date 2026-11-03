@@ -36,7 +36,7 @@ pub(crate) use init::{
     open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
     open_or_initialize_vault_root_with_policy_and_bootstrap,
 };
-pub use relocate::{relocate_upriv_dir, UprivDirRelocate};
+pub use relocate::{copy_data_folder_into, relocate_upriv_dir, UprivDirRelocate};
 pub use resolve::{
     active_alias_is_unmounted_saf, app_home_dir, deactivate_app_home_alias,
     discover_vault_root_upward, read_vault_root_alias, remember_vault_root_custom_uri,

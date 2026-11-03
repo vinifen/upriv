@@ -18,9 +18,8 @@ import {
   validateFileName,
   persistLogicalFileName,
   LOGICAL_FILE_NAME_MAX_LENGTH,
-  LOADING_APPEAR_DELAY_MS,
-  LOADING_BUDGET_MS,
   attachImportedPath,
+  newJobId,
   dropResolvedPending,
   dropSessionPending,
   foldersToExpandForImportBatch,
@@ -45,18 +44,18 @@ import {
   type ActiveImportWrite,
   type FileManagerEntry,
   type FileNameErrorCode,
+  type JobStopBy,
   type PendingImportEntry,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
 import {
-  useLoadingBudget,
   useFolderFallback,
   useOpenTabContents,
   useToast,
   useTreeFolderPresence,
   useVaultFileTree,
 } from "@upriv/shared/react";
-import { useVaultFileSystemService, useVaultService } from "@/platform/services";
+import { useJobService, useVaultFileSystemService, useVaultService } from "@/platform/services";
 import { rpcImportContentUri } from "@/lib/rpc";
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "../FileManagerContext";
@@ -94,6 +93,7 @@ export function useVaultFileManager({
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
   const vaultService = useVaultService();
+  const jobs = useJobService();
   const { setImportInFlight, handleImportCancel } = useFileManager();
   const vaultId = entry.vaultId;
   const workspace = entry.workspace;
@@ -137,15 +137,21 @@ export function useVaultFileManager({
     () => new Set(activeImportWrites.map((write) => write.path)),
     [activeImportWrites],
   );
-  const editorImportWrite = activeImportWriteForPath(activeImportWrites, workspace.activeTabPath);
-  const importBudget = useLoadingBudget(
-    Boolean(editorImportWrite),
-    LOADING_BUDGET_MS.vaultFsImport,
-    {
-      appearDelayMs: LOADING_APPEAR_DELAY_MS,
-      startedAt: editorImportWrite?.startedAt,
-    },
-  );
+  /** When the file open in the editor started to be written; `null` while it waits. */
+  const editorImportStartedAt =
+    activeImportWriteForPath(activeImportWrites, workspace.activeTabPath)?.startedAt ?? null;
+  /** Core jobs of the files being written now, so Stop reaches them too. */
+  const importJobsRef = useRef(new Set<string>());
+  /** Write one file under its own core job, which Stop can cancel. */
+  const withImportJob = useCallback(async <T>(write: (job: string) => Promise<T>) => {
+    const job = newJobId();
+    importJobsRef.current.add(job);
+    try {
+      return await write(job);
+    } finally {
+      importJobsRef.current.delete(job);
+    }
+  }, []);
   const displayTree = useMemo(
     () =>
       mergePendingIntoTree(
@@ -481,11 +487,16 @@ export function useVaultFileManager({
           importSlots: importFileSlots(nativeProcessorCount(), true),
           importBinaryFile: async (id, parent, name, file) => {
             if (Platform.OS === "android" && file.uri.startsWith("content:")) {
-              await rpcImportContentUri(id, joinPath(parent, name).replace(/^\/+/, ""), file.uri);
-              return joinPath(parent, name);
+              const target = joinPath(parent, name);
+              await withImportJob((job) =>
+                rpcImportContentUri(id, target.replace(/^\/+/, ""), file.uri, job),
+              );
+              return target;
             }
             const osPath = nativeOsPathFromImportUri(file.cacheUri ?? file.uri);
-            if (osPath) return fs.importFileFromOsPath(id, parent, name, osPath);
+            if (osPath) {
+              return withImportJob((job) => fs.importFileFromOsPath(id, parent, name, osPath, job));
+            }
             const source = await uriByteSource(file);
             return fs.importFileFromBytes(id, parent, name, source);
           },
@@ -587,6 +598,7 @@ export function useVaultFileManager({
       syncTree,
       t,
       vaultId,
+      withImportJob,
     ],
   );
 
@@ -663,13 +675,25 @@ export function useVaultFileManager({
     ],
   );
 
-  /** Stop storing the files still waiting; the file being written lands. */
-  const cancelImports = useCallback(() => {
-    importAbortRef.current.abort();
-    setPendingImports([]);
-    commitLandedImportPaths(new Set());
-    setActiveImportWrites([]);
-  }, [commitLandedImportPaths]);
+  /**
+   * Stop the import: the files still waiting are dropped, and the files being
+   * written stop and leave nothing in the vault.
+   */
+  const cancelImports = useCallback(
+    (by: JobStopBy = "user") => {
+      importAbortRef.current.abort();
+      for (const job of importJobsRef.current) {
+        void jobs.cancel(job, by).catch(() => undefined);
+      }
+      setPendingImports([]);
+      commitLandedImportPaths(new Set());
+      setActiveImportWrites([]);
+    },
+    [commitLandedImportPaths, jobs],
+  );
+
+  /** Stop from the file manager's own import notice. */
+  const stopImports = useCallback(() => cancelImports(), [cancelImports]);
 
   // Closing the vault from the list stops its import here.
   useEffect(
@@ -958,7 +982,8 @@ export function useVaultFileManager({
     importFiles,
     importPickedFolder,
     importBusy,
-    importBudget,
+    editorImportStartedAt,
+    stopImports,
     cancelImportAndDismiss,
     commitRename,
     movePath,

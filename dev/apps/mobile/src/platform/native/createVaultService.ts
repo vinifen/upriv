@@ -94,7 +94,7 @@ export const nativeCreateVaultService: CreateVaultService = {
     return { path: grant.directoryUri, fileName: grant.folderName };
   },
 
-  async testImportPackagePassword(password, importFile) {
+  async testImportPackagePassword(password, importFile, job) {
     if (importFile?.kind === "backup" || importFile?.fileName.toLowerCase().endsWith(".zip")) {
       return { ok: true, embedded: null };
     }
@@ -103,6 +103,7 @@ export const nativeCreateVaultService: CreateVaultService = {
       archivePath: importFile.path,
       archivePassword: password,
       kind: "seven_zip",
+      job,
     });
     return { ok: probed.ok, embedded: probed.ok ? probed.embedded : null };
   },

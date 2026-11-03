@@ -1,5 +1,5 @@
 import type { I18nKey } from "@/i18n/types";
-import type { VaultClosePrompt, VaultListItem } from "@upriv/shared";
+import type { VaultClosePrompt, VaultListItem, VaultRowWork } from "@upriv/shared";
 import { CloseNowModal } from "./modals/CloseNowModal";
 import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
@@ -17,11 +17,12 @@ interface VaultLifecycleLayerProps {
   lifecycleOpen: boolean;
   lifecycleSubmitting?: boolean;
   lifecyclePipelineStep?: number;
-  lifecycleBudgetStartedAt?: number;
+  lifecycleWork?: VaultRowWork | null;
   lifecycleVerifyErrorKey?: I18nKey | null;
   lifecycleFieldPassword?: string;
   onLifecycleClose: () => void;
   onLifecycleConfirm: (password: string) => void;
+  onLifecycleStop: () => void;
   recoveryVault: VaultListItem | null;
   recoveryLeftover: PlainLeftover | null | undefined;
   recoveryOpen: boolean;
@@ -62,11 +63,12 @@ export function VaultLifecycleLayer({
   lifecycleOpen,
   lifecycleSubmitting = false,
   lifecyclePipelineStep = 0,
-  lifecycleBudgetStartedAt,
+  lifecycleWork = null,
   lifecycleVerifyErrorKey = null,
   lifecycleFieldPassword,
   onLifecycleClose,
   onLifecycleConfirm,
+  onLifecycleStop,
   recoveryVault,
   recoveryLeftover,
   recoveryOpen,
@@ -107,11 +109,12 @@ export function VaultLifecycleLayer({
         open={lifecycleOpen && !placeOpen}
         submitting={lifecycleSubmitting}
         pipelineStep={lifecyclePipelineStep}
-        budgetStartedAt={lifecycleBudgetStartedAt}
+        work={lifecycleWork}
         verifyErrorKey={lifecycleVerifyErrorKey}
         initialPassword={lifecycleFieldPassword}
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
+        onStop={onLifecycleStop}
       />
       <PlainPlaceModal
         open={placeOpen}
@@ -142,8 +145,9 @@ export function VaultLifecycleLayer({
         onCancelImport={onClosePromptCancelImport}
       />
       <CloseNowModal
-        vault={closeNowVault}
-        unsaved={closeNowUnsaved}
+        target={
+          closeNowVault ? { kind: "vault", vault: closeNowVault, unsaved: closeNowUnsaved } : null
+        }
         asks={closeNowAsks}
         onCancel={onCloseNowCancel}
         onConfirm={onCloseNowConfirm}

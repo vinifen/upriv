@@ -25,6 +25,7 @@ import { Toast } from "@/components/ui/Toast";
 import { alertIfPrivateRootLeftBehind, pickDocumentsUprivFolder } from "./dataFolderGrant";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
+import { useDataFolderCopy } from "./useDataFolderCopy";
 
 interface VaultRootSetupScreenProps {
   open: boolean;
@@ -61,6 +62,9 @@ export function VaultRootSetupScreen({
   const { colors, typography } = useTheme();
   const vaultRoot = useVaultRootService();
   const { settings, patchSettings } = useAppSettingsContext();
+  const dataFolderCopy = useDataFolderCopy((stopError) =>
+    showToast(t(mobileErrorI18nKey(stopError, "error.job_not_stoppable"))),
+  );
   const aliasPath = presentation?.aliasPath ?? "";
   const [mode, setMode] = useState<VaultRootMode>("default_root");
   const [path, setPath] = useState("");
@@ -183,11 +187,14 @@ export function VaultRootSetupScreen({
             setConfirmOpen(false);
             return;
           }
-          const { rootPath, privateRoot } = await vaultRoot.setupAtPath(picked.uri, {
-            replaceIncomplete: current.replacePolicy != null,
-            replacePolicy: current.replacePolicy,
-            bootstrap: { locale: settings.ui.locale },
-          });
+          const { rootPath, privateRoot } = await vaultRoot
+            .setupAtPath(picked.uri, {
+              replaceIncomplete: current.replacePolicy != null,
+              replacePolicy: current.replacePolicy,
+              bootstrap: { locale: settings.ui.locale },
+              job: dataFolderCopy.begin(picked.uri),
+            })
+            .finally(dataFolderCopy.end);
           if (gen !== busyGen.current) return;
           alertIfPrivateRootLeftBehind(
             privateRoot,
@@ -252,11 +259,14 @@ export function VaultRootSetupScreen({
       if (applied && !sameVaultRootPath(applied.rootPath, nextPath)) {
         diskApplied.current = null;
       }
-      const { rootPath, privateRoot } = await vaultRoot.setupAtPath(nextPath, {
-        replaceIncomplete: current.replacePolicy != null,
-        replacePolicy: current.replacePolicy,
-        bootstrap: { locale: settings.ui.locale },
-      });
+      const { rootPath, privateRoot } = await vaultRoot
+        .setupAtPath(nextPath, {
+          replaceIncomplete: current.replacePolicy != null,
+          replacePolicy: current.replacePolicy,
+          bootstrap: { locale: settings.ui.locale },
+          job: dataFolderCopy.begin(nextPath),
+        })
+        .finally(dataFolderCopy.end);
       if (gen !== busyGen.current) return;
       alertIfPrivateRootLeftBehind(
         privateRoot,
@@ -283,7 +293,7 @@ export function VaultRootSetupScreen({
         submitLock.current = false;
         setBusy(false);
       });
-  }, [busy, finish, mode, path, settings.ui.locale, t, vaultRoot]);
+  }, [busy, dataFolderCopy, finish, mode, path, settings.ui.locale, t, vaultRoot]);
 
   const reconnectBaseline = reconnectBaselineRef.current;
   const reconnectUnchanged =
@@ -368,6 +378,8 @@ export function VaultRootSetupScreen({
             setConfirmOpen(false);
             setError(t("loading.timed_out"));
           }}
+          copy={dataFolderCopy.copy}
+          onStopCopy={dataFolderCopy.stop}
         />
       }
     >

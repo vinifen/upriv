@@ -3,7 +3,10 @@ import {
   CORE_RPC_TIMEOUT_MS,
   MOBILE_ONLY_RPC_COMMANDS,
   MOBILE_ONLY_RPC_TIMEOUT_MS,
+  NO_DEADLINE_MS,
+  OPERATION_LIMIT_MS,
   RPC_TIMEOUT_CODE,
+  vaultRootSetupPathTimeoutMs,
   RpcError,
   isRpcError,
   appWorkspaceForDaemon,
@@ -72,9 +75,10 @@ const BRIDGE = {
   RPC_TIMEOUT: RPC_TIMEOUT_CODE,
 } as const;
 
-const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
-
-/** Budget for every RPC this app sends to Rust. */
+/**
+ * Timeout of every RPC this app sends to Rust: `OPERATION_LIMIT_MS`, or no
+ * deadline for a job (it has Stop) and a picker.
+ */
 const RPC_TIMEOUT_MS: Partial<Record<string, number>> = {
   ...CORE_RPC_TIMEOUT_MS,
   ...MOBILE_ONLY_RPC_TIMEOUT_MS,
@@ -110,13 +114,13 @@ function invokeFailure(error: unknown): RpcError {
 
 /**
  * Call CORE RPC through UniFFI `invoke`. Same envelope as desktop daemon.
- * Honors the shared RPC budgets (`LOADING_BUDGET_MS`) like desktop `desktopInvokeRaw`.
+ * Same timeouts as desktop `desktopInvokeRaw`; `timeoutMs <= 0` has no deadline.
  * @throws {RpcError}
  */
 export async function nativeInvokeRaw(
   method: string,
   params?: Record<string, unknown>,
-  timeoutMs = RPC_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS,
+  timeoutMs = RPC_TIMEOUT_MS[method] ?? OPERATION_LIMIT_MS,
 ): Promise<unknown> {
   const native = getUprivCoreNative();
   if (!native) {
@@ -137,7 +141,7 @@ export async function nativeInvokeProbeRaw(
 ): Promise<unknown | null> {
   const native = getUprivCoreNative();
   if (!native) return null;
-  const timeoutMs = RPC_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS;
+  const timeoutMs = RPC_TIMEOUT_MS[method] ?? OPERATION_LIMIT_MS;
   return settleInvocation(
     method,
     timeoutMs,
@@ -295,8 +299,11 @@ export async function rpcVaultRootSetupPath(
     replaceIncomplete?: boolean;
     replacePolicy?: IncompleteReplacePolicy;
     bootstrap?: VaultRootBootstrapPrefs | null;
-    /** Copy the private app-folder `.upriv` into a mounted grant before init. */
-    adoptPrivateRoot?: boolean;
+    /**
+     * Copy the private app-folder `.upriv` into a mounted grant before init,
+     * as the core job `job`: it has no deadline, and Stop leaves the original.
+     */
+    adoptPrivateRoot?: { job: string };
     /** Last Android Custom folder, written to `.upriv-data-folder`. */
     customUri?: string;
   },
@@ -312,14 +319,19 @@ export async function rpcVaultRootSetupPath(
       "replacePolicy is required when replaceIncomplete is true",
     );
   }
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_PATH, {
-    path,
-    replaceIncomplete,
-    replacePolicy: options?.replacePolicy ?? null,
-    bootstrap: options?.bootstrap ?? null,
-    ...(options?.adoptPrivateRoot ? { adoptPrivateRoot: true } : {}),
-    ...(options?.customUri ? { customUri: options.customUri } : {}),
-  });
+  const adopt = options?.adoptPrivateRoot;
+  const raw = await nativeInvokeRaw(
+    CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_PATH,
+    {
+      path,
+      replaceIncomplete,
+      replacePolicy: options?.replacePolicy ?? null,
+      bootstrap: options?.bootstrap ?? null,
+      ...(adopt ? { adoptPrivateRoot: true, job: adopt.job } : {}),
+      ...(options?.customUri ? { customUri: options.customUri } : {}),
+    },
+    vaultRootSetupPathTimeoutMs({ adoptPrivateRoot: adopt !== undefined }),
+  );
   if (
     typeof raw !== "object" ||
     raw === null ||
@@ -535,12 +547,23 @@ export async function rpcVaultList(): Promise<VaultListItem[]> {
   return parseVaultListResult(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_LIST));
 }
 
-export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultListItem> {
+/**
+ * Create the vault as the job `job`; a stop removes it. `forImport`: a phone
+ * import fills it next (`vault_ingest_*`), and core keeps it recorded as
+ * unfinished until that import closes it.
+ */
+export async function rpcVaultCreate(
+  input: CreateVaultInput,
+  job: string,
+  forImport = false,
+): Promise<VaultListItem> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CREATE, {
     password: input.password,
     unlockPreset: input.unlockPreset,
     settings: vaultSettingsForDaemon(input.settings),
     welcome: input.welcome,
+    job,
+    ...(forImport ? { forImport: true } : {}),
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_create: expected object", raw);
@@ -548,12 +571,14 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
   return parseVaultListItemWire((raw as { vault?: unknown }).vault);
 }
 
-export async function rpcVaultOpen(id: string, password: string): Promise<unknown> {
-  return nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
+/** Unlock as the job `job`; a stop leaves the vault closed. */
+export async function rpcVaultOpen(id: string, password: string, job: string): Promise<unknown> {
+  return nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password, job });
 }
 
-export async function rpcVaultPlainConfirm(id: string, path: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_CONFIRM, { id, path });
+/** Finish an open that waited for its plain-text folder, as the same job. */
+export async function rpcVaultPlainConfirm(id: string, path: string, job: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_CONFIRM, { id, path, job });
 }
 
 export async function rpcVaultPlainDestination(id: string): Promise<PlainDestination> {
@@ -601,48 +626,38 @@ export async function rpcVaultIngestDirectory(id: string, path: string): Promise
   await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_DIRECTORY, { id, path });
 }
 
+/**
+ * Close a just-filled import and tell core the vault is complete: its record
+ * of an unfinished import is dropped, so the launch sweep keeps the vault.
+ */
+export async function rpcVaultFinishImport(id: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, { id, reason: "import" });
+}
+
 /** Delete a vault whose import failed. Drops an open ingest session first. */
 export async function rpcVaultDiscardImport(id: string): Promise<void> {
   await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_DISCARD_IMPORT, { id });
 }
 
-/** Stream one Android `content://` file into the open import session. */
+/**
+ * Stream one Android `content://` file into the open import session, as the
+ * job `job`. A job has no deadline: Stop ends it (`job_cancel`).
+ */
 export async function rpcImportContentUri(
   vaultId: string,
   logicalPath: string,
   contentUri: string,
+  job: string,
 ): Promise<void> {
   const native = getUprivCoreNative();
   if (!native) {
     throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "UprivCore native module not loaded");
   }
-  const timeoutMs = CORE_RPC_TIMEOUT_MS[CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE];
-  const invocation = Promise.resolve(
-    native.importContentUri(vaultId, logicalPath, contentUri),
-  ).then((raw) => {
-    unwrapInvokeEnvelope(JSON.parse(raw));
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  invocation.catch(() => undefined);
-  try {
-    await Promise.race([
-      invocation,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(
-            new RpcError(
-              BRIDGE.RPC_TIMEOUT,
-              `invoke timeout after ${timeoutMs}ms: import_content_uri`,
-            ),
-          );
-        }, timeoutMs);
-      }),
-    ]);
-  } catch (error) {
-    throw invokeFailure(error);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  await settleInvocation(
+    "import_content_uri",
+    NO_DEADLINE_MS,
+    native.importContentUri(vaultId, logicalPath, contentUri, job),
+  );
 }
 
 export async function rpcVaultClose(
@@ -653,32 +668,34 @@ export async function rpcVaultClose(
   return parseCloseVaultOutcome(raw);
 }
 
-/** `timeoutMs` is the rewrap's sized budget (`sizedBudgetMs("vaultRewrap")`). */
+/** Change the password as the job `job`. */
 export async function rpcVaultChangePassword(
   id: string,
   currentPassword: string,
   newPassword: string,
-  timeoutMs: number,
+  job: string,
 ): Promise<void> {
-  await nativeInvokeRaw(
-    CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD,
-    { id, currentPassword, newPassword },
-    timeoutMs,
-  );
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
+    id,
+    currentPassword,
+    newPassword,
+    job,
+  });
 }
 
-/** `timeoutMs` is the rewrap's sized budget (`sizedBudgetMs("vaultRewrap")`). */
+/** Change the unlock RAM as the job `job`. */
 export async function rpcVaultChangeKdf(
   id: string,
   currentPassword: string,
   unlockPreset: string,
-  timeoutMs: number,
+  job: string,
 ): Promise<void> {
-  await nativeInvokeRaw(
-    CORE_RPC_COMMANDS.VAULT_CHANGE_KDF,
-    { id, currentPassword, unlockPreset },
-    timeoutMs,
-  );
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_KDF, {
+    id,
+    currentPassword,
+    unlockPreset,
+    job,
+  });
 }
 
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
@@ -701,7 +718,7 @@ export async function rpcVaultCloseHurry(id: string): Promise<boolean> {
   );
 }
 
-export async function rpcVaultCloseProgress(id: string): Promise<VaultCloseProgress | null> {
+export async function rpcVaultClosePhase(id: string): Promise<VaultCloseProgress | null> {
   return parseVaultCloseProgress(
     await nativeInvokeProbeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }),
   );
@@ -817,27 +834,36 @@ export async function rpcVaultExportToFolder(
 }
 
 /**
- * Wipe the unfinished plain-text exports a crash left. `folders` are the picked
- * folders that hold one and are not mounted now.
+ * Clear what a crash left from a job: the vaults an import never finished and
+ * the unfinished export files. `folders` are the picked folders that hold one
+ * and are not mounted now.
  */
-export async function rpcVaultPlainExportSweep(): Promise<{ folders: string[] }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_EXPORT_SWEEP, {});
-  const record = requireRecord(raw, "vault_plain_export_sweep");
+export async function rpcVaultUnfinishedSweep(): Promise<{ folders: string[] }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_UNFINISHED_SWEEP, {});
+  const record = requireRecord(raw, "vault_unfinished_sweep");
   const folders = Array.isArray(record.folders) ? record.folders : [];
   return { folders: folders.filter((folder) => typeof folder === "string") };
 }
 
-export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultListItem> {
+/** Each import runs as the job `job`; a stop removes the vault it was making. */
+export async function rpcVaultImportZip(
+  input: CreateVaultInput,
+  job: string,
+): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_ZIP, {
     settings: vaultSettingsForDaemon(input.settings),
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
+    job,
   });
   return parseVaultResult(raw, "vault_import_zip");
 }
 
-export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultListItem> {
+export async function rpcVaultImport7z(
+  input: CreateVaultInput,
+  job: string,
+): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_7Z, {
     settings: vaultSettingsForDaemon(input.settings),
@@ -848,11 +874,15 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
     archivePassword: pkg?.archivePassword ?? input.password,
     keepWorkspace: pkg?.keepWorkspace,
     welcome: input.welcome,
+    job,
   });
   return parseVaultResult(raw, "vault_import_7z");
 }
 
-export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<VaultListItem> {
+export async function rpcVaultImportFilesZip(
+  input: CreateVaultInput,
+  job: string,
+): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
     settings: vaultSettingsForDaemon(input.settings),
@@ -862,11 +892,15 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
     contentB64: pkg?.contentB64,
     keepWorkspace: pkg?.keepWorkspace,
     welcome: input.welcome,
+    job,
   });
   return parseVaultResult(raw, "vault_import_files_zip");
 }
 
-export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<VaultListItem> {
+export async function rpcVaultImportOsPath(
+  input: CreateVaultInput,
+  job: string,
+): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH, {
     settings: vaultSettingsForDaemon(input.settings),
@@ -874,15 +908,18 @@ export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<Vau
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
     welcome: input.welcome,
+    job,
   });
   return parseVaultResult(raw, "vault_import_os_path");
 }
 
+/** A `.7z` password test runs as the job `job`; a zip is read at once and takes none. */
 export async function rpcVaultImportProbe(params: {
   archivePath?: string;
   contentB64?: string;
   archivePassword?: string;
   kind?: string;
+  job?: string;
 }): Promise<{
   ok: boolean;
   kind: string;
@@ -972,11 +1009,13 @@ export async function rpcVaultFsWriteRange(
   );
 }
 
+/** Copy one file into the vault as the job `job`; a stop leaves nothing of it. */
 export async function rpcVaultFsImportOsFile(
   id: string,
   parentPath: string,
   name: string,
   osPath: string,
+  job: string,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
     await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
@@ -984,6 +1023,7 @@ export async function rpcVaultFsImportOsFile(
       parentPath,
       name,
       osPath,
+      job,
     }),
     "vault_fs_import_os_file",
   );

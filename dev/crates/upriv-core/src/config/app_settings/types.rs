@@ -87,6 +87,13 @@ pub struct UiSettings {
     /// Close now asks first. Default true.
     #[serde(default = "default_true")]
     pub lifecycle_confirm_close_now: bool,
+    /// Stop on a vault row needs a second click. Default true.
+    #[serde(default = "default_true")]
+    pub lifecycle_confirm_stop: bool,
+    /// Lock on a vault row needs a second click. Default false. Unlock opens
+    /// its password window, so it never asks twice.
+    #[serde(default = "default_false")]
+    pub lifecycle_confirm_lock: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,6 +150,8 @@ impl Default for AppSettings {
                 lifecycle_open_file_manager_on_open: false,
                 lifecycle_keep_open_on_wake: false,
                 lifecycle_confirm_close_now: true,
+                lifecycle_confirm_stop: true,
+                lifecycle_confirm_lock: false,
             },
             logging: LoggingSettings {
                 enabled: true,

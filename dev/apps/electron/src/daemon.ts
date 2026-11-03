@@ -6,7 +6,6 @@ import {
   DEFAULT_RPC_TIMEOUT_MS,
   SHUTDOWN_METHOD,
   SHUTDOWN_NOW_TIMEOUT_MS,
-  SHUTDOWN_TIMEOUT_MS,
   STARTUP_TIMEOUT_MS,
   formatRpcError,
   parseDaemonStdoutLine,
@@ -456,6 +455,14 @@ export async function startDaemon(): Promise<DaemonConnection> {
   });
 }
 
+/** How long a daemon that answered `app_shutdown` gets to leave once stdin ends. */
+const DAEMON_EXIT_GRACE_MS = 5_000;
+
+/**
+ * Quit the daemon. `app_shutdown` closes every vault, the Close now way with
+ * `now`. A normal quit has no deadline: `hurryDaemonShutdown` is its stop.
+ * stdin ends after the reply, and the daemon leaves once its lanes finish.
+ */
 export async function stopDaemon(
   connection: DaemonConnection | null,
   options?: { now?: boolean },
@@ -464,35 +471,66 @@ export async function stopDaemon(
 
   const now = options?.now === true;
   try {
-    await daemonRpc(
-      connection,
-      SHUTDOWN_METHOD,
-      { now },
-      now ? SHUTDOWN_NOW_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS,
-    );
+    await daemonRpc(connection, SHUTDOWN_METHOD, { now }, now ? SHUTDOWN_NOW_TIMEOUT_MS : 0);
   } catch {
-    // Daemon may already be stopping, or it ran out of time.
+    // Daemon may already be stopping, or Close now ran out of time.
   }
+  await endDaemon(connection, DAEMON_EXIT_GRACE_MS);
+}
 
+/**
+ * Close now during a normal quit: the `app_shutdown` already running stops
+ * every job and finishes its closes without backups. The daemon answers this
+ * second call at once.
+ */
+export async function hurryDaemonShutdown(connection: DaemonConnection | null): Promise<void> {
+  if (!connection?.alive) return;
+  try {
+    await daemonRpc(connection, SHUTDOWN_METHOD, { now: true }, SHUTDOWN_NOW_TIMEOUT_MS);
+  } catch {
+    // The quit already ended.
+  }
+}
+
+/** Stop a daemon that did not finish in time. The next launch recovers what it left. */
+export async function killDaemon(connection: DaemonConnection | null): Promise<void> {
+  if (!connection) return;
+  await endDaemon(connection, 0);
+}
+
+async function endDaemon(connection: DaemonConnection, graceMs: number): Promise<void> {
   rejectAllPending(connection, new Error("upriv-daemon stopped"));
   connection.alive = false;
+  connection.process.stdin?.end();
 
   const hasExited = () =>
     connection.process.exitCode !== null || connection.process.signalCode !== null;
-
-  if (!hasExited()) {
-    connection.process.kill("SIGTERM");
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!hasExited()) connection.process.kill("SIGKILL");
-        resolve();
-      }, 2_000);
+  const exited = () =>
+    new Promise<boolean>((resolve) => {
+      if (hasExited()) {
+        resolve(true);
+        return;
+      }
+      const timer = setTimeout(() => resolve(hasExited()), graceMs);
       connection.process.once("exit", () => {
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       });
     });
-  }
+
+  if (graceMs > 0 && (await exited())) return;
+  if (hasExited()) return;
+  connection.process.kill("SIGTERM");
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      if (!hasExited()) connection.process.kill("SIGKILL");
+      resolve();
+    }, 2_000);
+    connection.process.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 export async function daemonRpc<T>(

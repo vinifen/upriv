@@ -20,7 +20,7 @@ use super::seven_zip_pack::mem_available_bytes;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{with_open_session, DeferredWrites, OpenSession};
+use crate::session::{with_open_session, DeferredWrites, Job, JobKind, OpenSession};
 use crate::store::{
     blobs_need_pack, build_file_tree, child_logical_path, delete_empty_directory,
     delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path,
@@ -1168,7 +1168,7 @@ fn import_os_file_ahead(
     parent: &str,
     base_name: &str,
     source: &Path,
-    mut file: File,
+    mut file: impl Read,
 ) -> Result<(String, u64)> {
     let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
@@ -1306,19 +1306,23 @@ pub fn fs_write_from_reader(
 /// a directory symlink cannot re-encrypt our own store.
 /// Encryption and the blob write run without the session lock, so other
 /// imports can encrypt at the same time. The lock is taken only to name the
-/// file and stage it for the next seal (see [`stage_import`]).
+/// file and stage it for the next seal (see [`stage_import`]). Runs as the job
+/// `job_id`: a stop fails the next read, and the file never enters the index.
 pub fn fs_import_from_os_path(
     root: &VaultRoot,
     vault_id: &str,
     parent_ui: &str,
     base_name: &str,
     os_path: &Path,
+    job_id: &str,
 ) -> Result<(String, u64)> {
-    let source = validate_import_os_path(root, vault_id, os_path)?;
-    let file = open_import_source(&source)?;
-    let dir = require_open(root, vault_id)?;
-    let parent = logical(parent_ui)?;
-    import_os_file_ahead(&dir, &parent, base_name, &source, file)
+    Job::run(job_id, JobKind::FileImport, Some(vault_id), |job| {
+        let source = validate_import_os_path(root, vault_id, os_path)?;
+        let file = open_import_source(&source)?;
+        let dir = require_open(root, vault_id)?;
+        let parent = logical(parent_ui)?;
+        import_os_file_ahead(&dir, &parent, base_name, &source, job.progress_reader(file))
+    })
 }
 
 /// A link swapped in after the path was checked is refused on every system,
@@ -1860,7 +1864,7 @@ mod tests {
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::store::{open_store, KdfUnlockPreset};
-    use crate::test_support::vault_root_with;
+    use crate::test_support::{test_job_id, vault_root_with};
     use crate::vault::{close_vault, create_vault, open_vault};
 
     #[test]
@@ -1952,7 +1956,7 @@ mode = "encrypted_dir"
         let (_tmp, root) = vault_root_with(&[]);
         let readme = "# Welcome-note-plaintext\n";
         let workspace = "{\"format_version\":1,\"openTabs\":[\"/README.md\"]}\n";
-        crate::vault::create_vault_with_welcome(
+        crate::vault::create::create_vault_with_welcome(
             &root,
             sample_config("notes", "Notes"),
             b"pass-word-ok",
@@ -2005,7 +2009,7 @@ mode = "encrypted_dir"
     fn oversized_welcome_is_refused_before_the_folder_exists() {
         let (_tmp, root) = vault_root_with(&[]);
         let readme = "x".repeat(crate::vault::WELCOME_FILE_MAX_BYTES + 1);
-        let err = crate::vault::create_vault_with_welcome(
+        let err = crate::vault::create::create_vault_with_welcome(
             &root,
             sample_config("notes", "Notes"),
             b"pass-word-ok",
@@ -2598,7 +2602,9 @@ mode = "encrypted_dir"
         let data = vec![0xA5u8; size];
         let src = tmp.path().join("payload.bin");
         crate::host_fs::write(&src, &data).unwrap();
-        let (path, _) = fs_import_from_os_path(&root, "notes", "/", "payload.bin", &src).unwrap();
+        let (path, _) =
+            fs_import_from_os_path(&root, "notes", "/", "payload.bin", &src, &test_job_id())
+                .unwrap();
         assert_eq!(path, "/payload.bin");
         let store = root.vault_store_dir("notes").unwrap();
         crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
@@ -2620,6 +2626,7 @@ mode = "encrypted_dir"
             "/",
             "nope.bin",
             std::path::Path::new("payload.bin"),
+            &test_job_id(),
         )
         .unwrap_err();
         assert!(matches!(relative, UprivError::ImportSourceUnreadable(_)));
@@ -2627,7 +2634,8 @@ mode = "encrypted_dir"
         let bait = store.join("bait.bin");
         crate::host_fs::write(&bait, b"x").unwrap();
         let from_store =
-            fs_import_from_os_path(&root, "notes", "/", "bait.bin", &bait).unwrap_err();
+            fs_import_from_os_path(&root, "notes", "/", "bait.bin", &bait, &test_job_id())
+                .unwrap_err();
         assert!(matches!(from_store, UprivError::ImportSourceUnreadable(_)));
 
         #[cfg(unix)]
@@ -2635,7 +2643,8 @@ mode = "encrypted_dir"
             let link = tmp.path().join("link.bin");
             std::os::unix::fs::symlink(&src, &link).unwrap();
             let linked =
-                fs_import_from_os_path(&root, "notes", "/", "link.bin", &link).unwrap_err();
+                fs_import_from_os_path(&root, "notes", "/", "link.bin", &link, &test_job_id())
+                    .unwrap_err();
             assert!(matches!(linked, UprivError::ImportSourceUnreadable(_)));
 
             let alias = tmp.path().join("alias");
@@ -2644,7 +2653,8 @@ mode = "encrypted_dir"
             std::os::unix::fs::symlink(&store, &store_link).unwrap();
             let via = store_link.join("bait.bin");
             let via_store =
-                fs_import_from_os_path(&root, "notes", "/", "via.bin", &via).unwrap_err();
+                fs_import_from_os_path(&root, "notes", "/", "via.bin", &via, &test_job_id())
+                    .unwrap_err();
             assert!(matches!(via_store, UprivError::ImportSourceUnreadable(_)));
         }
 
@@ -2711,10 +2721,12 @@ mode = "encrypted_dir"
         crate::host_fs::write(&left_src, b"alpha-file").unwrap();
         crate::host_fs::write(&right_src, b"beta-file!!").unwrap();
         let (left, right) = std::thread::scope(|scope| {
-            let left =
-                scope.spawn(|| fs_import_from_os_path(&root, "notes", "/", "same.txt", &left_src));
-            let right =
-                scope.spawn(|| fs_import_from_os_path(&root, "notes", "/", "same.txt", &right_src));
+            let left = scope.spawn(|| {
+                fs_import_from_os_path(&root, "notes", "/", "same.txt", &left_src, &test_job_id())
+            });
+            let right = scope.spawn(|| {
+                fs_import_from_os_path(&root, "notes", "/", "same.txt", &right_src, &test_job_id())
+            });
             (left.join().unwrap(), right.join().unwrap())
         });
         let mut paths = [left.unwrap().0, right.unwrap().0];
@@ -2836,7 +2848,9 @@ mode = "encrypted_dir"
             let src = tmp.path().join(&name);
             let body = format!("body-{index}");
             crate::host_fs::write(&src, &body).unwrap();
-            let (path, _) = fs_import_from_os_path(&root, "notes", "/photos", &name, &src).unwrap();
+            let (path, _) =
+                fs_import_from_os_path(&root, "notes", "/photos", &name, &src, &test_job_id())
+                    .unwrap();
             assert_eq!(path, format!("/photos/{name}"));
             let live = fs_read_file(&root, "notes", &path).unwrap();
             assert_eq!(live, body.as_bytes());
@@ -2875,7 +2889,7 @@ mode = "encrypted_dir"
         let before = fs_tree_revision(&root, "notes").unwrap();
         let src = os_source(tmp.path(), "one.txt", b"one");
         let (path, revision) =
-            fs_import_from_os_path(&root, "notes", "/", "one.txt", &src).unwrap();
+            fs_import_from_os_path(&root, "notes", "/", "one.txt", &src, &test_job_id()).unwrap();
         assert!(revision > before, "the explorer sees the new file");
         assert_eq!(fs_read_file(&root, "notes", &path).unwrap(), b"one");
         // What a crash would keep: the sealed index does not name it yet.
@@ -2894,11 +2908,27 @@ mode = "encrypted_dir"
         let (tmp, root) = open_notes();
         let src = os_source(tmp.path(), "src.txt", b"wave");
         for index in 0..STAGED_IMPORT_WAVE - 1 {
-            fs_import_from_os_path(&root, "notes", "/", &format!("w{index}.txt"), &src).unwrap();
+            fs_import_from_os_path(
+                &root,
+                "notes",
+                "/",
+                &format!("w{index}.txt"),
+                &src,
+                &test_job_id(),
+            )
+            .unwrap();
         }
         assert!(!sealed_index_names(&root, "w0.txt"));
         let last = STAGED_IMPORT_WAVE - 1;
-        fs_import_from_os_path(&root, "notes", "/", &format!("w{last}.txt"), &src).unwrap();
+        fs_import_from_os_path(
+            &root,
+            "notes",
+            "/",
+            &format!("w{last}.txt"),
+            &src,
+            &test_job_id(),
+        )
+        .unwrap();
         assert!(sealed_index_names(&root, "w0.txt"));
         assert!(sealed_index_names(&root, &format!("w{last}.txt")));
         assert_eq!(pending_batch(&root), None);
@@ -2911,7 +2941,8 @@ mode = "encrypted_dir"
         let src = os_source(tmp.path(), "a.txt", b"orphan?");
         let (docs, _) = fs_ensure_folder(&root, "notes", "/", "docs").unwrap();
         fs_delete(&root, "notes", &docs).unwrap();
-        let err = fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src).unwrap_err();
+        let err = fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src, &test_job_id())
+            .unwrap_err();
         assert!(matches!(err, UprivError::VaultPathNotFound(_)), "{err:?}");
         with_open_session(&root.vault_dir("notes").unwrap(), |session| {
             assert!(session.index.find("docs/a.txt").is_none());
@@ -2934,7 +2965,7 @@ mode = "encrypted_dir"
             fs_ensure_folder(&root, "notes", "/", "docs").unwrap().0,
             docs
         );
-        fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src).unwrap();
+        fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src, &test_job_id()).unwrap();
         fs_flush(&root, "notes").unwrap();
         assert!(sealed_index_names(&root, "docs"));
         assert!(sealed_index_names(&root, "docs/a.txt"));
@@ -2945,12 +2976,13 @@ mode = "encrypted_dir"
     fn another_change_or_close_seals_staged_imports() {
         let (tmp, root) = open_notes();
         let src = os_source(tmp.path(), "a.txt", b"staged");
-        fs_import_from_os_path(&root, "notes", "/", "a.txt", &src).unwrap();
+        fs_import_from_os_path(&root, "notes", "/", "a.txt", &src, &test_job_id()).unwrap();
         fs_create_folder(&root, "notes", "/", "docs").unwrap();
         assert!(sealed_index_names(&root, "a.txt"));
 
         let mut body = b"streamed".as_slice();
-        crate::vault::ingest_import_reader(&root, "notes", "docs/b.txt", &mut body).unwrap();
+        crate::vault::ingest_import_reader(&root, "notes", "docs/b.txt", &mut body, &test_job_id())
+            .unwrap();
         assert!(!sealed_index_names(&root, "docs/b.txt"));
         close_vault(&root, "notes").unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();

@@ -12,7 +12,7 @@ function notImplemented(what: string): never {
 
 export interface LiveVaultRpc {
   listVaults: () => Promise<VaultListItem[]>;
-  createVault: (input: CreateVaultInput) => Promise<VaultListItem>;
+  createVault: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
   getSettings: (vaultId: string) => Promise<VaultSettingsConfig | undefined>;
   /** Regular-file bytes under `store/`. Omitted adapters leave Info on an em dash. */
   storeOnDiskBytes?: (vaultId: string) => Promise<number>;
@@ -28,11 +28,11 @@ export interface LiveVaultRpc {
     job: string,
   ) => Promise<VaultPathWriteResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
-  sweepPlainExports?: () => Promise<void>;
-  importZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
-  import7z?: (input: CreateVaultInput) => Promise<VaultListItem>;
-  importFilesZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
-  importOsPath?: (input: CreateVaultInput) => Promise<VaultListItem>;
+  sweepUnfinished?: () => Promise<void>;
+  importZip?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
+  import7z?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
+  importFilesZip?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
+  importOsPath?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
 }
 
 /** Shared live adapter — desktop daemon and native FFI pass their `rpc*` fns. */
@@ -46,24 +46,24 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
     canExportVault: canExport,
 
     listVaults: () => rpc.listVaults(),
-    async createVault(input) {
+    async createVault(input, job) {
       if (input.importPackage?.kind === "store_zip") {
         if (!rpc.importZip) notImplemented("Vault zip import");
-        return rpc.importZip(input);
+        return rpc.importZip(input, job);
       }
       if (input.importPackage?.kind === "seven_zip") {
         if (!rpc.import7z) notImplemented("Vault 7z import");
-        return rpc.import7z(input);
+        return rpc.import7z(input, job);
       }
       if (input.importPackage?.kind === "files_zip") {
         if (!rpc.importFilesZip) notImplemented("Files zip import");
-        return rpc.importFilesZip(input);
+        return rpc.importFilesZip(input, job);
       }
       if (input.importPackage?.kind === "os_tree") {
         if (!rpc.importOsPath) notImplemented("File import");
-        return rpc.importOsPath(input);
+        return rpc.importOsPath(input, job);
       }
-      return rpc.createVault(input);
+      return rpc.createVault(input, job);
     },
     async getSettings(vaultId) {
       const settings = await rpc.getSettings(vaultId);
@@ -117,6 +117,6 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       return rpc.exportCapabilities();
     },
 
-    sweepPlainExports: () => (rpc.sweepPlainExports ? rpc.sweepPlainExports() : Promise.resolve()),
+    sweepUnfinished: () => (rpc.sweepUnfinished ? rpc.sweepUnfinished() : Promise.resolve()),
   };
 }

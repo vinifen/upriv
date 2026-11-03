@@ -1,4 +1,5 @@
 import { memo, useCallback } from "react";
+import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "./FileManagerContext";
 import { fileManagerBlockingPrompt, fileManagerDismissIntent } from "@upriv/shared";
@@ -13,11 +14,15 @@ import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
  */
 export const FileManagerLayer = memo(function FileManagerLayer() {
   const { t } = useTranslation();
-  const { getEntry, getState, minimize, maximize, dismiss, dispatchWorkspace } = useFileManager();
+  const { getEntry, getState, minimize, maximize, dismiss, dispatchWorkspace, cancelImports } =
+    useFileManager();
   const { entries, maximizedVaultId, focusedVaultId } = useFileManagerShell();
   const maximizedEntry = entries.find((entry) => entry.vaultId === maximizedVaultId) ?? null;
   const suspendMinimize = useFileManagerSelector((state) =>
     Boolean(maximizedVaultId && state.entries[maximizedVaultId]?.workspace.unsavedPrompt),
+  );
+  const importing = useFileManagerSelector((state) =>
+    Boolean(maximizedVaultId && state.entries[maximizedVaultId]?.importInFlight),
   );
 
   const requestDismiss = useCallback(
@@ -53,6 +58,18 @@ export const FileManagerLayer = memo(function FileManagerLayer() {
           title={maximizedEntry ? t("modal.file_manager.title") : ""}
           contextTitle={maximizedEntry?.displayName}
           titleIcon="file-manager"
+          titleAccessory={
+            importing && maximizedEntry ? (
+              // One click: the files waiting are dropped and the one being written leaves nothing.
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => cancelImports(maximizedEntry.vaultId)}
+              >
+                {t("modal.file_manager.action.stop_import")}
+              </Button>
+            ) : null
+          }
           suspendMinimize={suspendMinimize}
           onMinimize={() => {
             if (!maximizedEntry || suspendMinimize) return;

@@ -1,10 +1,9 @@
-import { Button, LoadingBudgetHint } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 
 interface VaultGroupsInvalidBannerProps {
   visible: boolean;
   busy?: boolean;
-  budget?: { visible: boolean; budgetMs: number; remainingMs: number };
   onRepair: () => void;
   onDismiss: () => void;
 }
@@ -12,7 +11,6 @@ interface VaultGroupsInvalidBannerProps {
 export function VaultGroupsInvalidBanner({
   visible,
   busy = false,
-  budget,
   onRepair,
   onDismiss,
 }: VaultGroupsInvalidBannerProps) {
@@ -26,9 +24,6 @@ export function VaultGroupsInvalidBanner({
     >
       <div className="space-y-1">
         <p className="text-sm text-on-surface">{t("vault.group.invalid_banner")}</p>
-        {busy && budget?.visible ? (
-          <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-        ) : null}
       </div>
       <div className="flex shrink-0 gap-2">
         <Button variant="ghost" size="sm" disabled={busy} onClick={onDismiss}>
