@@ -792,6 +792,8 @@
   "quit.closing.title": "Cerrando bóvedas abiertas",
   "quit.closing.body": "Guardando la bóveda cifrada y saliendo.",
   "quit.closing.body_now": "Sellando las bóvedas abiertas sin copia de seguridad y saliendo.",
+  "quit.quitting.title": "Saliendo",
+  "quit.quitting.body": "No hay ninguna bóveda abierta. Upriv está saliendo.",
   "quit.work.title": "Esperando a que termine el trabajo",
   "quit.work.body": "Upriv cierra las bóvedas abiertas y sale cuando este trabajo termine. Detén cualquiera, o usa Cerrar ahora para detenerlo todo.",
   "quit.work.files_importing": "Archivos que se importan a {name}",

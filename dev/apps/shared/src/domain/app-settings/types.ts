@@ -91,8 +91,8 @@ export interface AppSettingsConfig {
      */
     lifecycle_confirm_stop: boolean;
     /**
-     * When true, Open and Close on a vault row (and a click on the row that
-     * opens it) need a second click to confirm. Default false.
+     * When true, Lock on a vault row needs a second click to confirm. Default
+     * false. Unlock only opens its password window, so it never asks twice.
      */
     lifecycle_confirm_lock: boolean;
   };

@@ -20,7 +20,7 @@ import {
   parseVaultGroupWire,
   parseVaultListItemWire,
   parseVaultCloseHurry,
-  parseVaultCloseProgress,
+  parseVaultCloseState,
   parseVaultListResult,
   parseVaultRenameResult,
   parseVaultRootInspect,
@@ -43,7 +43,7 @@ import {
   type PlainHeldStatus,
   type PlainLeftover,
   type PlainWipe,
-  type VaultCloseProgress,
+  type VaultCloseState,
   type AllowlistedUiLogEvent,
   type AppLogFile,
   type AppSettingsConfig,
@@ -718,8 +718,8 @@ export async function rpcVaultCloseHurry(id: string): Promise<boolean> {
   );
 }
 
-export async function rpcVaultClosePhase(id: string): Promise<VaultCloseProgress | null> {
-  return parseVaultCloseProgress(
+export async function rpcVaultClosePhase(id: string): Promise<VaultCloseState | null> {
+  return parseVaultCloseState(
     await nativeInvokeProbeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }),
   );
 }

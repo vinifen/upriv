@@ -13,6 +13,12 @@ export const DEFAULT_RPC_TIMEOUT_MS = 600_000;
  * is its stop.
  */
 export const SHUTDOWN_NOW_TIMEOUT_MS = 30_000;
+/**
+ * How long the quit waits to learn whether a vault is open, and in which
+ * language to ask, before its dialog shows. Both answer at once from a daemon
+ * that is not stuck.
+ */
+export const QUIT_PROBE_TIMEOUT_MS = 3_000;
 export const SHUTDOWN_METHOD = "app_shutdown";
 /** Soft cap on an incomplete NDJSON line (comfortably above `log_get` 2 MiB). */
 export const MAX_STDOUT_BUFFER_CHARS = 8 * 1024 * 1024;

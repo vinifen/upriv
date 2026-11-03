@@ -417,7 +417,7 @@ Vault rows are ordered by **`[vault] order`** in `config.toml` (ascending; lower
 1. **Vault settings** (`action.settings`): edit **`order`** in the `[vault]` section (numeric field); save writes `config.toml`.
 2. **Drag-and-drop (preferred):** on the vault list, **press and hold** a row (or its drag handle), then **drag up or down** to the desired position. On drop, the app reassigns `order` on all affected vaults and persists to each `config.toml` (atomic write). List updates immediately.
 
-Drag must not trigger row click (open workspace) or action buttons — use a dedicated grab zone on the left (e.g. `⋮⋮` handle beside the status dot) or long-press on the name area; action buttons keep `stopPropagation`.
+Drag must not trigger row click (open the file manager) or action buttons — use a dedicated grab zone on the left (e.g. `⋮⋮` handle beside the status dot) or long-press on the name area; action buttons keep `stopPropagation`.
 
 | Zone | Content |
 |------|----------|
@@ -432,8 +432,8 @@ Drag must not trigger row click (open workspace) or action buttons — use a ded
 
 **Row click (outside buttons):**
 
-- Vault **`open`:** open **workspace** directory in OS file manager (`xdg-open` on Linux).
-- Vault **`closed`:** do not open folder; unlock via **`action.unlock`** button (prompts password).
+- Vault **`open`:** open the vault in the in-app file manager.
+- Vault **`closed`** or in any other state: nothing. Unlock, Lock, and Stop run only from the row's button.
 
 **Row background / outline color** by persisted or runtime state:
 
@@ -474,11 +474,11 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-04 | Per-vault settings modal (TOML); delete vault with name confirmation | P0 |
 | RF-UI-05 | Backups modal; delete backup only after typing vault `id` | P0 |
 | RF-UI-06 | Prominent Lock/Unlock button (larger visual weight than others) | P0 |
-| RF-UI-07 | Row click (outside buttons) opens workspace when `open` | P0 |
+| RF-UI-07 | Row click (outside buttons) opens the in-app file manager when `open`, and does nothing otherwise | P0 |
 | RF-UI-08 | **Export** (`action.export_vault`) from the overflow menu. User chooses `.zip` of `store/` (Recommended) or `.7z` | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
 | RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock dialog while open) — **no** blocking full-screen pipeline overlay. Lock starts the close pipeline immediately and does not ask for the password. **One pipeline at a time** — open/close/create are **queued** (FIFO), and a waiting one says **Queued**. Work the person can stop (open, create, imports, exports, backups, password and unlock-RAM change, Remove the folder) has no time limit: the row's button becomes **Stop** in its place, two taps while **Press Stop twice on a vault row** is on (System settings, on by default), and its last step, which always finishes, says so. A close has no Stop; **Close now** hurries it. Long work shows how long it has been running, never an estimate. Every other wait ends after 10 minutes with an error and Retry. Work and saves keep running when the window that started them closes. | P0 |
-| RF-UI-10b | Quit asks while work runs or waits; a normal quit waits for it, and **Close now** hurries every close and quits. An OS shutdown is Close now. The computer or phone stays awake while work runs or a vault closes. Auto-close of a vault whose files still import into the file manager follows `[auto_close] when_busy`: wait for them (default) or stop the import and close. | P1 |
+| RF-UI-10b | Quit asks while work runs or waits; a normal quit waits for it, and **Close now** hurries every close and quits. While the quit closes vaults, each vault's row and the quit window show its step (Queued…, Closing…, Backing up…, Closed). An OS shutdown is Close now. The computer or phone stays awake while work runs or a vault closes. Auto-close of a vault whose files still import into the file manager follows `[auto_close] when_busy`: wait for them (default) or stop the import and close. | P1 |
 | RF-UI-11 | **Create vault** modal/wizard: name, password, confirm password, optional hint, optional note | P0 |
 | RF-UI-12 | Unlock screen may show **`password_hint`** from config when non-empty (never auto-fill password) | P1 |
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |

@@ -41,7 +41,7 @@ import {
   parseVaultGroupWire,
   parseVaultListItemWire,
   parseVaultCloseHurry,
-  parseVaultCloseProgress,
+  parseVaultCloseState,
   parseVaultListResult,
   parseVaultRenameResult,
   parseVaultRootInspect,
@@ -61,7 +61,7 @@ import {
   type PlainHeldStatus,
   type PlainLeftover,
   type PlainWipe,
-  type VaultCloseProgress,
+  type VaultCloseState,
 } from "@upriv/shared";
 
 /** Fetch product version from upriv-daemon. */
@@ -627,10 +627,8 @@ export async function rpcVaultCloseHurry(id: string): Promise<boolean> {
   return parseVaultCloseHurry(await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_HURRY, { id }));
 }
 
-export async function rpcVaultClosePhase(id: string): Promise<VaultCloseProgress | null> {
-  return parseVaultCloseProgress(
-    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }),
-  );
+export async function rpcVaultClosePhase(id: string): Promise<VaultCloseState | null> {
+  return parseVaultCloseState(await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }));
 }
 
 export async function rpcVaultStoreSize(id: string): Promise<number> {

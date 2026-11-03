@@ -792,6 +792,8 @@
   "quit.closing.title": "Closing open vaults",
   "quit.closing.body": "Writing the encrypted vault back, then quitting.",
   "quit.closing.body_now": "Sealing the open vaults with no backup, then quitting.",
+  "quit.quitting.title": "Quitting",
+  "quit.quitting.body": "No vault is open. Upriv is quitting.",
   "quit.work.title": "Waiting for work to end",
   "quit.work.body": "Upriv closes the open vaults and quits once this work ends. Stop any of it, or Close now to stop it all.",
   "quit.work.files_importing": "Files importing into {name}",

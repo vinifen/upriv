@@ -309,9 +309,14 @@ fn stop_jobs_for_quit() {
     }
 }
 
+/// The `app_shutdown` is the quit dialog's Close now. Params it cannot read
+/// mean the full close: quit always runs.
+pub fn shutdown_is_now(params: &Value) -> bool {
+    AppShutdownParams::deserialize(params).is_ok_and(|parsed| parsed.now)
+}
+
 pub(super) fn app_shutdown(params: Value) -> RpcResponse {
-    // Quit always runs. Params it cannot read mean the full close.
-    let now = serde_json::from_value::<AppShutdownParams>(params).is_ok_and(|parsed| parsed.now);
+    let now = shutdown_is_now(&params);
     stop_jobs_for_quit();
     match optional_vault_root() {
         Ok(Some(root)) => {

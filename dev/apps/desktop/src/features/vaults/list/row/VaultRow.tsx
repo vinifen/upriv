@@ -5,8 +5,6 @@ import { useTranslation } from "@/i18n";
 import {
   vaultRowControls,
   resolveVaultListStatus,
-  isVaultListRowActivatable,
-  isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
@@ -22,7 +20,7 @@ import {
 import { disarmRowButton, useRowArming } from "@upriv/shared/react";
 import { ROW_ARM_ATTR } from "@/hooks/useRowArmingDismiss";
 import type { VaultPipelineListStatus } from "./VaultList";
-import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
+import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
@@ -125,16 +123,11 @@ export function VaultRow({
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const canUnlockFromRow =
-    isVaultListRowUnlockTarget(status) && (status !== "queued" || resumeOpen);
-  const openOrUnlock = () => {
+  // The row opens an open vault's file manager. Unlock, Lock, and Stop belong to the button only.
+  const openFileManager = () => {
     if (isReorderActive || isDragging) return;
-    if (isOpen) onOpenFileManager(vault);
-    // A click on the row is Unlock, with the button's guard: a click just after Stop turned into Unlock does nothing.
-    else if (role === "unlock") arming.press(() => onUnlockVault(vault));
-    else if (canUnlockFromRow) onUnlockVault(vault);
+    onOpenFileManager(vault);
   };
-  const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
 
   return (
     <article
@@ -149,31 +142,23 @@ export function VaultRow({
         rowGap,
         density.article,
         vaultStatusRowClass[status],
-        rowActivates ? "cursor-pointer" : "",
+        isOpen ? "cursor-pointer" : "",
         isDragging ? "opacity-45" : "",
         vaultListDropOverClass(isDragOver, isDropBlocked),
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={openOrUnlock}
+      onClick={isOpen ? openFileManager : undefined}
       onKeyDown={(event) => {
-        if (!rowActivates) return;
+        if (!isOpen) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          openOrUnlock();
+          openFileManager();
         }
       }}
-      role={rowActivates ? "button" : undefined}
-      tabIndex={rowActivates ? 0 : undefined}
-      aria-label={
-        isOpen
-          ? t("action.open_upriv")
-          : canUnlockFromRow
-            ? status === "closed" || status === "recovery"
-              ? t("action.unlock")
-              : t(vaultStatusI18nKey[status])
-            : undefined
-      }
+      role={isOpen ? "button" : undefined}
+      tabIndex={isOpen ? 0 : undefined}
+      aria-label={isOpen ? t("action.open_upriv") : undefined}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {!dragDisabled ? (

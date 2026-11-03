@@ -792,6 +792,8 @@
   "quit.closing.title": "Fechando cofres abertos",
   "quit.closing.body": "Gravando o cofre cifrado e saindo.",
   "quit.closing.body_now": "Selando os cofres abertos sem backup e saindo.",
+  "quit.quitting.title": "Saindo",
+  "quit.quitting.body": "Nenhum cofre está aberto. O Upriv está saindo.",
   "quit.work.title": "Esperando o trabalho terminar",
   "quit.work.body": "O Upriv fecha os cofres abertos e sai quando este trabalho terminar. Pare qualquer um, ou use Fechar agora para parar tudo.",
   "quit.work.files_importing": "Arquivos sendo importados para {name}",

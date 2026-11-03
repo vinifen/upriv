@@ -2,15 +2,12 @@ import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react
 import {
   vaultRowControls,
   resolveVaultListStatus,
-  isVaultListRowActivatable,
-  isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
   vaultRowWorkClock,
-  vaultStatusI18nKey,
   vaultStatusLabelKey,
   VAULT_ROW_DENSITY,
   type VaultListItem,
@@ -19,7 +16,7 @@ import {
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { ElapsedTime, TextWidthProbe } from "@/components/ui";
-import { useTranslation, type I18nKey } from "@/i18n";
+import { useTranslation } from "@/i18n";
 import { useRowArming, useRowButtonStack } from "@upriv/shared/react";
 import { claimRowArmTouch } from "@/hooks/useRowArmingDismiss";
 import { useTheme } from "@/theme";
@@ -255,14 +252,10 @@ export function VaultRow({
   );
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const canUnlockFromRow =
-    isVaultListRowUnlockTarget(status) && (status !== "queued" || resumeOpen);
-  const openOrUnlock = () => {
+  // The row opens an open vault's file manager. Unlock, Lock, and Stop belong to the button only.
+  const openFileManager = () => {
     if (isDragging) return;
-    if (isOpen) onOpenFileManager(vault);
-    // A tap on the row is Unlock, with the button's guard: a tap just after Stop turned into Unlock does nothing.
-    else if (role === "unlock") arming.press(() => onUnlock(vault));
-    else if (canUnlockFromRow) onUnlock(vault);
+    onOpenFileManager(vault);
   };
   const lockButton = (layout: "inline" | "block") => (
     <View onTouchStart={claimTouch} style={layout === "block" ? styles.blockLock : null}>
@@ -280,14 +273,7 @@ export function VaultRow({
       />
     </View>
   );
-  const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
-  const activateLabel = isOpen
-    ? t("action.open_upriv")
-    : canUnlockFromRow
-      ? status === "closed" || status === "recovery"
-        ? t("action.unlock")
-        : t(vaultStatusI18nKey[status] as I18nKey)
-      : undefined;
+  const activateLabel = isOpen ? t("action.open_upriv") : undefined;
   const dropRing = (
     <DropOverRing
       visible={isDragOver}
@@ -302,8 +288,8 @@ export function VaultRow({
       <Pressable
         {...dropTargetProps}
         onLayout={handleLayout}
-        onPress={rowActivates ? openOrUnlock : undefined}
-        accessibilityRole={rowActivates ? "button" : undefined}
+        onPress={isOpen ? openFileManager : undefined}
+        accessibilityRole={isOpen ? "button" : undefined}
         accessibilityLabel={activateLabel}
         style={[
           styles.blockCard,
@@ -338,8 +324,8 @@ export function VaultRow({
     <Pressable
       {...dropTargetProps}
       onLayout={handleLayout}
-      onPress={rowActivates ? openOrUnlock : undefined}
-      accessibilityRole={rowActivates ? "button" : undefined}
+      onPress={isOpen ? openFileManager : undefined}
+      accessibilityRole={isOpen ? "button" : undefined}
       accessibilityLabel={activateLabel}
       style={[
         styles.row,

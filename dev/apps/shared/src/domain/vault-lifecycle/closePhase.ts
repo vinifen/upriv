@@ -3,19 +3,25 @@ import { delayMs } from "../timing/delay";
 /** Step of a running close. */
 export type VaultClosePhase = "flush" | "backup";
 
-/** `vault_close_phase` result while `vault_close` runs. */
-export interface VaultCloseProgress {
-  phase: VaultClosePhase;
-}
+/**
+ * `vault_close_phase`: where one vault's close stands. `open` is core still
+ * holding the session with no close started; `closed` is no session and no
+ * close.
+ */
+export type VaultCloseState =
+  { state: "open" } | { state: "closing"; phase: VaultClosePhase } | { state: "closed" };
 
 export const CLOSE_PHASE_POLL_MS = 400;
 
-/** `null` when no close runs, or the answer is not one. */
-export function parseVaultCloseProgress(raw: unknown): VaultCloseProgress | null {
+/** `null` when the answer is not one. */
+export function parseVaultCloseState(raw: unknown): VaultCloseState | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const phase = (raw as { phase?: unknown }).phase;
-  if (phase !== "flush" && phase !== "backup") return null;
-  return { phase };
+  const { state, phase } = raw as { state?: unknown; phase?: unknown };
+  if (state === "open" || state === "closed") return { state };
+  if (state === "closing" && (phase === "flush" || phase === "backup")) {
+    return { state, phase };
+  }
+  return null;
 }
 
 /** `vault_close_hurry` result: true when a close was running to hear it. */
@@ -54,21 +60,21 @@ export interface ClosePhaseEvents {
  */
 export async function waitForClose<T>(
   work: Promise<T>,
-  readProgress: () => Promise<VaultCloseProgress | null>,
+  readState: () => Promise<VaultCloseState | null>,
   events: ClosePhaseEvents,
   pollMs: number = CLOSE_PHASE_POLL_MS,
 ): Promise<T> {
   let settled = false;
   const poll = async () => {
     while (!settled) {
-      let progress: VaultCloseProgress | null = null;
+      let current: VaultCloseState | null = null;
       try {
-        progress = await readProgress();
+        current = await readState();
       } catch {
-        progress = null;
+        current = null;
       }
       if (settled) return;
-      if (progress?.phase === "backup") {
+      if (current?.state === "closing" && current.phase === "backup") {
         events.onBackup();
         return;
       }

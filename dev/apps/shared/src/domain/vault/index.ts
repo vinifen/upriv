@@ -22,7 +22,6 @@ export {
   isVaultOpenResumeTarget,
   vaultCloseNowOffered,
   isVaultCloseQueued,
-  isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
   listHasVaultBlockingWorkspaceClear,

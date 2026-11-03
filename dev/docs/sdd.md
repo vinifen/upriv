@@ -294,7 +294,8 @@ Related: PRD §3.3.1, **RF-45**, **RF-49**, **RF-49b**.
 - Acquire at start of `open()`; release on `close()` and in crash recovery (optional stale TTL).
 - Second `open` on same or other PC → clear error.
 - The app can always close. When it goes away without `app_shutdown` (a crash, a kill, or closing it again during a quit), the daemon sees stdin end or a write fail, closes every open vault the way `app_shutdown` does, and exits.
-- The quit dialog's Close now sends `app_shutdown` with `now`: the same close as `vault_close` with `reason=now`, on every open vault. Electron gives it `SHUTDOWN_NOW_TIMEOUT_MS` (30 s), then stops the daemon. A vault it did not reach is a dirty close (§7), and a plaintext folder stays for recovery. `app_shutdown` waits for a close already running on another thread, and with `now` tells it to hurry first.
+- The quit dialog's Close now sends `app_shutdown` with `now`: the same close as `vault_close` with `reason=now`, on every open vault. Electron gives it `SHUTDOWN_NOW_TIMEOUT_MS` (30 s), then stops the daemon. A vault it did not reach is a dirty close (§7), and a plaintext folder stays for recovery. `app_shutdown` waits for a close already running on another thread. With `now` the daemon hurries from stdin before the call reaches the close lane (`hurry_shutdown`: running jobs stop, running closes hurry, the rest close the Close now way), so Close now never waits behind a long close. Before the quit dialog shows, Electron asks whether a vault is open and the UI language at the same time, each within `QUIT_PROBE_TIMEOUT_MS` (3 s); a daemon that does not answer in time counts as having a vault open, so the dialog still asks.
+- The quit closes every vault inside that one `app_shutdown`, so the window runs no close of its own. While it does, the window asks `vault_close_phase` (a light call, answered beside the quit) once a second for each vault it closes (those open when the quit starts, and any an open still running then unlocks before the quit reaches it), and each row and the quit window show it: Queued… until the quit reaches the vault, then Closing…, Backing up…, and Closed. With no vault open and no work running, the quit window only says Upriv is quitting, with no Close now.
 - `open()` first waits up to `LOCK_HOLDER_WAIT` (8 min, shown as Queued, and Stop ends it) for another process to let go, so a new launch opens the vault once the previous daemon is done. A holder that stays gets the error.
 - With the lock in hand, `open()` removes any `.zip.partial` backup a killed process left. A killed daemon also leaves a dirty close (§7).
 
@@ -1082,7 +1083,7 @@ Default in-app header: **white** variant. App icon tile background: `#0f172a` (s
 ```text
 click(row) && !click(button):
   if session == open      → open the in-app file manager for this vault
-  else                    → Unlock (same as the Unlock button)
+  else                    → nothing (Unlock, Lock, and Stop run only from the row's button)
 
 click(Unlock)              → modal/dialog password → open pipeline
 click(Lock)                → close pipeline (→ closed)
@@ -1113,7 +1114,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **FIFO queue** | `useVaultPipelineRun` queues jobs; the list shows `opening` / `closing` / `creating` | Daemon RPC `vault_open` / `vault_close` / `vault_create` |
 | **User-facing errors** | i18n toast; `revertCloseFailure` on a failed close | Rust codes mirrored in `VAULT_ERROR_CODES` |
 | **No cancel mid-flush** | PRD RF-UI-10 | Aborting a flush would risk an inconsistent store |
-| **IPC timeout** | `vault_open`, `vault_create`, and `vault_close`: none (`NO_DEADLINE_MS`) | Open and create are jobs with Stop; a close has Close now. While a close runs the row reads `vault_close_phase` (`syncing`, `backing_up`, …) and shows the elapsed time |
+| **IPC timeout** | `vault_open`, `vault_create`, and `vault_close`: none (`NO_DEADLINE_MS`) | Open and create are jobs with Stop; a close has Close now. While a close runs the row reads `vault_close_phase` (`state`: `open`, `closing`, or `closed`; `phase`: `flush` or `backup` while closing) and shows the elapsed time |
 | **State after a failure** | A failed close keeps the session open | `store/` is unchanged |
 | **Queue after an error** | `failureMode: "advance"` starts the next job | No slot stays taken |
 

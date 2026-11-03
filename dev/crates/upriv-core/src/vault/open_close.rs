@@ -456,10 +456,38 @@ fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
     }
 }
 
-/// Phase of a `close_vault` still running for this vault. `None` when idle.
-pub fn close_phase(root: &VaultRoot, vault_id: &str) -> Result<Option<ClosePhase>> {
+/// Where the close of one vault stands, read without waiting on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseState {
+    /// Core holds the session and no close has started.
+    Open,
+    /// A close runs, at this step.
+    Closing(ClosePhase),
+    /// No session and no close: closed, or never opened.
+    Closed,
+}
+
+impl CloseState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CloseState::Open => "open",
+            CloseState::Closing(_) => "closing",
+            CloseState::Closed => "closed",
+        }
+    }
+}
+
+/// Where the close of `vault_id` stands. A close marks itself closing before
+/// it takes the session and until it is done, so reading the session first
+/// never shows a running close as closed.
+pub fn close_state(root: &VaultRoot, vault_id: &str) -> Result<CloseState> {
     let vault_dir = root.vault_dir(vault_id)?;
-    Ok(vault_close_phase_at(&vault_dir))
+    let open = is_vault_open_at(&vault_dir);
+    Ok(match vault_close_phase_at(&vault_dir) {
+        Some(phase) => CloseState::Closing(phase),
+        None if open => CloseState::Open,
+        None => CloseState::Closed,
+    })
 }
 
 /// Make the close running for this vault finish the way [`close_vault_now`]
@@ -1013,6 +1041,36 @@ mode = "encrypted_dir"
         let closing = ClosingGuard::enter(&vault_dir).unwrap();
         assert!(hurry_close(&root, "notes").unwrap());
         assert!(closing.hurry().load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn close_state_follows_a_vault_from_open_to_closed() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        assert_eq!(close_state(&root, "notes").unwrap(), CloseState::Closed);
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(close_state(&root, "notes").unwrap(), CloseState::Open);
+        {
+            let vault_dir = root.vault_dir("notes").unwrap();
+            let closing = ClosingGuard::enter(&vault_dir).unwrap();
+            assert_eq!(
+                close_state(&root, "notes").unwrap(),
+                CloseState::Closing(ClosePhase::Flush)
+            );
+            closing.set_phase(ClosePhase::Backup);
+            assert_eq!(
+                close_state(&root, "notes").unwrap(),
+                CloseState::Closing(ClosePhase::Backup)
+            );
+        }
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(close_state(&root, "notes").unwrap(), CloseState::Closed);
     }
 
     #[test]

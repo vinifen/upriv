@@ -149,8 +149,8 @@ pub fn is_heavy_method(method: &str, params: &Value) -> bool {
     heavy_lane(method, params).is_some()
 }
 
-/// Quit: Electron sends it once, and again with `now` when the person chooses
-/// Close now while the first one runs.
+/// Quit: Electron sends it once (with `now` for the quit dialog's Close now),
+/// and again with `now` when the person chooses Close now while a normal quit runs.
 pub const SHUTDOWN_METHOD: &str = "app_shutdown";
 
 pub fn handle_request(id: u64, method: String, params: Value) -> WireOut {

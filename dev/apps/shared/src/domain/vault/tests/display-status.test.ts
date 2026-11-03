@@ -10,7 +10,6 @@ import {
   isVaultOpenResumeTarget,
   vaultCloseNowOffered,
   isVaultCloseQueued,
-  isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
   listHasVaultBlockingWorkspaceClear,
@@ -93,10 +92,9 @@ describe("resolveVaultListStatus", () => {
       false,
     );
     expect(isVaultCloseQueued("a", {})).toBe(false);
-    expect(isVaultListRowActivatable("queued")).toBe(true);
     expect(isVaultListRowUnlockTarget("opening")).toBe(true);
     expect(isVaultListRowUnlockTarget("open")).toBe(false);
-    expect(isVaultListRowActivatable("closing")).toBe(false);
+    expect(isVaultListRowUnlockTarget("closing")).toBe(false);
   });
 
   it("names export and rewrap and refuses open", () => {
@@ -107,12 +105,10 @@ describe("resolveVaultListStatus", () => {
       "changing_password",
     );
     expect(resolveVaultListStatus(row, { kdfChangeVaultIds: ["a"] })).toBe("changing_kdf");
-    expect(isVaultListRowActivatable("exporting")).toBe(false);
-    expect(isVaultListRowActivatable("backing_up")).toBe(false);
     expect(isVaultListRowUnlockTarget("backing_up")).toBe(false);
     expect(isVaultPipelineDisplayBusy("backing_up")).toBe(true);
-    expect(isVaultListRowActivatable("changing_password")).toBe(false);
-    expect(isVaultListRowActivatable("changing_kdf")).toBe(false);
+    expect(isVaultListRowUnlockTarget("changing_password")).toBe(false);
+    expect(isVaultListRowUnlockTarget("changing_kdf")).toBe(false);
     expect(isVaultListRowUnlockTarget("exporting")).toBe(false);
     expect(isVaultPipelineDisplayBusy("exporting")).toBe(true);
     expect(isVaultPipelineDisplayBusy("changing_password")).toBe(true);
@@ -131,9 +127,8 @@ describe("a leftover folder being removed", () => {
     expect(resolveVaultListStatus(row)).toBe("recovery");
   });
 
-  it("is work in flight: the row cannot be opened and the vault cannot be deleted", () => {
+  it("is work in flight: the vault cannot be unlocked or deleted", () => {
     expect(isVaultPipelineDisplayBusy("recovering")).toBe(true);
-    expect(isVaultListRowActivatable("recovering")).toBe(false);
     expect(isVaultListRowUnlockTarget("recovering")).toBe(false);
     expect(vaultDeleteHold(row, wiping)).toBe("busy");
   });
