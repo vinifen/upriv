@@ -100,9 +100,8 @@ export function VaultLockButton({
   };
 
   return (
-    <Animated.View
-      style={{ opacity: armed ? pulse : 1, width: layout === "block" ? "100%" : undefined }}
-    >
+    // The pulse stays bound: unbinding a native animation mid-fade leaves its opacity on the view.
+    <Animated.View style={{ opacity: pulse, width: layout === "block" ? "100%" : undefined }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label}

@@ -1,22 +1,40 @@
 import { useRef, useState } from "react";
-import { TREE_SPLIT_MAX_PERCENT, TREE_SPLIT_MIN_PERCENT } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 
 interface PaneResizeHandleProps {
   axis: "x" | "y";
-  /** Canonical split percent (`TREE_SPLIT_MIN_PERCENT`–`TREE_SPLIT_MAX_PERCENT`). */
+  /** Size of the pane this divider sets, within `min`–`max` (Home and End go there). */
   value: number;
+  min: number;
+  max: number;
+  /** Arrow-key step; Shift moves five. */
+  step?: number;
+  /**
+   * Where that pane sits: `before` the divider (the explorer), so moving right
+   * or down grows it, or `after` it (the outline), so moving left grows it.
+   */
+  sizes?: "before" | "after";
+  /** Accessible name; the explorer divider's by default. */
+  label?: string;
+  /** Straddles the border it sits on and takes no room of its own (the outline's). */
+  overlay?: boolean;
   onDragStart?: () => void;
   /** Pixel delta from the grab point (not the pointer's absolute position). */
   onDrag: (deltaPx: number) => void;
   onDragEnd?: () => void;
-  onNudge: (nextCanonical: number) => void;
+  onNudge: (next: number) => void;
 }
 
 export function PaneResizeHandle({
   axis,
   value,
+  min,
+  max,
+  step = 1,
+  sizes = "before",
+  label,
+  overlay = false,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -55,12 +73,12 @@ export function PaneResizeHandle({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const step = event.shiftKey ? 5 : 1;
+    const move = (event.shiftKey ? 5 : 1) * step * (sizes === "after" ? -1 : 1);
     let next: number | null = null;
-    if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = value - step;
-    else if (event.key === "ArrowRight" || event.key === "ArrowDown") next = value + step;
-    else if (event.key === "Home") next = TREE_SPLIT_MIN_PERCENT;
-    else if (event.key === "End") next = TREE_SPLIT_MAX_PERCENT;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = value - move;
+    else if (event.key === "ArrowRight" || event.key === "ArrowDown") next = value + move;
+    else if (event.key === "Home") next = min;
+    else if (event.key === "End") next = max;
     if (next === null) return;
     event.preventDefault();
     onNudge(next);
@@ -98,15 +116,16 @@ export function PaneResizeHandle({
     <div
       role="separator"
       aria-orientation={isColumn ? "horizontal" : "vertical"}
-      aria-label={t("modal.file_manager.split.resize")}
-      aria-valuemin={TREE_SPLIT_MIN_PERCENT}
-      aria-valuemax={TREE_SPLIT_MAX_PERCENT}
+      aria-label={label ?? t("modal.file_manager.split.resize")}
+      aria-valuemin={min}
+      aria-valuemax={max}
       aria-valuenow={Math.round(value)}
       tabIndex={0}
       className={[
         "group relative z-[1] flex shrink-0 touch-none select-none items-center justify-center gap-1",
         isColumn ? "h-2 w-full cursor-row-resize" : "h-full w-2 cursor-col-resize",
         isColumn ? "flex-row" : "flex-col",
+        overlay ? (isColumn ? "-my-1" : "-mx-1") : "",
       ].join(" ")}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

@@ -13,7 +13,7 @@ import { useTheme } from "@/theme/ThemeContext";
 import { CONTROL_HEIGHT_MD, radii, spacing } from "@/theme/tokens";
 
 type Variant = "primary" | "secondary" | "accent" | "ghost" | "danger";
-type Size = "sm" | "md";
+type Size = "xs" | "sm" | "md";
 
 interface ButtonProps extends Omit<PressableProps, "children"> {
   label: string;
@@ -61,7 +61,7 @@ export function Button({
       disabled={isDisabled}
       style={({ pressed }) => [
         styles.base,
-        size === "sm" ? styles.sm : styles.md,
+        styles[size],
         {
           backgroundColor: bg,
           borderWidth: outlined ? 1 : 0,
@@ -77,12 +77,8 @@ export function Button({
         <ActivityIndicator color={outlined ? colors.accent : labelColor} />
       ) : (
         <View style={styles.content}>
-          {icon ? <Icon name={icon} size={size === "sm" ? 16 : 18} color={labelColor} /> : null}
-          <Text
-            style={[styles.label, size === "sm" ? styles.smLabel : null, { color: labelColor }]}
-          >
-            {label}
-          </Text>
+          {icon ? <Icon name={icon} size={ICON_SIZE[size]} color={labelColor} /> : null}
+          <Text style={[styles.label, LABEL_STYLE[size], { color: labelColor }]}>{label}</Text>
         </View>
       )}
     </Pressable>
@@ -101,11 +97,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
   },
+  /** Chrome next to a window title. */
+  xs: { height: 24, minHeight: 24, paddingHorizontal: spacing.sm },
   /** Desktop Button `sm` / `md` (`h-8` / `h-10`). */
   sm: { height: 32, minHeight: 32, paddingHorizontal: spacing.md },
   md: { height: CONTROL_HEIGHT_MD, minHeight: CONTROL_HEIGHT_MD },
   pressed: { opacity: 0.85 },
   disabled: { opacity: 0.45 },
   label: { fontSize: 15, fontWeight: "600" },
+  xsLabel: { fontSize: 12, fontWeight: "600" },
   smLabel: { fontSize: 13, fontWeight: "600" },
 });
+
+const ICON_SIZE: Record<Size, number> = { xs: 14, sm: 16, md: 18 };
+const LABEL_STYLE = { xs: styles.xsLabel, sm: styles.smLabel, md: null } as const;

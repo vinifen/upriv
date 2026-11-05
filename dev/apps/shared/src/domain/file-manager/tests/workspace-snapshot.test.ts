@@ -245,11 +245,11 @@ describe("workspaceSnapshot", () => {
     const parsed = parseWorkspaceSnapshot(raw);
     expect(parsed).not.toBeNull();
     expect(parsed?.treeSplitPercent).toBe(28);
+    // `wordWrap: true` is the default, so it is not kept.
     expect(parsed?.files?.["/notes/a.md"]).toEqual({
       markdownView: "source",
       markdownOutlineOpen: false,
       searchQuery: "password123",
-      wordWrap: true,
     });
     expect(parsed?.files?.["/.upriv-workspace.json"]).toBeUndefined();
 
@@ -273,8 +273,59 @@ describe("workspaceSnapshot", () => {
 
     const sanitized = sanitizeWorkspaceSnapshot(parsed!, tree);
     expect(sanitized.files?.["/notes/a.md"]).toBeDefined();
-    expect(sanitized.files?.["/notes/a.md"]?.wordWrap).toBe(true);
+    expect(sanitized.files?.["/notes/a.md"]?.searchQuery).toBe("password123");
     expect(sanitized.files?.["/deleted.md"]).toBeUndefined();
     expect(sanitized.treeSplitPercent).toBe(28);
+  });
+
+  it("keeps only the per-file fields that mean something for each file, without defaults", () => {
+    const raw = JSON.stringify({
+      format_version: 1,
+      openTabs: [],
+      activeTabPath: null,
+      expandedPaths: ["/"],
+      selectedPath: null,
+      explorerCollapsed: false,
+      files: {
+        "/note.md": {
+          markdownView: "preview",
+          markdownOutlineOpen: true,
+          markdownOutlineWidth: 9_999,
+          searchQuery: "",
+          wordWrap: false,
+          stale: "field",
+        },
+        "/plain.txt": { markdownView: "source", markdownOutlineOpen: false, wordWrap: false },
+        "/photo.png": { searchQuery: "x", wordWrap: false },
+        "/clip.mp4": { searchQuery: "x" },
+        "/bad.md": {
+          markdownView: "code",
+          markdownOutlineOpen: "no",
+          markdownOutlineWidth: "wide",
+        },
+        "/narrow.md": { markdownOutlineWidth: 10.6 },
+        "/defaults.md": { markdownView: "preview", markdownOutlineOpen: true, wordWrap: true },
+      },
+    });
+
+    expect(parseWorkspaceSnapshot(raw)?.files).toEqual({
+      "/note.md": { markdownOutlineWidth: 640, wordWrap: false },
+      "/plain.txt": { wordWrap: false },
+      "/narrow.md": { markdownOutlineWidth: 112 },
+    });
+  });
+
+  it("writes a layout from RAM the same way it reads one", () => {
+    const state = {
+      ...createDefaultWorkspaceState(),
+      fileStates: {
+        "/a.md": { markdownView: "preview" as const, markdownOutlineWidth: 240.4 },
+        "/b.md": { wordWrap: true },
+      },
+    };
+
+    expect(workspaceSnapshotFromState(state).files).toEqual({
+      "/a.md": { markdownOutlineWidth: 240 },
+    });
   });
 });

@@ -64,6 +64,7 @@ describe("buildSystemInfoSections", () => {
         "lifecycle_confirm_close_now",
         "lifecycle_confirm_stop",
         "lifecycle_confirm_lock",
+        "lifecycle_row_runs_button",
         "file_manager_dock_expanded",
         "app_home",
         "logs_path",

@@ -7,7 +7,12 @@ import { FileManagerTabBar } from "../editor/FileManagerTabBar";
 import { FileTreeContextMenu } from "../tree/FileTreeContextMenu";
 import { ExplorerToggle, FileTreePanel } from "../tree/FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
-import type { FileManagerEntry, VaultWorkspaceAction } from "@upriv/shared";
+import {
+  TREE_SPLIT_MAX_PERCENT,
+  TREE_SPLIT_MIN_PERCENT,
+  type FileManagerEntry,
+  type VaultWorkspaceAction,
+} from "@upriv/shared";
 import {
   useFileManagerEntry,
   useTreeSplitDrag,
@@ -161,6 +166,8 @@ function OpenFileManagerWorkspace({
             <PaneResizeHandle
               axis={axis}
               value={split.percent}
+              min={TREE_SPLIT_MIN_PERCENT}
+              max={TREE_SPLIT_MAX_PERCENT}
               onDragStart={split.onDragStart}
               onDrag={split.onDrag}
               onDragEnd={split.onDragEnd}
@@ -176,6 +183,7 @@ function OpenFileManagerWorkspace({
             onDelete={fm.requestDelete}
             isPathPending={fm.isImportPending}
             showSave={hasUnsavedEditableTabs(fm)}
+            saving={fm.saving}
             onSave={fm.saveAllFiles}
           />
           <FileEditorPane fm={fm} vaultName={entry.displayName} active={active} />

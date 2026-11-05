@@ -94,6 +94,11 @@ pub struct UiSettings {
     /// its password window, so it never asks twice.
     #[serde(default = "default_false")]
     pub lifecycle_confirm_lock: bool,
+    /// A click on the row of a vault that is not open presses its button
+    /// (Unlock, Stop). Default false. An open vault's row always opens its
+    /// file manager, and a running open reopens its password window.
+    #[serde(default = "default_false")]
+    pub lifecycle_row_runs_button: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,6 +157,7 @@ impl Default for AppSettings {
                 lifecycle_confirm_close_now: true,
                 lifecycle_confirm_stop: true,
                 lifecycle_confirm_lock: false,
+                lifecycle_row_runs_button: false,
             },
             logging: LoggingSettings {
                 enabled: true,

@@ -11,6 +11,8 @@ import {
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
   vaultRowChrome,
+  vaultRowClick,
+  vaultRowClickLabelKey,
   vaultRowWorkClock,
   vaultStatusLabelKey,
   type VaultListViewMode,
@@ -123,11 +125,20 @@ export function VaultRow({
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  // The row opens an open vault's file manager. Unlock, Lock, and Stop belong to the button only.
-  const openFileManager = () => {
-    if (isReorderActive || isDragging) return;
-    onOpenFileManager(vault);
+  const rowClick = vaultRowClick(role, {
+    open: isOpen,
+    resumeOpen,
+    runsButton: appSettings.ui.lifecycle_row_runs_button,
+  });
+  const activateRow = () => {
+    if (isReorderActive || isDragging || rowClick === null) return;
+    if (rowClick === "file_manager") onOpenFileManager(vault);
+    else if (rowClick === "resume_unlock") onUnlockVault(vault);
+    // The button's own arming: a second press may be needed, and a press just after a role change does nothing.
+    else if (role === "stop") arming.press(() => onStopWork(vault));
+    else arming.press(() => onUnlockVault(vault));
   };
+  const rowLabelKey = vaultRowClickLabelKey(role, rowClick);
 
   return (
     <article
@@ -142,23 +153,23 @@ export function VaultRow({
         rowGap,
         density.article,
         vaultStatusRowClass[status],
-        isOpen ? "cursor-pointer" : "",
+        rowLabelKey ? "cursor-pointer" : "",
         isDragging ? "opacity-45" : "",
         vaultListDropOverClass(isDragOver, isDropBlocked),
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={isOpen ? openFileManager : undefined}
+      onClick={rowLabelKey ? activateRow : undefined}
       onKeyDown={(event) => {
-        if (!isOpen) return;
+        if (!rowLabelKey) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          openFileManager();
+          activateRow();
         }
       }}
-      role={isOpen ? "button" : undefined}
-      tabIndex={isOpen ? 0 : undefined}
-      aria-label={isOpen ? t("action.open_upriv") : undefined}
+      role={rowLabelKey ? "button" : undefined}
+      tabIndex={rowLabelKey ? 0 : undefined}
+      aria-label={rowLabelKey ? t(rowLabelKey) : undefined}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {!dragDisabled ? (

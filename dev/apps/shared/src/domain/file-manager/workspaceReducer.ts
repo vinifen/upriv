@@ -1,3 +1,4 @@
+import { persistableOutlineWidth } from "./outlineWidth";
 import { markdownViewMode } from "./workspaceTypes";
 import type {
   MarkdownViewMode,
@@ -6,23 +7,6 @@ import type {
   VaultWorkspaceState,
 } from "./workspaceTypes";
 import { ancestorFolderPaths, isDescendantPath, remapLogicalPath } from "../file-tree/treeOps";
-
-export type {
-  PerFileWorkspaceState,
-  UnsavedPromptAction,
-  VaultWorkspaceState,
-} from "./workspaceTypes";
-export {
-  createDefaultWorkspaceState,
-  fileEditorWordWrap,
-  fileMarkdownOutlineOpen,
-  fileMarkdownView,
-  fileSearchQuery,
-  hasUnsavedWorkspaceChanges,
-  isPathDirty,
-  sessionPathKind,
-  type SessionPathKind,
-} from "./workspaceTypes";
 
 export type VaultWorkspaceAction =
   | { type: "toggle_folder"; path: string }
@@ -65,6 +49,7 @@ export type VaultWorkspaceAction =
   | { type: "set_explorer_search_open"; open: boolean }
   | { type: "set_explorer_search_query"; query: string }
   | { type: "set_file_markdown_outline_open"; path: string; open: boolean }
+  | { type: "set_file_markdown_outline_width"; path: string; width: number }
   | { type: "set_file_word_wrap"; path: string; wrap: boolean }
   | { type: "set_file_search_query"; path: string; query: string }
   | { type: "set_tree_split_percent"; percent: number }
@@ -476,6 +461,13 @@ export function vaultWorkspaceReducer(
       return { ...state, explorerSearchQuery: action.query };
     case "set_file_markdown_outline_open":
       return patchFileState(state, action.path, "markdownOutlineOpen", action.open);
+    case "set_file_markdown_outline_width":
+      return patchFileState(
+        state,
+        action.path,
+        "markdownOutlineWidth",
+        persistableOutlineWidth(action.width),
+      );
     case "set_file_word_wrap":
       return patchFileState(state, action.path, "wordWrap", action.wrap);
     case "set_file_search_query":

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveUnsavedPrompt, vaultWorkspaceReducer } from "../workspaceReducer";
 import {
   createDefaultWorkspaceState,
   fileEditorWordWrap,
@@ -7,10 +8,8 @@ import {
   fileSearchQuery,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
-  resolveUnsavedPrompt,
   sessionPathKind,
-  vaultWorkspaceReducer,
-} from "../workspaceReducer";
+} from "../workspaceTypes";
 
 describe("createDefaultWorkspaceState", () => {
   it("starts with root expanded and no dirty tabs", () => {

@@ -317,8 +317,9 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     includeFontPadding: false,
   },
+  // As wide as its text at most, so the title accessory follows the vault name.
   context: {
-    flex: 1,
+    flexShrink: 1,
     minWidth: 0,
     fontSize: 12,
     lineHeight: 16,

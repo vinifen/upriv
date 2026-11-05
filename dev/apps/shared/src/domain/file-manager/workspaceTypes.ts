@@ -32,11 +32,13 @@ export function markdownViewMode(value: unknown): MarkdownViewMode {
 
 /**
  * Per-file view, outline, word wrap, and in-file search. A missing field uses the
- * default: Read (`preview`), outline shown, wrapped, no search.
+ * default: Read (`preview`), outline shown at the platform width, wrapped, no search.
  */
 export interface PerFileWorkspaceState {
   markdownView?: MarkdownViewMode;
   markdownOutlineOpen?: boolean;
+  /** Outline column width in px (`outlineWidth`). */
+  markdownOutlineWidth?: number;
   searchQuery?: string;
   wordWrap?: boolean;
 }
@@ -142,6 +144,14 @@ export function fileMarkdownView(
 
 export function fileMarkdownOutlineOpen(state: VaultWorkspaceState, path: string | null): boolean {
   return fileState(state, path)?.markdownOutlineOpen ?? true;
+}
+
+/** The file's outline width, or `null` for the platform default. */
+export function fileMarkdownOutlineWidth(
+  state: VaultWorkspaceState,
+  path: string | null,
+): number | null {
+  return fileState(state, path)?.markdownOutlineWidth ?? null;
 }
 
 export function fileEditorWordWrap(state: VaultWorkspaceState, path: string | null): boolean {

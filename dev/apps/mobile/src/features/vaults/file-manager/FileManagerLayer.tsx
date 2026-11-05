@@ -85,7 +85,8 @@ export const FileManagerLayer = memo(function FileManagerLayer() {
               // One tap: the files waiting are dropped and the one being written leaves nothing.
               <Button
                 variant="secondary"
-                size="sm"
+                size="xs"
+                hitSlop={6}
                 label={t("modal.file_manager.action.stop_import")}
                 onPress={() => cancelImports(maximizedEntry.vaultId)}
               />

@@ -50,6 +50,7 @@ import {
 } from "@upriv/shared";
 import { useJobService, useVaultFileSystemService, useVaultService } from "@/platform/services";
 import {
+  useExplorerSearch,
   useFolderFallback,
   useOpenTabContents,
   useToast,
@@ -346,7 +347,7 @@ export function useVaultFileManager({
     [contents, workspace.editorDrafts],
   );
 
-  const saveFile = useCallback(
+  const writeDirtyFile = useCallback(
     async (path: string): Promise<boolean> => {
       for (let pass = 0; pass < MAX_DIRTY_DRAFT_SAVE_PASSES; pass++) {
         const current = workspaceRef.current;
@@ -378,6 +379,28 @@ export function useVaultFileManager({
     [contentOf, dispatch, fs, showToast, storeSavedText, t, vaultId],
   );
 
+  /**
+   * A file has one save on its way at most: another ask joins it, and it
+   * writes what was typed meanwhile before it ends. `saving` turns on with the
+   * ask, so Save answers at once while the write seals the vault.
+   */
+  const savesRef = useRef(new Map<string, Promise<boolean>>());
+  const [saving, setSaving] = useState(false);
+  const saveFile = useCallback(
+    (path: string): Promise<boolean> => {
+      const running = savesRef.current.get(path);
+      if (running) return running;
+      const save = writeDirtyFile(path).finally(() => {
+        savesRef.current.delete(path);
+        setSaving(savesRef.current.size > 0);
+      });
+      savesRef.current.set(path, save);
+      setSaving(true);
+      return save;
+    },
+    [writeDirtyFile],
+  );
+
   const saveFiles = useCallback(
     async (paths: readonly string[]): Promise<boolean> => {
       let blocked = false;
@@ -405,6 +428,8 @@ export function useVaultFileManager({
 
   const [unsavedSaving, setUnsavedSaving] = useState(false);
   const unsavedSaveGenRef = useRef(0);
+
+  const explorerSearch = useExplorerSearch(workspace, dispatch);
 
   /** VS Code-style: click a file in the explorer → open/activate it in the editor. */
   const openFile = useCallback(
@@ -1023,6 +1048,8 @@ export function useVaultFileManager({
     processingImportPaths: processingPathSet,
     saveFile,
     saveAllFiles,
+    saving,
+    explorerSearch,
     openFile,
     createFile,
     createFolder,

@@ -44,6 +44,8 @@ interface MarkdownPreviewProps {
   searchQuery?: string;
   searchActiveIndex?: number;
   onMatchCountChange?: (count: number) => void;
+  /** The outline sits right of the note, so the text runs closer to the edge. */
+  besideOutline?: boolean;
 }
 
 interface PreviewActions {
@@ -83,6 +85,7 @@ function MarkdownPreviewBody({
   searchQuery = "",
   searchActiveIndex = 0,
   onMatchCountChange,
+  besideOutline = false,
   handleRef,
 }: MarkdownPreviewProps & { handleRef: ForwardedRef<MarkdownPreviewHandle> }) {
   const { t } = useTranslation();
@@ -202,7 +205,7 @@ function MarkdownPreviewBody({
     <ScrollView
       ref={scrollRef}
       style={[styles.fill, { backgroundColor: colors.surfaceContainerHigh }]}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, besideOutline ? styles.contentBesideOutline : null]}
       scrollEventThrottle={16}
       onScrollBeginDrag={onUserScroll}
       onScroll={(event) => {
@@ -707,6 +710,7 @@ const styles = StyleSheet.create({
   center: { alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   body: { textAlign: "center", fontSize: 14, lineHeight: 20 },
   content: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 28 },
+  contentBesideOutline: { paddingRight: 8 },
   paragraph: { fontSize: 15, lineHeight: 22, marginBottom: 10 },
   strong: { fontWeight: "600" },
   em: { fontStyle: "italic" },

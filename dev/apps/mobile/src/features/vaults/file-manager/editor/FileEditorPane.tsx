@@ -13,6 +13,7 @@ import {
   fileBaseName,
   fileEditorWordWrap,
   fileMarkdownOutlineOpen,
+  fileMarkdownOutlineWidth,
   fileMarkdownView,
   fileSearchQuery,
   findTextMatches,
@@ -20,16 +21,23 @@ import {
   stepMatchIndex,
   vaultFileLanguageFromPath,
 } from "@upriv/shared";
-import { useOutlineHeading, useSettledValue, useValueAfterPaint } from "@upriv/shared/react";
+import {
+  useOutlineHeading,
+  useOutlineWidthDrag,
+  useSettledValue,
+  useValueAfterPaint,
+} from "@upriv/shared/react";
 import { Button, ElapsedTime } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { ExplorerActions } from "../tree/ExplorerActions";
+import { PaneResizeHandle } from "../workspace/PaneResizeHandle";
 import { CodeEditor, type CodeEditorHandle } from "./CodeEditor";
 import { EditorPathBar } from "./EditorPathBar";
 import { FileEditorSearch, type FileEditorSearchHandle } from "./FileEditorSearch";
-import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "./MarkdownOutline";
+import { MarkdownOutlinePanel, MarkdownOutlineToggle, OUTLINE_MAX_WIDTH } from "./MarkdownOutline";
 import { MarkdownPreview, type MarkdownPreviewHandle } from "./MarkdownPreview";
 import { MarkdownViewToggle } from "./MarkdownViewToggle";
 import { WordWrapToggle } from "./WordWrapToggle";
@@ -105,6 +113,33 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [previewMatchCount, setPreviewMatchCount] = useState(0);
   const heading = useOutlineHeading(activeTabPath);
+  const outlineRef = useRef<View>(null);
+  /** Widths from the last layout: a drag reads them as it starts. */
+  const outlineWidthRef = useRef(0);
+  const editorRowWidthRef = useRef(0);
+  // Moves size the outline through native props: a re-render per move is too slow.
+  const outlineDrag = useOutlineWidthDrag({
+    savedWidth: fileMarkdownOutlineWidth(workspace, activeTabPath),
+    measure: () => ({ outline: outlineWidthRef.current, row: editorRowWidthRef.current }),
+    onDragFrame: (width) => {
+      outlineRef.current?.setNativeProps({
+        style:
+          width === null
+            ? { width: 0, opacity: 0 }
+            : { width, maxWidth: OUTLINE_MAX_WIDTH, opacity: 1 },
+      });
+    },
+    onCommit: (width) => {
+      if (activeTabPath) {
+        dispatch({ type: "set_file_markdown_outline_width", path: activeTabPath, width });
+      }
+    },
+    onCollapse: () => {
+      if (activeTabPath) {
+        dispatch({ type: "set_file_markdown_outline_open", path: activeTabPath, open: false });
+      }
+    },
+  });
 
   const content = activeTabPath ? getEditorContent(activeTabPath) : "";
   // Matches and line numbers read this copy: a key reaches the input first and
@@ -148,7 +183,19 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
       <EmptyState
         kicker={t("modal.file_manager.viewer.empty_kicker")}
         body={t("modal.file_manager.viewer.empty_body_touch")}
-      />
+      >
+        {/* The explorer's own buttons, within reach while no file is open. */}
+        <View style={styles.emptyActions}>
+          <ExplorerActions fm={fm} variant="labeled" />
+          <Button
+            label={t("modal.file_manager.viewer.empty_search")}
+            icon="search"
+            variant="ghost"
+            size="sm"
+            onPress={() => fm.explorerSearch.show(true)}
+          />
+        </View>
+      </EmptyState>
     );
   }
 
@@ -293,7 +340,12 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
           </>
         ) : null}
       </EditorPathBar>
-      <View style={styles.editorRow}>
+      <View
+        style={styles.editorRow}
+        onLayout={(event) => {
+          editorRowWidthRef.current = event.nativeEvent.layout.width;
+        }}
+      >
         <View style={styles.editorColumn}>
           {showPreview ? (
             <MarkdownPreview
@@ -303,6 +355,7 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
               parser={markdownParser}
               searchQuery={searchQuery}
               searchActiveIndex={activeMatchIndex}
+              besideOutline={showOutline}
               onMatchCountChange={setPreviewMatchCount}
               onActiveHeadingChange={heading.follow}
               onUserScroll={heading.release}
@@ -319,6 +372,7 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
               shownContent={shownContent}
               ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
               wordWrap={currentWordWrap}
+              besideOutline={showOutline}
               matches={codeMatches}
               activeMatchIndex={activeMatchIndex}
               headingOffsets={headingOffsets}
@@ -331,15 +385,31 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
           )}
         </View>
         {showOutline ? (
-          <MarkdownOutlinePanel
-            outline={outlineModel}
-            activeIndex={heading.index}
-            onSelect={(index, entry) => {
-              heading.pick(index);
-              if (showPreview) previewRef.current?.scrollToHeading(index);
-              else editorRef.current?.revealOffset(entry.offset);
-            }}
-          />
+          <>
+            {/* Drag toward the right edge to close the outline; this note keeps its width. */}
+            <PaneResizeHandle
+              axis="x"
+              overlay
+              label={t("modal.file_manager.markdown.outline_resize")}
+              onDragStart={outlineDrag.onDragStart}
+              onDrag={outlineDrag.onDrag}
+              onDragEnd={outlineDrag.onDragEnd}
+            />
+            <MarkdownOutlinePanel
+              panelRef={outlineRef}
+              width={outlineDrag.width}
+              onWidth={(width) => {
+                outlineWidthRef.current = width;
+              }}
+              outline={outlineModel}
+              activeIndex={heading.index}
+              onSelect={(index, entry) => {
+                heading.pick(index);
+                if (showPreview) previewRef.current?.scrollToHeading(index);
+                else editorRef.current?.revealOffset(entry.offset);
+              }}
+            />
+          </>
         ) : null}
       </View>
     </View>
@@ -349,6 +419,14 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
 const styles = StyleSheet.create({
   editorColumn: { flex: 1, minHeight: 0, minWidth: 0 },
   importNotice: { alignItems: "center", gap: spacing.sm },
+  emptyActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    maxWidth: 420,
+  },
   editorRow: { flex: 1, minHeight: 0, flexDirection: "row" },
   empty: {
     flex: 1,

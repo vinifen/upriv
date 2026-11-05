@@ -10,6 +10,7 @@ export {
   createDefaultWorkspaceState,
   fileEditorWordWrap,
   fileMarkdownOutlineOpen,
+  fileMarkdownOutlineWidth,
   fileMarkdownView,
   fileSearchQuery,
   hasUnsavedWorkspaceChanges,
@@ -17,6 +18,16 @@ export {
   markdownViewMode,
   sessionPathKind,
 } from "./workspaceTypes";
+export {
+  OUTLINE_MAX_ROW_SHARE,
+  OUTLINE_WIDTH_MAX_PX,
+  OUTLINE_WIDTH_MIN_PX,
+  clampOutlineWidth,
+  displayOutlineWidth,
+  isOutlineDragCollapsed,
+  outlineWidthFromDrag,
+  persistableOutlineWidth,
+} from "./outlineWidth";
 export type { IndexedMatch, TextMatch } from "./fileSearch";
 export {
   findTextMatches,

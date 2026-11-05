@@ -318,6 +318,11 @@ describe("useWorkspacePersistence", () => {
       { fileStates: { "/a.md": { markdownOutlineOpen: false } } },
       '"markdownOutlineOpen": false',
     ],
+    [
+      "a file's outline width",
+      { fileStates: { "/a.md": { markdownOutlineWidth: 260 } } },
+      '"markdownOutlineWidth": 260',
+    ],
     ["a file's word wrap", { fileStates: { "/a.md": { wordWrap: false } } }, '"wordWrap": false'],
     ["the explorer split", { treeSplitPercent: 35 }, '"treeSplitPercent": 35'],
     ["the explorer search bar", { explorerSearchOpen: true }, '"explorerSearchOpen": true'],
@@ -353,6 +358,73 @@ describe("useWorkspacePersistence", () => {
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
     expect(written).toContain(expected);
+  });
+
+  it.each<[string, string]>([
+    [
+      "stale and unknown entries",
+      JSON.stringify({
+        format_version: 1,
+        openTabs: ["/gone.md"],
+        activeTabPath: "/gone.md",
+        expandedPaths: ["/", "/missing"],
+        selectedPath: "/gone.md",
+        explorerCollapsed: false,
+        explorerSearchOpen: false,
+        explorerSearchQuery: "",
+        files: { "/gone.md": { markdownView: "source" }, "/a.md": { wordWrap: true } },
+        leftover: true,
+      }),
+    ],
+    ["a file it cannot read", "{ not json"],
+  ])("writes the layout again, clean, when the file holds %s", async (_label, content) => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const fs = stubFs({
+      setFileContent,
+      getFileContent: async () => ({ language: "text", content }),
+    });
+    renderHook(() =>
+      useWorkspacePersistence({
+        vaultId: "notes",
+        workspace: createDefaultWorkspaceState(),
+        tree: null,
+        fs,
+        dispatch: vi.fn(),
+      }),
+    );
+
+    await waitFor(() => expect(setFileContent).toHaveBeenCalledTimes(1));
+    expect(setFileContent.mock.calls[0]?.[2]).toBe(
+      serializeWorkspaceSnapshot(workspaceSnapshotFromState(createDefaultWorkspaceState())),
+    );
+  });
+
+  it("leaves a clean file alone after loading it", async () => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const getFileContent = vi.fn(async () => ({
+      language: "text" as const,
+      content: serializeWorkspaceSnapshot(
+        workspaceSnapshotFromState(createDefaultWorkspaceState()),
+      ),
+    }));
+    const fs = stubFs({ setFileContent, getFileContent });
+    renderHook(() =>
+      useWorkspacePersistence({
+        vaultId: "notes",
+        workspace: createDefaultWorkspaceState(),
+        tree: null,
+        fs,
+        dispatch: vi.fn(),
+      }),
+    );
+
+    await waitFor(() => expect(getFileContent).toHaveBeenCalled());
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS * 2);
+    });
+    vi.useRealTimers();
+    expect(setFileContent).not.toHaveBeenCalled();
   });
 
   it("checks a write against the loaded tree without listing the vault", async () => {

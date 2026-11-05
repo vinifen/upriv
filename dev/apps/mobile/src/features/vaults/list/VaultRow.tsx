@@ -7,6 +7,8 @@ import {
   vaultLastAccessedLabel,
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
+  vaultRowClick,
+  vaultRowClickLabelKey,
   vaultRowWorkClock,
   vaultStatusLabelKey,
   VAULT_ROW_DENSITY,
@@ -17,7 +19,7 @@ import {
 import { Icon } from "@/components/icons";
 import { ElapsedTime, TextWidthProbe } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { useRowArming, useRowButtonStack } from "@upriv/shared/react";
+import { disarmRowButton, useRowArming, useRowButtonStack } from "@upriv/shared/react";
 import { claimRowArmTouch } from "@/hooks/useRowArmingDismiss";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
@@ -122,6 +124,23 @@ export function VaultRow({
   const role = vaultRowButtonRole(status, work);
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
   const claimTouch = () => claimRowArmTouch(vault.id);
+  const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
+  const rowClick = vaultRowClick(role, {
+    open: isOpen,
+    resumeOpen,
+    runsButton: appSettings.ui.lifecycle_row_runs_button,
+  });
+  const activateRow = () => {
+    if (isDragging || rowClick === null) return;
+    if (rowClick === "file_manager") onOpenFileManager(vault);
+    else if (rowClick === "resume_unlock") onUnlock(vault);
+    // The button's own arming: a second tap may be needed, and a tap just after a role change does nothing.
+    else if (role === "stop") arming.press(() => onStopWork(vault));
+    else arming.press(() => onUnlock(vault));
+  };
+  const rowLabelKey = vaultRowClickLabelKey(role, rowClick);
+  // A row that presses its button keeps that button armed for a tap anywhere on it.
+  const claimRowTouch = rowClick === "button" ? claimTouch : undefined;
   // The work's elapsed time takes the last-accessed text's place.
   const lastAccessedOrElapsed = (
     <ElapsedTime
@@ -185,6 +204,8 @@ export function VaultRow({
       onLockVault={onLock}
       onUnlockVault={onUnlock}
       onCloseNow={onCloseNow}
+      // Another control in the row puts an armed button back to normal.
+      onTouchStart={claimRowTouch ? disarmRowButton : undefined}
     />
   );
 
@@ -251,12 +272,6 @@ export function VaultRow({
     </View>
   );
 
-  const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  // The row opens an open vault's file manager. Unlock, Lock, and Stop belong to the button only.
-  const openFileManager = () => {
-    if (isDragging) return;
-    onOpenFileManager(vault);
-  };
   const lockButton = (layout: "inline" | "block") => (
     <View onTouchStart={claimTouch} style={layout === "block" ? styles.blockLock : null}>
       <VaultLockButton
@@ -273,7 +288,7 @@ export function VaultRow({
       />
     </View>
   );
-  const activateLabel = isOpen ? t("action.open_upriv") : undefined;
+  const activateLabel = rowLabelKey ? t(rowLabelKey) : undefined;
   const dropRing = (
     <DropOverRing
       visible={isDragOver}
@@ -288,8 +303,9 @@ export function VaultRow({
       <Pressable
         {...dropTargetProps}
         onLayout={handleLayout}
-        onPress={isOpen ? openFileManager : undefined}
-        accessibilityRole={isOpen ? "button" : undefined}
+        onTouchStart={claimRowTouch}
+        onPress={rowLabelKey ? activateRow : undefined}
+        accessibilityRole={rowLabelKey ? "button" : undefined}
         accessibilityLabel={activateLabel}
         style={[
           styles.blockCard,
@@ -324,8 +340,9 @@ export function VaultRow({
     <Pressable
       {...dropTargetProps}
       onLayout={handleLayout}
-      onPress={isOpen ? openFileManager : undefined}
-      accessibilityRole={isOpen ? "button" : undefined}
+      onTouchStart={claimRowTouch}
+      onPress={rowLabelKey ? activateRow : undefined}
+      accessibilityRole={rowLabelKey ? "button" : undefined}
       accessibilityLabel={activateLabel}
       style={[
         styles.row,

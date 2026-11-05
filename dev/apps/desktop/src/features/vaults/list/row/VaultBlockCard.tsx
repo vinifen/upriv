@@ -8,6 +8,8 @@ import {
   vaultLastAccessedLabel,
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
+  vaultRowClick,
+  vaultRowClickLabelKey,
   vaultRowWorkClock,
   vaultStatusLabelKey,
   type VaultListItem,
@@ -92,11 +94,20 @@ export function VaultBlockCard({
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  // The card opens an open vault's file manager. Unlock, Lock, and Stop belong to the button only.
-  const openFileManager = () => {
-    if (isReorderActive || isDragging) return;
-    onOpenFileManager(vault);
+  const cardClick = vaultRowClick(role, {
+    open: isOpen,
+    resumeOpen,
+    runsButton: appSettings.ui.lifecycle_row_runs_button,
+  });
+  const activateCard = () => {
+    if (isReorderActive || isDragging || cardClick === null) return;
+    if (cardClick === "file_manager") onOpenFileManager(vault);
+    else if (cardClick === "resume_unlock") onUnlockVault(vault);
+    // The button's own arming: a second press may be needed, and a press just after a role change does nothing.
+    else if (role === "stop") arming.press(() => onStopWork(vault));
+    else arming.press(() => onUnlockVault(vault));
   };
+  const cardLabelKey = vaultRowClickLabelKey(role, cardClick);
 
   return (
     <article
@@ -105,23 +116,23 @@ export function VaultBlockCard({
       className={[
         "vault-row relative z-0 flex min-h-0 min-w-0 w-full flex-col gap-2.5 overflow-visible rounded-xl p-3.5 transition-[opacity,box-shadow,background-color] sm:gap-3 sm:p-4",
         vaultStatusRowClass[status],
-        isOpen ? "cursor-pointer" : "",
+        cardLabelKey ? "cursor-pointer" : "",
         isDragging ? "opacity-45" : "",
         vaultListDropOverClass(isDragOver, isDropBlocked),
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={isOpen ? openFileManager : undefined}
+      onClick={cardLabelKey ? activateCard : undefined}
       onKeyDown={(event) => {
-        if (!isOpen) return;
+        if (!cardLabelKey) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          openFileManager();
+          activateCard();
         }
       }}
-      role={isOpen ? "button" : undefined}
-      tabIndex={isOpen ? 0 : undefined}
-      aria-label={isOpen ? t("action.open_upriv") : undefined}
+      role={cardLabelKey ? "button" : undefined}
+      tabIndex={cardLabelKey ? 0 : undefined}
+      aria-label={cardLabelKey ? t(cardLabelKey) : undefined}
     >
       <div className="flex min-w-0 items-start gap-2">
         {!dragDisabled ? (

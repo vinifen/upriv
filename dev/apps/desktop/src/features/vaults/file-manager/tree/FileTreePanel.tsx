@@ -5,17 +5,15 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type CSSProperties,
   type DragEvent,
   type MouseEvent,
   type Ref,
 } from "react";
-import { Icon, type IconName } from "@/components/icons";
+import { Icon } from "@/components/icons";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
-  findNode,
   getParentPath,
   isDescendantPath,
   isImportQueueSlotPath,
@@ -34,8 +32,9 @@ import {
   type VaultWorkspaceAction,
 } from "@upriv/shared";
 import { useSearchCollapsedFolders } from "@upriv/shared/react";
-import { allowFileManagerDrop, beginOsFileImport, filesFromFileInput } from "../lib/osFileDrop";
+import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { ExplorerActions, ExplorerToolButton } from "./ExplorerActions";
 import { ExplorerSearch } from "./ExplorerSearch";
 import { treeDropZoneEdges, type TreeDropZoneEdge } from "./treeDropZone";
 
@@ -103,14 +102,6 @@ const DROP_ZONE_ROUNDING: Record<TreeDropZoneEdge, string> = {
   middle: "",
   last: "rounded-b-sm",
 };
-
-function importTargetPath(fm: FileManagerApi): string {
-  const selected = fm.workspace.selectedPath;
-  if (!selected || selected === "/") return "/";
-  const node = findNode(fm.tree, selected);
-  if (node?.type === "folder") return selected;
-  return getParentPath(selected);
-}
 
 const FileTreeRow = memo(function FileTreeRow({
   path,
@@ -620,64 +611,19 @@ export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabe
   );
 }
 
-const EXPLORER_TOOL_PAIR_CLASS =
-  "flex shrink-0 [@container(width<9rem)]:flex-1 [@container(width<9rem)]:justify-around";
-
-function ExplorerToolButton({
-  icon,
-  label,
-  pressed,
-  active = false,
-  onClick,
-}: {
-  icon: IconName;
-  label: string;
-  /** A toggle's state. A plain action leaves it out. */
-  pressed?: boolean;
-  /** Still at work with its panel closed. */
-  active?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={[
-        "flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors",
-        pressed
-          ? "bg-surface-container-highest text-on-surface"
-          : active
-            ? "text-[var(--accent)] hover:bg-surface-container-highest"
-            : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
-      ].join(" ")}
-      onClick={onClick}
-      aria-label={label}
-      aria-pressed={pressed}
-      title={label}
-    >
-      <Icon name={icon} size={14} />
-    </button>
-  );
-}
-
 export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
-  const importFilesInputRef = useRef<HTMLInputElement>(null);
-  const importFolderInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  /** The button opened the bar, so typing starts there. A restored bar leaves focus alone. */
-  const focusSearchRef = useRef(false);
   const { explorerSearchOpen: searchOpen, explorerSearchQuery: search } = fm.workspace;
   // A large vault filters behind the typing, not in its way.
   const deferredSearch = useDeferredValue(search);
   const searchAtWork = !searchOpen && search.trim().length > 0;
+  const { focusRef: searchFocusRef, focusTick: searchFocusTick } = fm.explorerSearch;
+  // Also on mount: the empty editor's Find files shows a hidden explorer with its bar open.
   useEffect(() => {
-    if (searchOpen && focusSearchRef.current) searchInputRef.current?.focus();
-    focusSearchRef.current = false;
-  }, [searchOpen]);
-  const setSearchOpen = (open: boolean) => {
-    focusSearchRef.current = open;
-    fm.dispatch({ type: "set_explorer_search_open", open });
-  };
+    if (searchOpen && searchFocusRef.current) searchInputRef.current?.focus();
+    searchFocusRef.current = false;
+  }, [searchFocusRef, searchFocusTick, searchOpen]);
   const extent = `${splitPercent}%`;
   const paneStyle: CSSProperties = {
     ...(layout === "column"
@@ -736,28 +682,6 @@ export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePan
 
   const rootDropActive = fm.workspace.dropTargetPath === "/";
 
-  const openImportFilesPicker = () => {
-    importFilesInputRef.current?.click();
-  };
-
-  const openImportFolderPicker = () => {
-    importFolderInputRef.current?.click();
-  };
-
-  const handleImportFilesChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = filesFromFileInput(event.target.files);
-    event.target.value = "";
-    if (files.length === 0) return;
-    void fm.importFiles(importTargetPath(fm), files, { openFirstViewable: true });
-  };
-
-  const handleImportFolderChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = filesFromFileInput(event.target.files);
-    event.target.value = "";
-    if (files.length === 0) return;
-    void fm.importFiles(importTargetPath(fm), files, { openFirstViewable: true });
-  };
-
   return (
     <aside
       ref={paneRef}
@@ -765,71 +689,28 @@ export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePan
       className="flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden bg-surface-container"
     >
       {/*
-        Label truncates first; once only the icon is left, the actions wrap by group
-        (create, import, search). They wrap below 9rem of content (label icon + five
-        buttons), and then spread evenly across their own rows.
+        Search follows the label, apart from the actions. The label truncates
+        first; once only its icon is left, the actions wrap by group (create,
+        import). They wrap below 9.5rem of content (label icon, search, its gap,
+        four buttons), and then spread evenly across their own rows.
       */}
       <div className="flex shrink-0 flex-wrap items-center gap-y-0.5 px-1 pb-0.5 pt-1 [container-type:inline-size]">
         <ExplorerToggle fm={fm} showLabel />
-        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end [@container(width<9rem)]:grow">
-          <input
-            ref={importFilesInputRef}
-            type="file"
-            multiple
-            className="sr-only"
-            aria-hidden
-            tabIndex={-1}
-            onChange={handleImportFilesChange}
+        <div className="mr-2 flex shrink-0">
+          <ExplorerToolButton
+            icon="search"
+            label={t(
+              searchAtWork
+                ? "modal.file_manager.explorer.search_toggle_active"
+                : "modal.file_manager.explorer.search_toggle",
+            )}
+            pressed={searchOpen}
+            active={searchAtWork}
+            onClick={fm.explorerSearch.toggle}
           />
-          <input
-            ref={importFolderInputRef}
-            type="file"
-            multiple
-            className="sr-only"
-            aria-hidden
-            tabIndex={-1}
-            // @ts-expect-error — non-standard directory picker attribute (Chromium, Firefox, Safari)
-            webkitdirectory=""
-            directory=""
-            onChange={handleImportFolderChange}
-          />
-          <div className={EXPLORER_TOOL_PAIR_CLASS}>
-            <ExplorerToolButton
-              icon="file"
-              label={t("modal.file_manager.context.new_file")}
-              onClick={() => fm.createFile(importTargetPath(fm))}
-            />
-            <ExplorerToolButton
-              icon="folder"
-              label={t("modal.file_manager.context.new_folder")}
-              onClick={() => fm.createFolder(importTargetPath(fm))}
-            />
-          </div>
-          <div className={EXPLORER_TOOL_PAIR_CLASS}>
-            <ExplorerToolButton
-              icon="arrow-up"
-              label={t("modal.file_manager.explorer.import_files")}
-              onClick={openImportFilesPicker}
-            />
-            <ExplorerToolButton
-              icon="archive"
-              label={t("modal.file_manager.explorer.import_folder")}
-              onClick={openImportFolderPicker}
-            />
-          </div>
-          <div className={EXPLORER_TOOL_PAIR_CLASS}>
-            <ExplorerToolButton
-              icon="search"
-              label={t(
-                searchAtWork
-                  ? "modal.file_manager.explorer.search_toggle_active"
-                  : "modal.file_manager.explorer.search_toggle",
-              )}
-              pressed={searchOpen}
-              active={searchAtWork}
-              onClick={() => setSearchOpen(!searchOpen)}
-            />
-          </div>
+        </div>
+        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end [@container(width<9.5rem)]:grow">
+          <ExplorerActions fm={fm} variant="toolbar" />
         </div>
       </div>
       {searchOpen ? (
@@ -837,7 +718,7 @@ export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePan
           inputRef={searchInputRef}
           query={search}
           onQueryChange={(query) => fm.dispatch({ type: "set_explorer_search_query", query })}
-          onClose={() => setSearchOpen(false)}
+          onClose={() => fm.explorerSearch.show(false)}
         />
       ) : null}
       {fm.folderPresence?.get("/") === "none" ? (

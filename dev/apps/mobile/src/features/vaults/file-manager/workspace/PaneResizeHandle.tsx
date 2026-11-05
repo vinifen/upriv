@@ -6,6 +6,10 @@ import { useTheme } from "@/theme";
 
 interface PaneResizeHandleProps {
   axis: "x" | "y";
+  /** Accessible name; the explorer divider's by default. */
+  label?: string;
+  /** Straddles the border it sits on and takes no room of its own (the outline's). */
+  overlay?: boolean;
   onDragStart?: () => void;
   /** Pixel delta from the grab point (not the pointer's absolute position). */
   onDrag: (deltaPx: number) => void;
@@ -13,7 +17,14 @@ interface PaneResizeHandleProps {
 }
 
 /** Desktop `PaneResizeHandle` parity — grip icon with line segments that stop at the icon. */
-export function PaneResizeHandle({ axis, onDragStart, onDrag, onDragEnd }: PaneResizeHandleProps) {
+export function PaneResizeHandle({
+  axis,
+  label,
+  overlay = false,
+  onDragStart,
+  onDrag,
+  onDragEnd,
+}: PaneResizeHandleProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const [active, setActive] = useState(false);
@@ -71,9 +82,14 @@ export function PaneResizeHandle({ axis, onDragStart, onDrag, onDragEnd }: PaneR
   return (
     <View
       {...panResponder.panHandlers}
-      style={[styles.hit, isColumn ? styles.hitY : styles.hitX, isColumn ? styles.row : styles.col]}
+      style={[
+        styles.hit,
+        isColumn ? styles.hitY : styles.hitX,
+        isColumn ? styles.row : styles.col,
+        overlay ? (isColumn ? styles.overlayY : styles.overlayX) : null,
+      ]}
       accessibilityRole="adjustable"
-      accessibilityLabel={t("modal.file_manager.split.resize")}
+      accessibilityLabel={label ?? t("modal.file_manager.split.resize")}
     >
       {segment}
       <View
@@ -97,6 +113,8 @@ const styles = StyleSheet.create({
   },
   hitY: { height: 8, width: "100%" },
   hitX: { width: 8, height: "100%" },
+  overlayY: { marginVertical: -4 },
+  overlayX: { marginHorizontal: -4 },
   row: { flexDirection: "row" },
   col: { flexDirection: "column" },
   segment: {

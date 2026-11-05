@@ -35,6 +35,8 @@ interface MarkdownPreviewProps {
   searchActiveIndex?: number;
   onMatchCountChange?: (count: number) => void;
   onActiveHeadingChange?: (index: number) => void;
+  /** The outline's border closes the note on the right, so its text runs closer to it. */
+  besideOutline?: boolean;
 }
 
 interface PreviewActions {
@@ -102,6 +104,7 @@ function MarkdownPreviewBody({
   searchActiveIndex = 0,
   onMatchCountChange,
   onActiveHeadingChange,
+  besideOutline = false,
   handleRef,
 }: MarkdownPreviewProps & { handleRef: ForwardedRef<MarkdownPreviewHandle> }) {
   const { t } = useTranslation();
@@ -288,7 +291,10 @@ function MarkdownPreviewBody({
   return (
     <div
       ref={scrollerRef}
-      className="min-h-0 flex-1 overflow-auto bg-surface-container-high px-4 pb-3 pt-1 text-sm leading-6 text-on-surface select-text"
+      className={[
+        "min-h-0 flex-1 overflow-auto bg-surface-container-high pb-3 pl-4 pt-1 text-sm leading-6 text-on-surface select-text",
+        besideOutline ? "pr-2" : "pr-4",
+      ].join(" ")}
     >
       <Blocks blocks={model.blocks} actions={actions} path="doc" />
       {model.footnotes.length > 0 ? (

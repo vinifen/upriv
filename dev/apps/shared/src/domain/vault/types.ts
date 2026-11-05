@@ -156,7 +156,7 @@ export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean 
 
 /**
  * List status where the unlock credential UI can be resumed (active open or
- * waiting open) — the row's Unlock button while Opening… or Queued….
+ * waiting open) — the row's button, and a click on the row, while Opening… or Queued….
  */
 export function isVaultOpenCredentialResumeStatus(status: VaultDisplayStatus): boolean {
   return status === "opening" || status === "queued";

@@ -312,6 +312,11 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.lifecycle_confirm_lock),
         },
         {
+          id: "lifecycle_row_runs_button",
+          label: t("modal.info.field.lifecycle_row_runs_button"),
+          value: yesNo(t, ui.lifecycle_row_runs_button),
+        },
+        {
           id: "always_show_hidden_vaults",
           label: t("modal.info.field.always_show_hidden_vaults"),
           value: yesNo(t, ui.always_show_hidden_vaults),

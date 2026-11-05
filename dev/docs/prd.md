@@ -271,7 +271,7 @@ encrypted_dir / upriv_plain:
 | RF-42b | **Close now** closes one open vault with no backup, from More options below Note, on desktop and mobile. `store/` is sealed, the keys dropped, and the mount released. An `upriv_plain` folder gets no closing pass and no overwrite: changes the vault has not saved are lost, and file bytes stay on the disk until it reuses the space. It asks first (global setting, on by default, with Don't ask again); an unsaved editor tab always asks. A close already running or waiting offers it in the same menu: what is left of the final sync, the backup, and the overwrite stops, and the seal finishes. The quit dialog offers the same close for every open vault, limited to 30 s | P1 |
 | RF-43 | Wipe also on recovery **Remove the folder** (`upriv_plain`). The wipe runs on the row as **Recovering…** with its elapsed time and **Stop**, with no time limit; the rest of the app stays usable | P1 |
 | RF-43b | **Only files I choose** (`[storage] plain_files`, default on) on the plain-text option, in create and vault settings, changes only while the vault is closed or in recovery. On: the folder starts empty on every open; **Send to folder** and **Remove from folder** in the file manager move a file or a whole folder in and out, and each explorer row shows what the folder holds. Off: every open writes the whole vault there. Other apps see only what is in the folder. | P1 |
-| RF-43c | The file manager explorer finds files and folders by name at any depth, in both storage modes, on desktop and mobile. The search button, the fifth in the explorer toolbar, opens and closes the search bar. The bar starts closed. Each vault's layout remembers the bar and the search text, also across closing and reopening the vault. The search keeps filtering the explorer while the bar is closed, and the button says so. Folders in the results collapse and open for that search only; that is never saved and leaves the vault's expanded folders as they were. | P2 |
+| RF-43c | The file manager explorer finds files and folders by name at any depth, in both storage modes, on desktop and mobile. The search button, right after the Explorer label and apart from the other buttons, opens and closes the search bar. The bar starts closed. Each vault's layout remembers the bar and the search text, also across closing and reopening the vault. The search keeps filtering the explorer while the bar is closed, and the button says so. Folders in the results collapse and open for that search only; that is never saved and leaves the vault's expanded folders as they were. | P2 |
 | RF-43d | A file the viewer cannot hold (over the preview cap, or more than free RAM holds) opens from the disk instead on `upriv_plain`: when the person opens it, a vault of chosen files sends it to the folder, and the notice offers **Open in file manager**. A tab restored with the vault writes nothing until the person presses **Send to folder**. An `encrypted_dir` vault never writes plaintext for this; with a mounted folder the notice offers that folder. | P2 |
 | RF-44 | Document limit: SSD/flash **do not** guarantee physical wipe in exception mode | P1 |
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
@@ -417,7 +417,7 @@ Vault rows are ordered by **`[vault] order`** in `config.toml` (ascending; lower
 1. **Vault settings** (`action.settings`): edit **`order`** in the `[vault]` section (numeric field); save writes `config.toml`.
 2. **Drag-and-drop (preferred):** on the vault list, **press and hold** a row (or its drag handle), then **drag up or down** to the desired position. On drop, the app reassigns `order` on all affected vaults and persists to each `config.toml` (atomic write). List updates immediately.
 
-Drag must not trigger row click (open the file manager) or action buttons — use a dedicated grab zone on the left (e.g. `⋮⋮` handle beside the status dot) or long-press on the name area; action buttons keep `stopPropagation`.
+Drag must not trigger the row click or action buttons — use a dedicated grab zone on the left (e.g. `⋮⋮` handle beside the status dot) or long-press on the name area; action buttons keep `stopPropagation`.
 
 | Zone | Content |
 |------|----------|
@@ -432,8 +432,9 @@ Drag must not trigger row click (open the file manager) or action buttons — us
 
 **Row click (outside buttons):**
 
-- Vault **`open`:** open the vault in the in-app file manager.
-- Vault **`closed`** or in any other state: nothing. Unlock, Lock, and Stop run only from the row's button.
+- Vault **opening** (or its open waiting in the queue): show its password window again.
+- Vault **`open`:** open the vault in the in-app file manager, whatever the setting below. A row click never locks.
+- Any other state, with **A click on a vault row presses its button** off (System settings, the default): nothing; Unlock and Stop run only from the row's button. With it on: the click does what the row's button does (Unlock, or Stop while work runs), with the same second press.
 
 **Row background / outline color** by persisted or runtime state:
 
@@ -474,7 +475,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-04 | Per-vault settings modal (TOML); delete vault with name confirmation | P0 |
 | RF-UI-05 | Backups modal; delete backup only after typing vault `id` | P0 |
 | RF-UI-06 | Prominent Lock/Unlock button (larger visual weight than others) | P0 |
-| RF-UI-07 | Row click (outside buttons) opens the in-app file manager when `open`, and does nothing otherwise | P0 |
+| RF-UI-07 | Row click (outside buttons) shows the password window again while the vault opens, and opens the in-app file manager when `open` (it never locks). Otherwise it does nothing, or, with **A click on a vault row presses its button** on (System settings, off by default), does what the row's button does (Unlock or Stop) | P0 |
 | RF-UI-08 | **Export** (`action.export_vault`) from the overflow menu. User chooses `.zip` of `store/` (Recommended) or `.7z` | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
 | RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock dialog while open) — **no** blocking full-screen pipeline overlay. Lock starts the close pipeline immediately and does not ask for the password. **One pipeline at a time** — open/close/create are **queued** (FIFO), and a waiting one says **Queued**. Work the person can stop (open, create, imports, exports, backups, password and unlock-RAM change, Remove the folder) has no time limit: the row's button becomes **Stop** in its place, two taps while **Press Stop twice on a vault row** is on (System settings, on by default), and its last step, which always finishes, says so. A close has no Stop; **Close now** hurries it. Long work shows how long it has been running, never an estimate. Every other wait ends after 10 minutes with an error and Retry. Work and saves keep running when the window that started them closes. | P0 |

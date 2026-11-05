@@ -373,7 +373,9 @@ export function VaultBackupsModal({
       {deleteTargets !== null ? (
         <div ref={confirmRef} className="mt-4 space-y-3 rounded-xl bg-surface-container px-4 py-4">
           <p className="text-sm text-on-surface-variant">
-            {t("modal.backup.delete_confirm", { count: String(deleteCount) })}
+            {deleteCount === 1
+              ? t("modal.backup.delete_confirm_one")
+              : t("modal.backup.delete_confirm", { count: String(deleteCount) })}
           </p>
           <p className="font-mono text-xs text-on-surface-variant/80">
             {backupDeleteConfirmPhrase(vault.displayName, deleteCount)}
