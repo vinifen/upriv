@@ -89,6 +89,7 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const confirmCloseNowId = useId();
   const confirmStopId = useId();
   const confirmLockId = useId();
+  const rowRunsButtonId = useId();
 
   return (
     <SettingsFormGrid>
@@ -173,6 +174,13 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         onChange={(lifecycle_confirm_lock) => onChange({ lifecycle_confirm_lock })}
         label={t("modal.app_settings.field.lifecycle_confirm_lock")}
         hint={t("modal.app_settings.field.lifecycle_confirm_lock_help")}
+      />
+      <SwitchRow
+        id={rowRunsButtonId}
+        checked={config.lifecycle_row_runs_button}
+        onChange={(lifecycle_row_runs_button) => onChange({ lifecycle_row_runs_button })}
+        label={t("modal.app_settings.field.lifecycle_row_runs_button")}
+        hint={t("modal.app_settings.field.lifecycle_row_runs_button_help")}
       />
     </SettingsFormGrid>
   );

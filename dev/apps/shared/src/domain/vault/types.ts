@@ -156,7 +156,7 @@ export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean 
 
 /**
  * List status where the unlock credential UI can be resumed (active open or
- * waiting open) — row click / lock button while Opening… or Queued….
+ * waiting open) — the row's button, and a click on the row, while Opening… or Queued….
  */
 export function isVaultOpenCredentialResumeStatus(status: VaultDisplayStatus): boolean {
   return status === "opening" || status === "queued";
@@ -198,17 +198,7 @@ export function isVaultCloseQueued(
   return true;
 }
 
-/** Row / card may be activated (file manager or unlock / resume unlock). */
-export function isVaultListRowActivatable(status: VaultDisplayStatus): boolean {
-  return (
-    status === "open" ||
-    status === "closed" ||
-    status === "recovery" ||
-    isVaultOpenCredentialResumeStatus(status)
-  );
-}
-
-/** Activate should unlock or resume open credential (not file manager). */
+/** Unlock applies: a closed or recovery vault, or a waiting open whose password window can reopen. */
 export function isVaultListRowUnlockTarget(status: VaultDisplayStatus): boolean {
   return status === "closed" || status === "recovery" || isVaultOpenCredentialResumeStatus(status);
 }

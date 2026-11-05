@@ -60,7 +60,7 @@ pub use store::{KdfUnlockPreset, FORMAT_VERSION as STORE_FORMAT_VERSION};
 pub use time::{utc_filename_stamp, utc_timestamp_iso_millis, utc_ymdhms};
 pub use vault::{
     abort_import_vault, backup_zip_file, change_vault_kdf, change_vault_password, close_all_vaults,
-    close_all_vaults_now, close_phase, close_vault, close_vault_auto, close_vault_now,
+    close_all_vaults_now, close_state, close_vault, close_vault_auto, close_vault_now,
     confirm_plain_destination, create_vault, create_vault_as_job, delete_backups, delete_vault,
     export_backups, export_data_folder, export_logical_seven_zip, export_plain_zip,
     export_store_zip, finish_import_session, fs_create_file, fs_create_folder, fs_delete,
@@ -78,8 +78,8 @@ pub use vault::{
     read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
     remove_plain_leftover, rename_vault, save_backup_now, set_plain_observer,
     seven_zip_export_available, sweep_unfinished, vault_list_item, vault_store_on_disk_bytes,
-    BackupEntry, CloseVaultOutcome, DataFolderExport, EmbeddedVaultSettings, ExportInclude,
-    ExportedFile, ImportExtras, ImportZipProbe, OpenVaultOutcome, PlainCloseSummary,
+    BackupEntry, CloseState, CloseVaultOutcome, DataFolderExport, EmbeddedVaultSettings,
+    ExportInclude, ExportedFile, ImportExtras, ImportZipProbe, OpenVaultOutcome, PlainCloseSummary,
     PlainDestination, PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus,
     PlainSyncReport, PlainTotals, PlainUnsend, PlainWipe, VaultListItem, VaultPersistence,
     VaultRenameResult, VaultWelcome, ZipImportClass, WELCOME_FILE_MAX_BYTES,

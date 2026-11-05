@@ -87,6 +87,13 @@ export {
   type TreeSplitDrag,
   type UseTreeSplitDragOptions,
 } from "./useTreeSplitDrag";
+export { useExplorerSearch, type ExplorerSearch } from "./useExplorerSearch";
+export {
+  useOutlineWidthDrag,
+  type OutlineWidthDrag,
+  type OutlineWidthMeasure,
+  type UseOutlineWidthDragOptions,
+} from "./useOutlineWidthDrag";
 export {
   FileManagerProvider,
   useFileManager,

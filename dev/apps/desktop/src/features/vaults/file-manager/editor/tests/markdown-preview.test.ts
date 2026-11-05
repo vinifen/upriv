@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
+import { createElement, createRef, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMarkdownParser,
@@ -157,17 +157,22 @@ describe("MarkdownPreview", () => {
 });
 
 describe("MarkdownViewToggle", () => {
-  it("toggles between preview and source mode on click", async () => {
+  it("marks the view in use; a click on the other picks it, on the one in use switches", async () => {
     const onChange = vi.fn();
     const { rerender } = renderWithI18n(
       createElement(MarkdownViewToggle, { mode: "preview", onChange }),
     );
-    const btn = await screen.findByRole("button", { name: "Markdown view" });
-    expect(btn).toBeTruthy();
-    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(await screen.findByRole("group", { name: "Markdown view" })).toBeTruthy();
+    const code = screen.getByRole("button", { name: "Code" });
+    const read = screen.getByRole("button", { name: "Read" });
+    expect(read.getAttribute("aria-pressed")).toBe("true");
+    expect(code.getAttribute("aria-pressed")).toBe("false");
 
-    fireEvent.click(btn);
-    expect(onChange).toHaveBeenCalledWith("source");
+    // The view in use switches to the other one.
+    fireEvent.click(read);
+    expect(onChange).toHaveBeenLastCalledWith("source");
+    fireEvent.click(code);
+    expect(onChange).toHaveBeenLastCalledWith("source");
 
     rerender(
       createElement(I18nProvider, {
@@ -175,20 +180,26 @@ describe("MarkdownViewToggle", () => {
         children: createElement(MarkdownViewToggle, { mode: "source", onChange }),
       }),
     );
-    expect(btn.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(btn);
-    expect(onChange).toHaveBeenCalledWith("preview");
+    expect(code.getAttribute("aria-pressed")).toBe("true");
+    expect(read.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(read);
+    expect(onChange).toHaveBeenLastCalledWith("preview");
+    fireEvent.click(code);
+    expect(onChange).toHaveBeenLastCalledWith("preview");
   });
 
-  it("shows code and eye icons with title and accessibility label", async () => {
+  it("names each view in its tooltip", async () => {
     renderWithI18n(createElement(MarkdownViewToggle, { mode: "preview", onChange: vi.fn() }));
-    const btn = await screen.findByRole("button", { name: "Markdown view" });
-    expect(btn.querySelectorAll("svg").length).toBe(2);
-    expect(btn.getAttribute("title")).toBe("Code / Read");
+    expect((await screen.findByRole("button", { name: "Code" })).getAttribute("title")).toBe(
+      "Code",
+    );
+    expect(screen.getByRole("button", { name: "Read" }).getAttribute("title")).toBe("Read");
   });
 });
 
 describe("MarkdownOutline", () => {
+  const defaultWidth = () => ({ asideRef: createRef<HTMLElement>(), width: null });
+
   it("toggles open and closed", async () => {
     const onChange = vi.fn();
     renderWithI18n(createElement(MarkdownOutlineToggle, { open: false, onChange }));
@@ -200,6 +211,7 @@ describe("MarkdownOutline", () => {
     const onSelect = vi.fn();
     renderWithI18n(
       createElement(MarkdownOutlinePanel, {
+        ...defaultWidth(),
         outline: parseMarkdownNote("# Top\n\n## Child\n\n> # quoted\n\n# Next\n").outline,
         onSelect,
       }),
@@ -215,11 +227,27 @@ describe("MarkdownOutline", () => {
   it("says when a note has no headings", async () => {
     renderWithI18n(
       createElement(MarkdownOutlinePanel, {
+        ...defaultWidth(),
         outline: parseMarkdownNote("just text").outline,
         onSelect: vi.fn(),
       }),
     );
     expect(await screen.findByText("This file has no headings.")).toBeTruthy();
+  });
+
+  it("draws a note's own width, capped by the row, in place of the default classes", async () => {
+    renderWithI18n(
+      createElement(MarkdownOutlinePanel, {
+        asideRef: createRef<HTMLElement>(),
+        width: 260,
+        outline: parseMarkdownNote("# Top\n").outline,
+        onSelect: vi.fn(),
+      }),
+    );
+    const panel = await screen.findByRole("complementary", { name: "Outline" });
+    expect(panel.style.width).toBe("260px");
+    expect(panel.style.maxWidth).toBe("60%");
+    expect(panel.className).not.toContain("w-[10.25rem]");
   });
 
   it("marks only top-level headings as outline anchors in Read view", async () => {
@@ -240,6 +268,7 @@ describe("MarkdownOutline", () => {
     const onSelect = vi.fn();
     const { rerender } = renderWithI18n(
       createElement(MarkdownOutlinePanel, {
+        ...defaultWidth(),
         outline: parseMarkdownNote("# First\n\n## Second\n").outline,
         activeIndex: 0,
         onSelect,
@@ -257,6 +286,7 @@ describe("MarkdownOutline", () => {
       createElement(I18nProvider, {
         locale: "en",
         children: createElement(MarkdownOutlinePanel, {
+          ...defaultWidth(),
           outline: parseMarkdownNote("# First\n\n## Second\n").outline,
           activeIndex: 1,
           onSelect,

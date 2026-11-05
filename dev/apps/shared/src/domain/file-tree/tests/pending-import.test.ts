@@ -16,6 +16,8 @@ import {
   upsertActiveImportWrite,
   dropActiveImportWritesForSession,
   dropActiveImportWritePath,
+  dropActiveImportWritesUnder,
+  dropPendingUnder,
   activeImportWriteForPath,
   rememberLandedImportPaths,
 } from "../pendingImport";
@@ -122,6 +124,21 @@ describe("replaceSessionPending", () => {
     const a = pendingEntriesFromRelativePaths("/", ["a.zip"], 1);
     const b = pendingEntriesFromRelativePaths("/", ["b.txt"], 2);
     expect(dropSessionPending([...a, ...b], 1)).toEqual(b);
+  });
+});
+
+describe("a deleted item", () => {
+  it("takes the pending entries and active writes at or under it, and keeps siblings", () => {
+    const pending = pendingEntriesFromRelativePaths("/", ["docs/a.txt", "docs/sub/b.txt"], 1);
+    const kept = pendingEntriesFromRelativePaths("/", ["docs-old/c.txt"], 1);
+    expect(dropPendingUnder([...pending, ...kept], "/docs")).toEqual(kept);
+    const writes = [
+      { sessionId: 1, path: "/docs/sub/b.txt", startedAt: 1 },
+      { sessionId: 2, path: "/docs-old/c.txt", startedAt: 2 },
+    ];
+    expect(dropActiveImportWritesUnder(writes, "/docs").map((write) => write.path)).toEqual([
+      "/docs-old/c.txt",
+    ]);
   });
 });
 

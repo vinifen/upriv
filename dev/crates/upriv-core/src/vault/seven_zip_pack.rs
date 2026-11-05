@@ -849,10 +849,10 @@ mod tests {
 
     use crate::session::{cancel_job, job_status};
     use crate::store::{blob_path, is_reserved_logical, open_store, KdfUnlockPreset};
-    use crate::test_support::{test_job_id, vault_root_with};
+    use crate::test_support::{test_job_id, vault_root_with, write_with_folders};
     use crate::vault::config_folder::ImportExtras;
     use crate::vault::create::create_vault;
-    use crate::vault::fs::{fs_read_file, fs_write_file};
+    use crate::vault::fs::fs_read_file;
     use crate::vault::open_close::{close_vault, open_vault};
     use crate::vault::seven_zip::import_logical_seven_zip;
 
@@ -922,7 +922,7 @@ mod tests {
         create_vault(&root, vault_config("notes"), PASSWORD, KdfUnlockPreset::M32).unwrap();
         open_vault(&root, "notes", PASSWORD).unwrap();
         for (path, bytes) in files {
-            fs_write_file(&root, "notes", path, bytes).unwrap();
+            write_with_folders(&root, "notes", path, bytes);
         }
         close_vault(&root, "notes").unwrap();
         (tmp, root)

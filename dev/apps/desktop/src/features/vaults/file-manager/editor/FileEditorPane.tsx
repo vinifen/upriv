@@ -19,24 +19,39 @@ import {
   fileBaseName,
   fileEditorWordWrap,
   fileMarkdownOutlineOpen,
+  fileMarkdownOutlineWidth,
   fileMarkdownView,
   fileSearchQuery,
   findTextMatches,
   lineStartOffsets,
   MARKDOWN_OUTLINE_SETTLE_MS,
+  OUTLINE_WIDTH_MAX_PX,
+  OUTLINE_WIDTH_MIN_PX,
   spanAt,
   stepMatchIndex,
   vaultFileLanguageFromPath,
   type TextMatch,
 } from "@upriv/shared";
-import { useOutlineHeading, useSettledValue, useValueAfterPaint } from "@upriv/shared/react";
+import {
+  useOutlineHeading,
+  useOutlineWidthDrag,
+  useSettledValue,
+  useValueAfterPaint,
+} from "@upriv/shared/react";
 import { Button, ElapsedTime } from "@/components/ui";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { ExplorerActions, ExplorerLabeledButton } from "../tree/ExplorerActions";
+import { PaneResizeHandle } from "../workspace/PaneResizeHandle";
 import { EditorPathBar } from "./EditorPathBar";
 import { FileEditorSearch, type FileEditorSearchHandle } from "./FileEditorSearch";
-import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "./MarkdownOutline";
+import {
+  MarkdownOutlinePanel,
+  MarkdownOutlineToggle,
+  OUTLINE_DEFAULT_WIDTH_PX,
+  OUTLINE_MAX_WIDTH,
+} from "./MarkdownOutline";
 import { MarkdownPreview, type MarkdownPreviewHandle } from "./MarkdownPreview";
 import { MarkdownViewToggle } from "./MarkdownViewToggle";
 import { WordWrapToggle } from "./WordWrapToggle";
@@ -217,6 +232,8 @@ interface EditorWithLineNumbersProps {
   matches: readonly TextMatch[];
   searchActiveIndex?: number;
   wordWrap?: boolean;
+  /** The outline's border closes the note on the right, so its text runs closer to it. */
+  besideOutline?: boolean;
   onScroll?: () => void;
   onSelect?: () => void;
 }
@@ -231,9 +248,12 @@ function EditorWithLineNumbers({
   matches,
   searchActiveIndex = 0,
   wordWrap = true,
+  besideOutline = false,
   onScroll,
   onSelect,
 }: EditorWithLineNumbersProps) {
+  // The text, its highlights, and its row measure share this padding, so they wrap alike.
+  const padRight = besideOutline ? "pr-2" : "pr-4 md:pr-5";
   const gutterRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
@@ -388,7 +408,8 @@ function EditorWithLineNumbers({
           ref={gutterRef}
           aria-hidden
           className={[
-            "pointer-events-none absolute inset-y-0 left-0 right-0 z-20 overflow-hidden invisible bg-transparent pb-2 pr-4 pt-1 outline-none select-none md:pr-5",
+            "pointer-events-none absolute inset-y-0 left-0 right-0 z-20 overflow-hidden invisible bg-transparent pb-2 pt-1 outline-none select-none",
+            padRight,
             "whitespace-pre-wrap break-words",
             EDITOR_LINE_CLASS,
           ].join(" ")}
@@ -427,7 +448,8 @@ function EditorWithLineNumbers({
         ref={backdropRef}
         aria-hidden
         className={[
-          "pointer-events-none absolute inset-y-0 left-0 right-0 overflow-hidden bg-transparent pb-2 pr-4 pt-1 outline-none select-none md:pr-5",
+          "pointer-events-none absolute inset-y-0 left-0 right-0 overflow-hidden bg-transparent pb-2 pt-1 outline-none select-none",
+          padRight,
           wordWrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
           EDITOR_LINE_CLASS,
         ].join(" ")}
@@ -452,7 +474,8 @@ function EditorWithLineNumbers({
         }}
         className={[
           /* Absolute fill — only this pane scrolls; parent must not grow with line count. */
-          "absolute inset-0 h-full w-full resize-none bg-transparent pb-2 pr-4 pt-1 text-on-surface outline-none md:pr-5",
+          "absolute inset-0 h-full w-full resize-none bg-transparent pb-2 pt-1 text-on-surface outline-none",
+          padRight,
           wordWrap
             ? "overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words"
             : "overflow-x-auto overflow-y-auto whitespace-pre",
@@ -584,6 +607,34 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
   const [previewMatchesCount, setPreviewMatchesCount] = useState(0);
   const heading = useOutlineHeading(activeTabPath);
   const { follow: followHeading, release: releaseHeading } = heading;
+  const outlineRowRef = useRef<HTMLDivElement>(null);
+  const outlineRef = useRef<HTMLElement>(null);
+  // A move sizes the outline through its style: drawing the note on every move is too slow.
+  const outlineDrag = useOutlineWidthDrag({
+    savedWidth: fileMarkdownOutlineWidth(workspace, activeTabPath),
+    measure: () => ({
+      outline: outlineRef.current?.getBoundingClientRect().width ?? 0,
+      row: outlineRowRef.current?.getBoundingClientRect().width ?? 0,
+    }),
+    onDragFrame: (width) => {
+      const outline = outlineRef.current;
+      if (!outline) return;
+      outline.style.display = width === null ? "none" : "";
+      if (width === null) return;
+      outline.style.width = `${width}px`;
+      outline.style.maxWidth = OUTLINE_MAX_WIDTH;
+    },
+    onCommit: (width) => {
+      if (activeTabPath) {
+        dispatch({ type: "set_file_markdown_outline_width", path: activeTabPath, width });
+      }
+    },
+    onCollapse: () => {
+      if (activeTabPath) {
+        dispatch({ type: "set_file_markdown_outline_open", path: activeTabPath, open: false });
+      }
+    },
+  });
 
   const searchQuery = fileSearchQuery(workspace, activeTabPath);
   const currentMarkdownView = fileMarkdownView(workspace, activeTabPath);
@@ -737,7 +788,17 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
         <ViewerNotice
           kicker={t("modal.file_manager.viewer.empty_kicker")}
           body={t("modal.file_manager.viewer.empty_body")}
-        />
+        >
+          {/* The explorer's own buttons, within reach while no file is open. */}
+          <div className="mt-2 flex max-w-md flex-wrap justify-center gap-2">
+            <ExplorerActions fm={fm} variant="labeled" />
+            <ExplorerLabeledButton
+              icon="search"
+              label={t("modal.file_manager.viewer.empty_search")}
+              onClick={() => fm.explorerSearch.show(true)}
+            />
+          </div>
+        </ViewerNotice>
       </ViewerDropZone>
     );
   }
@@ -868,7 +929,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
           </>
         ) : null}
       </EditorPathBar>
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div ref={outlineRowRef} className="flex min-h-0 flex-1 overflow-hidden">
         {/* Scrolling the note by hand hands the outline mark back to the scroll. */}
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -885,6 +946,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
               parser={markdownParser}
               searchQuery={searchQuery}
               searchActiveIndex={activeMatchIndex}
+              besideOutline={showOutline}
               onMatchCountChange={setPreviewMatchesCount}
               onActiveHeadingChange={followHeading}
               onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
@@ -903,6 +965,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
               matches={codeMatches}
               searchActiveIndex={activeMatchIndex}
               wordWrap={currentWordWrap}
+              besideOutline={showOutline}
               onScroll={updateCodeActiveHeading}
               onSelect={handleCodeCaretChange}
               onChange={(next) =>
@@ -912,16 +975,35 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
           )}
         </div>
         {showOutline && outlineModel ? (
-          <MarkdownOutlinePanel
-            outline={outlineModel}
-            activeIndex={heading.index}
-            onSelect={(index, entry) => {
-              heading.pick(index);
-              if (showPreview) previewRef.current?.scrollToHeading(index);
-              else if (textareaRef.current)
-                jumpTextareaTo(textareaRef.current, entry.offset, currentWordWrap);
-            }}
-          />
+          <>
+            {/* Drag toward the right edge to close the outline; this note keeps its width. */}
+            <PaneResizeHandle
+              axis="x"
+              sizes="after"
+              value={outlineDrag.width ?? OUTLINE_DEFAULT_WIDTH_PX}
+              min={OUTLINE_WIDTH_MIN_PX}
+              max={OUTLINE_WIDTH_MAX_PX}
+              step={8}
+              overlay
+              label={t("modal.file_manager.markdown.outline_resize")}
+              onDragStart={outlineDrag.onDragStart}
+              onDrag={outlineDrag.onDrag}
+              onDragEnd={outlineDrag.onDragEnd}
+              onNudge={outlineDrag.commit}
+            />
+            <MarkdownOutlinePanel
+              asideRef={outlineRef}
+              width={outlineDrag.width}
+              outline={outlineModel}
+              activeIndex={heading.index}
+              onSelect={(index, entry) => {
+                heading.pick(index);
+                if (showPreview) previewRef.current?.scrollToHeading(index);
+                else if (textareaRef.current)
+                  jumpTextareaTo(textareaRef.current, entry.offset, currentWordWrap);
+              }}
+            />
+          </>
         ) : null}
       </div>
     </ViewerDropZone>

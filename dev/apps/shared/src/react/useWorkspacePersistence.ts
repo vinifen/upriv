@@ -90,17 +90,21 @@ export function useWorkspacePersistence({
         if (!file?.content) return;
 
         const parsed = parseWorkspaceSnapshot(file.content);
-        if (!parsed) return;
+        if (!parsed) {
+          // Unreadable: the layout on screen replaces it.
+          persistAfterDivergence = true;
+          return;
+        }
 
         const tree = await activeFs.getFileTree(vaultId);
         if (cancelled) return;
         const sanitized = sanitizeWorkspaceSnapshot(parsed, tree);
         const current = workspaceSnapshotFromState(layoutRef.current.workspace);
         const merged = workspaceSnapshotToHydrate(mountSnapshot, current, sanitized);
+        // The bytes on disk count as written: a file holding stale, unknown,
+        // or broken entries differs from the clean layout and is written again.
+        lastWrittenRef.current = file.content;
         if (merged) {
-          // Keep the on-disk bytes as last-written until the overlay differs,
-          // so a chrome toggle made during the load is saved with the tabs.
-          lastWrittenRef.current = serializeWorkspaceSnapshot(sanitized);
           activeDispatch({
             type: "hydrate_persisted",
             openTabs: merged.openTabs,
@@ -115,14 +119,14 @@ export function useWorkspacePersistence({
           });
           return;
         }
-        if (!snapshotsEqual(current, sanitized)) {
-          lastWrittenRef.current = null;
+        if (
+          !snapshotsEqual(current, sanitized) ||
+          file.content !== serializeWorkspaceSnapshot(sanitized)
+        ) {
           persistAfterDivergence = true;
-        } else {
-          lastWrittenRef.current = serializeWorkspaceSnapshot(sanitized);
         }
       } catch {
-        /* Missing / corrupt layout → start clean. Persist still enabled. */
+        /* A read that fails keeps the layout on screen; its next change is written. */
       } finally {
         if (!cancelled) {
           hydratedRef.current = true;

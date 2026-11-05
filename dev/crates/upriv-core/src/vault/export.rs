@@ -331,7 +331,7 @@ mod tests {
     use crate::host_fs::HostFsQuery;
     use crate::session::cancel_job;
     use crate::store::{KdfUnlockPreset, SEED_LOGICAL_PATH};
-    use crate::test_support::{test_job_id, vault_root_with};
+    use crate::test_support::{test_job_id, vault_root_with, write_with_folders};
     use crate::vault::config_folder::ImportExtras;
     use crate::vault::create::create_vault;
     use crate::vault::files_zip::{import_logical_files_zip, probe_import_zip_bytes};
@@ -693,7 +693,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        fs_write_file(&root, "notes", "/docs/hi.txt", b"hello-export").unwrap();
+        write_with_folders(&root, "notes", "/docs/hi.txt", b"hello-export");
         fs_write_file(&root, "notes", "/config.toml", b"user-config").unwrap();
         fs_write_file(
             &root,
@@ -869,7 +869,7 @@ mode = "encrypted_dir"
     fn vault_with_a_layout() -> (tempfile::TempDir, VaultRoot) {
         let (tmp, root) = notes_root();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        fs_write_file(&root, "notes", "/docs/hi.txt", b"hello-export").unwrap();
+        write_with_folders(&root, "notes", "/docs/hi.txt", b"hello-export");
         fs_mkdir(&root, "notes", "/empty").unwrap();
         fs_write_file(&root, "notes", "/.upriv-workspace.json", LAYOUT).unwrap();
         close_vault(&root, "notes").unwrap();
@@ -909,6 +909,7 @@ mode = "encrypted_dir"
                 ".upriv-config/README.md",
                 ".upriv-config/config.toml",
                 ".upriv-config/workspace.json",
+                "docs/",
                 "docs/hi.txt",
                 "empty/",
             ]
@@ -931,7 +932,7 @@ mode = "encrypted_dir"
         let (_tmp, root) = vault_with_a_layout();
         assert_eq!(
             zip_names(&plain_zip(&root, "notes", VAULT_FILES_ONLY).unwrap()),
-            ["docs/hi.txt", "empty/"]
+            ["docs/", "docs/hi.txt", "empty/"]
         );
         let only_settings = ExportInclude {
             workspace: false,
@@ -1219,7 +1220,7 @@ mode = "encrypted_dir"
     fn a_vault_with_one_top_folder_keeps_it() {
         let (_tmp, root) = notes_root();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        fs_write_file(&root, "notes", "/docs/hi.txt", b"hello").unwrap();
+        write_with_folders(&root, "notes", "/docs/hi.txt", b"hello");
         close_vault(&root, "notes").unwrap();
         let zip = plain_zip(&root, "notes", VAULT_FILES_ONLY).unwrap();
         let id = import_logical_files_zip(
@@ -1241,7 +1242,7 @@ mode = "encrypted_dir"
     fn a_vault_holding_an_unpacked_store_round_trips_as_files() {
         let (_tmp, root) = notes_root();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        fs_write_file(&root, "notes", "/store/header/vault.header", b"a document").unwrap();
+        write_with_folders(&root, "notes", "/store/header/vault.header", b"a document");
         close_vault(&root, "notes").unwrap();
         let zip = plain_zip(&root, "notes", VAULT_FILES_ONLY).unwrap();
         let id = import_logical_files_zip(
@@ -1417,6 +1418,8 @@ mode = "encrypted_dir"
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         assert!(fs_mkdir(&root, "notes", "/.upriv-config").is_err());
         assert!(fs_write_file(&root, "notes", "/.upriv-config/config.toml", b"x").is_err());
+        // The folder is there, so the name alone refuses the file.
+        fs_mkdir(&root, "notes", "/docs").unwrap();
         assert!(fs_write_file(&root, "notes", "/docs/.upriv-config", b"x").is_err());
         close_vault(&root, "notes").unwrap();
     }
@@ -1527,7 +1530,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        fs_write_file(&root, "notes", "/docs/hi.txt", b"hello-export").unwrap();
+        write_with_folders(&root, "notes", "/docs/hi.txt", b"hello-export");
         close_vault(&root, "notes").unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);

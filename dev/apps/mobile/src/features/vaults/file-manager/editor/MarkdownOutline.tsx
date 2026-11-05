@@ -1,5 +1,11 @@
+import type { Ref } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
-import { hexWithAlpha, type MarkdownOutlineEntry, type MarkdownOutlineModel } from "@upriv/shared";
+import {
+  hexWithAlpha,
+  OUTLINE_MAX_ROW_SHARE,
+  type MarkdownOutlineEntry,
+  type MarkdownOutlineModel,
+} from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -38,16 +44,28 @@ export function MarkdownOutlineToggle({
   );
 }
 
+/** Width cap for a saved width; the default keeps its own share. */
+export const OUTLINE_MAX_WIDTH = `${OUTLINE_MAX_ROW_SHARE * 100}%` as const;
+
 /** Right-hand map of the note's headings, indented by nesting. Tap jumps to the heading. */
 export function MarkdownOutlinePanel({
   outline,
   activeIndex = 0,
   onSelect,
+  panelRef,
+  width,
+  onWidth,
 }: {
   /** Outline of the open note. */
   outline: MarkdownOutlineModel;
   activeIndex?: number;
   onSelect: (index: number, entry: MarkdownOutlineEntry) => void;
+  /** The panel's own view: a divider drag sizes it directly. */
+  panelRef: Ref<View>;
+  /** This note's width; null draws the default. */
+  width: number | null;
+  /** The width it draws at, after each layout. */
+  onWidth: (width: number) => void;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -55,10 +73,17 @@ export function MarkdownOutlinePanel({
   const narrow = useWindowDimensions().width < NARROW_SCREEN_WIDTH;
   return (
     <View
+      ref={panelRef}
+      collapsable={false}
       accessibilityLabel={t("modal.file_manager.markdown.outline")}
+      onLayout={(event) => onWidth(event.nativeEvent.layout.width)}
       style={[
         styles.panel,
-        narrow && styles.panelNarrow,
+        width === null
+          ? narrow
+            ? styles.panelNarrow
+            : styles.panelDefault
+          : { width, maxWidth: OUTLINE_MAX_WIDTH },
         { backgroundColor: colors.surfaceContainerHigh, borderLeftColor: colors.outlineVariant },
       ]}
     >
@@ -146,12 +171,11 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   panel: {
-    width: "34%",
-    maxWidth: 190,
     minHeight: 0,
     flexShrink: 0,
     borderLeftWidth: StyleSheet.hairlineWidth,
   },
+  panelDefault: { width: "34%", maxWidth: 190 },
   panelNarrow: { width: "32%", maxWidth: 165 },
   empty: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 12 },
   list: { flex: 1, minHeight: 0 },

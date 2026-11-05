@@ -8,14 +8,17 @@ import { PaneResizeHandle } from "../PaneResizeHandle";
 
 afterEach(cleanup);
 
+const treeRange = { min: TREE_SPLIT_MIN_PERCENT, max: TREE_SPLIT_MAX_PERCENT };
+
 describe("PaneResizeHandle", () => {
-  it("exposes the canonical split range and value to assistive tech", async () => {
+  it("exposes the range and value to assistive tech", async () => {
     render(
       createElement(I18nProvider, {
         locale: "en",
         children: createElement(PaneResizeHandle, {
           axis: "x",
           value: 20,
+          ...treeRange,
           onDrag: vi.fn(),
           onNudge: vi.fn(),
         }),
@@ -36,6 +39,7 @@ describe("PaneResizeHandle", () => {
         children: createElement(PaneResizeHandle, {
           axis: "x",
           value: 20,
+          ...treeRange,
           onDrag: vi.fn(),
           onNudge,
         }),
@@ -53,6 +57,52 @@ describe("PaneResizeHandle", () => {
     expect(onNudge).toHaveBeenLastCalledWith(15);
   });
 
+  it("grows a pane after the divider when it moves left", async () => {
+    const onNudge = vi.fn();
+    render(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(PaneResizeHandle, {
+          axis: "x",
+          value: 200,
+          min: 112,
+          max: 640,
+          step: 8,
+          sizes: "after",
+          onDrag: vi.fn(),
+          onNudge,
+        }),
+      }),
+    );
+
+    const handle = await screen.findByRole("separator");
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(onNudge).toHaveBeenLastCalledWith(208);
+    fireEvent.keyDown(handle, { key: "ArrowRight", shiftKey: true });
+    expect(onNudge).toHaveBeenLastCalledWith(160);
+  });
+
+  it("takes no room of its own when it straddles a border", async () => {
+    render(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(PaneResizeHandle, {
+          axis: "x",
+          value: 200,
+          min: 112,
+          max: 640,
+          overlay: true,
+          onDrag: vi.fn(),
+          onNudge: vi.fn(),
+        }),
+      }),
+    );
+
+    const handle = await screen.findByRole("separator");
+    expect(handle.className).toContain("w-2");
+    expect(handle.className).toContain("-mx-1");
+  });
+
   it("forwards the pointer delta from the grab point", async () => {
     const onDragStart = vi.fn();
     const onDrag = vi.fn();
@@ -64,6 +114,7 @@ describe("PaneResizeHandle", () => {
         children: createElement(PaneResizeHandle, {
           axis: "x",
           value: 20,
+          ...treeRange,
           onDragStart,
           onDrag,
           onDragEnd,

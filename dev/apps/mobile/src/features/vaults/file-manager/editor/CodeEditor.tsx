@@ -46,6 +46,8 @@ const GUTTER_TEXT_GAP = 4;
 const GUTTER_DIGIT_WIDTH = 7;
 const PADDING_TOP = 4;
 const PADDING_RIGHT = 12;
+/** Beside the outline, whose border closes the note on the right. */
+const PADDING_RIGHT_BESIDE_OUTLINE = 6;
 /** Space kept above a line the editor scrolls to. */
 const REVEAL_MARGIN = 40;
 /** Monospace advance before the real one is measured: 0.6 em. */
@@ -66,6 +68,8 @@ interface CodeEditorProps {
   shownContent: string;
   ariaLabel: string;
   wordWrap: boolean;
+  /** The outline sits right of the note, so the text runs closer to the edge. */
+  besideOutline: boolean;
   /** Search matches in `shownContent`. */
   matches: readonly TextMatch[];
   activeMatchIndex: number;
@@ -169,6 +173,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     shownContent,
     ariaLabel,
     wordWrap,
+    besideOutline,
     matches,
     activeMatchIndex,
     headingOffsets,
@@ -178,6 +183,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   },
   ref,
 ) {
+  // The input and its hidden copy share it, so they wrap alike.
+  const paddingRight = besideOutline ? PADDING_RIGHT_BESIDE_OUTLINE : PADDING_RIGHT;
   const { colors } = useTheme();
   const scrollRef = useRef<ScrollView>(null);
   const sideScrollRef = useRef<ScrollView>(null);
@@ -282,8 +289,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   const gutterSpace = GUTTER_INSET + gutterWidth + GUTTER_TEXT_GAP;
   const unwrappedWidth = useMemo(
     () =>
-      wordWrap ? 0 : Math.ceil(widestColumns(shownContent) * charWidth) + PADDING_RIGHT + charWidth,
-    [charWidth, shownContent, wordWrap],
+      wordWrap ? 0 : Math.ceil(widestColumns(shownContent) * charWidth) + paddingRight + charWidth,
+    [charWidth, paddingRight, shownContent, wordWrap],
   );
 
   /** Top of the row holding `offset`, in scroll content px. */
@@ -331,7 +338,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   const matchColor = colorAlpha(colors.accent, 0.3);
   const activeColor = colorAlpha(colors.accent, 0.7);
   const mirror = (
-    <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.mirror]}>
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.mirror, { paddingRight }]}>
       {blocks.map(({ text, lineCount }, block) => (
         <MirrorBlock
           key={block}
@@ -381,7 +388,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       accessibilityLabel={ariaLabel}
       style={[
         styles.input,
-        { color: colors.onSurface, minHeight: inputHeight },
+        { color: colors.onSurface, minHeight: inputHeight, paddingRight },
         wordWrap ? null : { width: Math.max(unwrappedWidth, viewport.width - gutterSpace) },
       ]}
     >
@@ -461,7 +468,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   wrapColumn: { flex: 1, minWidth: 0 },
-  mirror: { paddingTop: PADDING_TOP, paddingRight: PADDING_RIGHT },
+  mirror: { paddingTop: PADDING_TOP },
   mirrorText: {
     fontFamily: "monospace",
     fontSize: EDITOR_FONT_SIZE,
@@ -473,7 +480,6 @@ const styles = StyleSheet.create({
     paddingTop: PADDING_TOP,
     paddingBottom: 0,
     paddingLeft: 0,
-    paddingRight: PADDING_RIGHT,
     fontFamily: "monospace",
     fontSize: EDITOR_FONT_SIZE,
     lineHeight: EDITOR_LINE_HEIGHT,

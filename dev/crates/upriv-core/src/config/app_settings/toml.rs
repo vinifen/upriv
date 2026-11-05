@@ -68,6 +68,8 @@ pub(super) struct UiToml {
     pub(super) lifecycle_confirm_stop: bool,
     /// Lock on a vault row needs a second click. Default false.
     pub(super) lifecycle_confirm_lock: bool,
+    /// A click on the row of a vault that is not open presses its button. Default false.
+    pub(super) lifecycle_row_runs_button: bool,
 }
 
 impl Default for UiToml {
@@ -97,6 +99,7 @@ impl Default for UiToml {
             lifecycle_confirm_close_now: true,
             lifecycle_confirm_stop: true,
             lifecycle_confirm_lock: false,
+            lifecycle_row_runs_button: false,
         }
     }
 }
@@ -127,6 +130,7 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
         lifecycle_confirm_stop: ui.lifecycle_confirm_stop,
         lifecycle_confirm_lock: ui.lifecycle_confirm_lock,
+        lifecycle_row_runs_button: ui.lifecycle_row_runs_button,
     }
 }
 
@@ -172,6 +176,7 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
         lifecycle_confirm_stop: ui.lifecycle_confirm_stop,
         lifecycle_confirm_lock: ui.lifecycle_confirm_lock,
+        lifecycle_row_runs_button: ui.lifecycle_row_runs_button,
     }
 }
 
@@ -451,6 +456,7 @@ last_opened_vault = "kept"
         assert!(settings.ui.lifecycle_confirm_close_now);
         assert!(settings.ui.lifecycle_confirm_stop);
         assert!(!settings.ui.lifecycle_confirm_lock);
+        assert!(!settings.ui.lifecycle_row_runs_button);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
         // Vault-root mode/path never come from TOML.
@@ -473,6 +479,7 @@ lifecycle_keep_open_on_wake = true
 lifecycle_confirm_close_now = false
 lifecycle_confirm_stop = false
 lifecycle_confirm_lock = true
+lifecycle_row_runs_button = true
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.ui.lifecycle_close_modal_on_submit);
@@ -481,11 +488,13 @@ lifecycle_confirm_lock = true
         assert!(!settings.ui.lifecycle_confirm_close_now);
         assert!(!settings.ui.lifecycle_confirm_stop);
         assert!(settings.ui.lifecycle_confirm_lock);
+        assert!(settings.ui.lifecycle_row_runs_button);
         let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
         assert!(written.contains("lifecycle_keep_open_on_wake = true"));
         assert!(written.contains("lifecycle_confirm_close_now = false"));
+        assert!(written.contains("lifecycle_row_runs_button = true"));
     }
 
     #[test]

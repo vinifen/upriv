@@ -49,6 +49,8 @@ pub use tree::{
     PLAIN_POLICY_FILE, PLAIN_RESERVED_PREFIX,
 };
 
+pub(crate) use tree::require_parent_dir;
+
 use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
 use header::{create_header, save_header};
 pub(crate) use index::load_sealed_index;

@@ -3,7 +3,9 @@ import {
   resolveImportDestination,
   type EnsureFolderFn,
 } from "../file-tree/importPaths";
+import { isRpcError } from "../core-rpc/errors";
 import { joinPath } from "../file-tree/treeUtils";
+import { VAULT_ERROR_CODES } from "../vault/errors/codes";
 import { isInternalVaultFileName } from "./workspaceSnapshot";
 
 export interface ImportLogicalFile {
@@ -25,6 +27,15 @@ export interface ImportLogicalResult {
 
 function isUnsupportedRead(error: unknown): boolean {
   return error instanceof Error && error.message === "unsupported";
+}
+
+/**
+ * Core refused the file because its folder was deleted while the batch ran.
+ * The person removed that folder, so the file is dropped, not a failure, and
+ * the rest of the batch goes on.
+ */
+function folderWasDeleted(error: unknown): boolean {
+  return isRpcError(error) && error.code === VAULT_ERROR_CODES.PATH_NOT_FOUND;
 }
 
 /** Read + write one OS/picker batch. Does not toast or dispatch workspace actions. */
@@ -50,6 +61,8 @@ export async function importLogicalFiles<T extends ImportLogicalFile>(
     onImported?: (path: string, relativePath: string) => void | Promise<void>;
     /** Called once the destination is known, immediately before the write. */
     onImportStart?: (path: string, relativePath: string) => void;
+    /** A started file whose folder was deleted meanwhile: it is dropped. */
+    onImportDropped?: (path: string, relativePath: string) => void;
     /** Preferred: stream bytes (any type). Skips `readContent`. */
     importBinaryFile?: (
       vaultId: string,
@@ -77,8 +90,8 @@ export async function importLogicalFiles<T extends ImportLogicalFile>(
 
 /**
  * Ask core for each folder once per batch: every later file in the same
- * folder reuses its path. A folder deleted meanwhile still fails that file's
- * write, since core refuses a file whose folder is gone.
+ * folder reuses its path. A folder deleted meanwhile is not made again: core
+ * refuses each file whose folder is gone, and the batch drops it.
  */
 function ensureEachFolderOnce(ensureFolder: EnsureFolderFn): EnsureFolderFn {
   const known = new Map<string, string>();
@@ -112,6 +125,7 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
     ) => string | null | Promise<string | null>;
     onImported?: (path: string, relativePath: string) => void | Promise<void>;
     onImportStart?: (path: string, relativePath: string) => void;
+    onImportDropped?: (path: string, relativePath: string) => void;
     importBinaryFile?: (
       vaultId: string,
       parentPath: string,
@@ -143,7 +157,8 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
         file.relativePath,
         options.ensureFolder,
       );
-    } catch {
+    } catch (error) {
+      if (folderWasDeleted(error)) continue;
       writeFailureName = file.name;
       break;
     }
@@ -153,10 +168,8 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
       continue;
     }
 
-    options.onImportStart?.(
-      joinPath(destination.parentPath, destination.fileName),
-      file.relativePath,
-    );
+    const target = joinPath(destination.parentPath, destination.fileName);
+    options.onImportStart?.(target, file.relativePath);
 
     let path: string | null = null;
     try {
@@ -186,7 +199,11 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
           content,
         );
       }
-    } catch {
+    } catch (error) {
+      if (folderWasDeleted(error)) {
+        options.onImportDropped?.(target, file.relativePath);
+        continue;
+      }
       // A write stopped with the rest of the batch is not a failure.
       if (!options.signal?.aborted) writeFailureName = file.name;
       break;
@@ -212,6 +229,7 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
   };
 }
 
+/** `absent` is a file never written: stopped, or its folder was deleted meanwhile. */
 type AheadOutcome =
   | { kind: "absent" }
   | { kind: "skip-invalid" }
@@ -232,6 +250,7 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
     ) => string | null | Promise<string | null>;
     onImported?: (path: string, relativePath: string) => void | Promise<void>;
     onImportStart?: (path: string, relativePath: string) => void;
+    onImportDropped?: (path: string, relativePath: string) => void;
     signal?: AbortSignal;
   },
   importBinaryFile: (
@@ -280,7 +299,8 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
             options.ensureFolder,
           ),
         );
-      } catch {
+      } catch (error) {
+        if (folderWasDeleted(error)) continue;
         outcomes[index] = { kind: "write-fail" };
         stop = true;
         return;
@@ -294,10 +314,8 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
         outcomes[index] = { kind: "skip-invalid" };
         continue;
       }
-      options.onImportStart?.(
-        joinPath(destination.parentPath, destination.fileName),
-        file.relativePath,
-      );
+      const target = joinPath(destination.parentPath, destination.fileName);
+      options.onImportStart?.(target, file.relativePath);
       let path: string | null;
       try {
         path = await importBinaryFile(
@@ -306,7 +324,11 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
           destination.fileName,
           file,
         );
-      } catch {
+      } catch (error) {
+        if (folderWasDeleted(error)) {
+          options.onImportDropped?.(target, file.relativePath);
+          continue;
+        }
         // A write stopped with the rest of the batch is not a failure.
         outcomes[index] = options.signal?.aborted ? { kind: "absent" } : { kind: "write-fail" };
         stop = true;

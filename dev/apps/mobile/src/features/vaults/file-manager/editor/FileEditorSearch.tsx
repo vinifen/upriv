@@ -118,10 +118,7 @@ export const FileEditorSearch = forwardRef<FileEditorSearchHandle, FileEditorSea
         ref={fieldRef}
         collapsable={false}
         accessibilityRole="search"
-        style={[
-          styles.field,
-          { borderColor: colors.outlineVariant, backgroundColor: colors.surfaceContainerHighest },
-        ]}
+        style={[styles.field, { backgroundColor: colors.surfaceContainerHighest }]}
       >
         {hasQuery ? (
           <SearchIconButton
@@ -200,7 +197,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 2,
     paddingHorizontal: 4,
-    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radii.full,
   },
   iconButton: {

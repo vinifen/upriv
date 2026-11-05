@@ -27,10 +27,10 @@ use crate::store::{
     is_export_config, is_plain_internal, is_reserved_logical, mkdir_logical, move_logical_path,
     mutation_blob_ids, pack_blob_waste, read_logical_file, read_logical_range,
     record_imported_file, relocate_logical_path, relocate_replacing, remove_file_chunks,
-    rename_logical_path, seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name,
-    unique_folder_name, write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation,
-    FileTreeNode, ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE,
-    VAULT_FS_MAX_INLINE_BYTES,
+    rename_logical_path, require_parent_dir, seal_import_chunk, to_ui_path, truncate_logical_file,
+    unique_file_name, unique_folder_name, write_logical_file, write_logical_range, BlobPackMode,
+    ChunkBlobMutation, FileTreeNode, ImportBlob, RetiredFileChunks, VaultIndex,
+    INTERNAL_WORKSPACE_FILE, VAULT_FS_MAX_INLINE_BYTES,
 };
 
 fn store_dir(session: &OpenSession) -> std::path::PathBuf {
@@ -456,6 +456,8 @@ pub fn fs_write_file(root: &VaultRoot, vault_id: &str, ui_path: &str, data: &[u8
             session.pending_layout = Some(Zeroizing::new(data.to_vec()));
             return Ok(session.tree_revision);
         }
+        // A folder deleted meanwhile refuses the write, so no file outlives it.
+        require_parent_dir(&session.index, &path)?;
         session.dirty = true;
         let before = session.index.clone();
         let (retired, mutation) = write_logical_file(
@@ -503,6 +505,8 @@ pub fn fs_write_range(
             session.pending_layout = None;
         }
         if session.index.find(&path).is_none() {
+            // A folder deleted meanwhile refuses the write, so no file outlives it.
+            require_parent_dir(&session.index, &path)?;
             // A new name changes the tree, which is sealed before it is shown.
             session.dirty = true;
             let before = session.index.clone();
@@ -1140,7 +1144,12 @@ pub(crate) fn sync_staged_blobs(paths: &[PathBuf]) -> Result<()> {
 }
 
 fn write_reader_ahead(dir: &Path, path: &str, reader: &mut (impl Read + ?Sized)) -> Result<u64> {
-    with_open_session(dir, |_| require_user_visible_logical(path))?;
+    // A folder deleted before the stream starts refuses it before any byte is
+    // encrypted; one deleted during it is refused when the file is named.
+    with_open_session(dir, |session| {
+        require_user_visible_logical(path)?;
+        require_parent_dir(&session.index, path)
+    })?;
     let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
@@ -1158,6 +1167,7 @@ fn write_reader_ahead(dir: &Path, path: &str, reader: &mut (impl Read + ?Sized))
         Some(prepared) => publish_prepared(dir, path, &file_id, prepared),
         None => with_open_session(dir, |session| {
             require_user_visible_logical(path)?;
+            require_parent_dir(&session.index, path)?;
             commit_empty_file(session, path).map(|_| session.tree_revision)
         }),
     }
@@ -1211,6 +1221,7 @@ fn import_os_file_ahead(
 }
 
 /// A free name in `parent` (`unique_file_name` never returns a taken path).
+/// A folder deleted while the file streamed refuses it.
 fn import_destination(session: &OpenSession, parent: &str, base_name: &str) -> Result<String> {
     let name = unique_file_name(&session.index, parent, base_name);
     let path = if parent.is_empty() {
@@ -1219,6 +1230,7 @@ fn import_destination(session: &OpenSession, parent: &str, base_name: &str) -> R
         format!("{parent}/{name}")
     };
     require_user_visible_logical(&path)?;
+    require_parent_dir(&session.index, &path)?;
     Ok(path)
 }
 
@@ -1232,6 +1244,8 @@ pub fn fs_write_from_reader(
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        // A folder deleted meanwhile refuses the write, so no file outlives it.
+        require_parent_dir(&session.index, &path)?;
         session.dirty = true;
         let before = session.index.clone();
         let mut mutation = ChunkBlobMutation::default();
@@ -1414,6 +1428,8 @@ pub fn fs_create_file(
             format!("{parent}/{name}")
         };
         require_user_visible_logical(&path)?;
+        // A folder deleted meanwhile refuses the file, as a folder create does.
+        require_parent_dir(&session.index, &path)?;
         session.dirty = true;
         let before = session.index.clone();
         let (_retired, mutation) = write_logical_file(
@@ -2936,16 +2952,46 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn an_import_into_a_folder_deleted_meanwhile_is_refused() {
+    fn an_import_into_a_folder_deleted_meanwhile_is_refused_and_the_folder_stays_gone() {
         let (tmp, root) = open_notes();
-        let src = os_source(tmp.path(), "a.txt", b"orphan?");
+        let full = os_source(tmp.path(), "a.txt", b"orphan?");
+        let empty = os_source(tmp.path(), "e.txt", b"");
         let (docs, _) = fs_ensure_folder(&root, "notes", "/", "docs").unwrap();
         fs_delete(&root, "notes", &docs).unwrap();
-        let err = fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src, &test_job_id())
+        let blobs = blob_count(&root);
+        for src in [&full, &empty] {
+            let err = fs_import_from_os_path(&root, "notes", &docs, "a.txt", src, &test_job_id())
+                .unwrap_err();
+            assert!(matches!(err, UprivError::VaultPathNotFound(_)), "{err:?}");
+        }
+        // The phone streams each document by its path.
+        for body in [&b"orphan?"[..], &b""[..]] {
+            let err = crate::vault::ingest_import_reader(
+                &root,
+                "notes",
+                "docs/b.txt",
+                &mut &body[..],
+                &test_job_id(),
+            )
             .unwrap_err();
+            assert!(matches!(err, UprivError::VaultPathNotFound(_)), "{err:?}");
+        }
+        // A byte import starts with an empty file there, then writes it in ranges.
+        let err = fs_create_file(&root, "notes", &docs, "c.txt").unwrap_err();
         assert!(matches!(err, UprivError::VaultPathNotFound(_)), "{err:?}");
+        let inside = format!("{docs}/c.txt");
+        for err in [
+            fs_write_range(&root, "notes", &inside, 0, b"bytes").unwrap_err(),
+            fs_write_file(&root, "notes", &inside, b"bytes").unwrap_err(),
+            fs_write_from_reader(&root, "notes", &inside, &mut &b"bytes"[..]).unwrap_err(),
+        ] {
+            assert!(matches!(err, UprivError::VaultPathNotFound(_)), "{err:?}");
+        }
+        assert_eq!(blob_count(&root), blobs);
         with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            assert!(session.index.find("docs").is_none());
             assert!(session.index.find("docs/a.txt").is_none());
+            assert!(session.index.find("docs/b.txt").is_none());
             assert_eq!(session.unsealed_imports, 0);
             Ok(())
         })

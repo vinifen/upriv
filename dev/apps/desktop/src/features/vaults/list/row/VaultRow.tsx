@@ -5,14 +5,14 @@ import { useTranslation } from "@/i18n";
 import {
   vaultRowControls,
   resolveVaultListStatus,
-  isVaultListRowActivatable,
-  isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
   vaultRowChrome,
+  vaultRowClick,
+  vaultRowClickLabelKey,
   vaultRowWorkClock,
   vaultStatusLabelKey,
   type VaultListViewMode,
@@ -22,7 +22,7 @@ import {
 import { disarmRowButton, useRowArming } from "@upriv/shared/react";
 import { ROW_ARM_ATTR } from "@/hooks/useRowArmingDismiss";
 import type { VaultPipelineListStatus } from "./VaultList";
-import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
+import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
@@ -125,16 +125,20 @@ export function VaultRow({
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const canUnlockFromRow =
-    isVaultListRowUnlockTarget(status) && (status !== "queued" || resumeOpen);
-  const openOrUnlock = () => {
-    if (isReorderActive || isDragging) return;
-    if (isOpen) onOpenFileManager(vault);
-    // A click on the row is Unlock, with the button's guard: a click just after Stop turned into Unlock does nothing.
-    else if (role === "unlock") arming.press(() => onUnlockVault(vault));
-    else if (canUnlockFromRow) onUnlockVault(vault);
+  const rowClick = vaultRowClick(role, {
+    open: isOpen,
+    resumeOpen,
+    runsButton: appSettings.ui.lifecycle_row_runs_button,
+  });
+  const activateRow = () => {
+    if (isReorderActive || isDragging || rowClick === null) return;
+    if (rowClick === "file_manager") onOpenFileManager(vault);
+    else if (rowClick === "resume_unlock") onUnlockVault(vault);
+    // The button's own arming: a second press may be needed, and a press just after a role change does nothing.
+    else if (role === "stop") arming.press(() => onStopWork(vault));
+    else arming.press(() => onUnlockVault(vault));
   };
-  const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
+  const rowLabelKey = vaultRowClickLabelKey(role, rowClick);
 
   return (
     <article
@@ -149,31 +153,23 @@ export function VaultRow({
         rowGap,
         density.article,
         vaultStatusRowClass[status],
-        rowActivates ? "cursor-pointer" : "",
+        rowLabelKey ? "cursor-pointer" : "",
         isDragging ? "opacity-45" : "",
         vaultListDropOverClass(isDragOver, isDropBlocked),
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={openOrUnlock}
+      onClick={rowLabelKey ? activateRow : undefined}
       onKeyDown={(event) => {
-        if (!rowActivates) return;
+        if (!rowLabelKey) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          openOrUnlock();
+          activateRow();
         }
       }}
-      role={rowActivates ? "button" : undefined}
-      tabIndex={rowActivates ? 0 : undefined}
-      aria-label={
-        isOpen
-          ? t("action.open_upriv")
-          : canUnlockFromRow
-            ? status === "closed" || status === "recovery"
-              ? t("action.unlock")
-              : t(vaultStatusI18nKey[status])
-            : undefined
-      }
+      role={rowLabelKey ? "button" : undefined}
+      tabIndex={rowLabelKey ? 0 : undefined}
+      aria-label={rowLabelKey ? t(rowLabelKey) : undefined}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {!dragDisabled ? (

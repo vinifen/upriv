@@ -90,18 +90,18 @@ describe("FileEditorPane", () => {
       }),
     );
 
-    // Default: Markdown view toggle is in preview mode (aria-pressed=true)
-    const viewToggle = await screen.findByRole("button", { name: "Markdown view" });
-    expect(viewToggle).toBeTruthy();
-    expect(viewToggle.getAttribute("aria-pressed")).toBe("true");
+    // Default: the note opens in Read.
+    const read = await screen.findByRole("button", { name: "Read" });
+    expect(read.getAttribute("aria-pressed")).toBe("true");
+    const code = screen.getByRole("button", { name: "Code" });
 
     // Default: Outline is open (Hide outline button visible)
     const outlineBtn = screen.getByRole("button", { name: "Hide outline" });
     expect(outlineBtn).toBeTruthy();
     expect(outlineBtn.getAttribute("aria-pressed")).toBe("true");
 
-    // Clicking toggle switches to source view
-    fireEvent.click(viewToggle);
+    // Code switches to the source view.
+    fireEvent.click(code);
     expect(dispatch).toHaveBeenCalledWith({
       type: "set_file_markdown_view",
       path: "/notes.md",

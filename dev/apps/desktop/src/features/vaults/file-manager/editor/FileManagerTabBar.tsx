@@ -20,6 +20,8 @@ interface FileManagerTabBarProps {
   isPathPending: (path: string) => boolean;
   onSave?: () => void;
   showSave?: boolean;
+  /** A save is on its way: Save turns into a spinner, and another press joins that save. */
+  saving?: boolean;
   /** Pinned before the tabs (show-explorer toggle while the explorer is hidden). */
   leading?: ReactNode;
 }
@@ -37,6 +39,7 @@ export function FileManagerTabBar({
   isPathPending,
   onSave,
   showSave = false,
+  saving = false,
   leading,
 }: FileManagerTabBarProps) {
   const { t } = useTranslation();
@@ -48,7 +51,9 @@ export function FileManagerTabBar({
   const [dragSourcePath, setDragSourcePath] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
-  const saveLabel = t("modal.file_manager.viewer.save");
+  const saveLabel = t(
+    saving ? "modal.file_manager.viewer.saving" : "modal.file_manager.viewer.save",
+  );
 
   useEffect(() => {
     activeTabRef.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
@@ -247,9 +252,14 @@ export function FileManagerTabBar({
             size="sm"
             variant="ghost"
             className="!h-auto !min-h-8 !w-[3.25rem] !min-w-[3.25rem] !rounded-none self-stretch hover:!bg-surface-container-highest"
+            aria-busy={saving || undefined}
             onClick={onSave}
           >
-            <Icon name="save" size={14} />
+            {saving ? (
+              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
+            ) : (
+              <Icon name="save" size={14} />
+            )}
           </IconButton>
         </div>
       ) : null}

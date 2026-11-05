@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, useReducer } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -10,6 +10,7 @@ import {
   type FileTreeNode,
   type VaultWorkspaceState,
 } from "@upriv/shared";
+import { useExplorerSearch } from "@upriv/shared/react";
 import { I18nProvider } from "@/i18n";
 import type { FileManagerApi } from "../../hooks/useVaultFileManager";
 import { FileTreePanel } from "../FileTreePanel";
@@ -32,6 +33,7 @@ const savedLayout = () => serializeWorkspaceSnapshot(workspaceSnapshotFromState(
 function Panel({ workspace: initial }: { workspace: VaultWorkspaceState }) {
   const [workspace, dispatch] = useReducer(vaultWorkspaceReducer, initial);
   latest = workspace;
+  const explorerSearch = useExplorerSearch(workspace, dispatch);
   const fm = {
     vaultId: "notes",
     tree: TREE,
@@ -39,6 +41,7 @@ function Panel({ workspace: initial }: { workspace: VaultWorkspaceState }) {
     treeStatus: "ready",
     workspace,
     dispatch,
+    explorerSearch,
     folderPresence: null,
     pendingImportPaths: NOTHING,
     processingImportPaths: NOTHING,
@@ -70,12 +73,48 @@ const row = (name: string) => screen.queryByRole("button", { name });
 describe("FileTreePanel search", () => {
   afterEach(cleanup);
 
-  it("starts closed, with the button beside the other four", async () => {
+  it("starts closed, with the button after the label and apart from the other four", async () => {
     await renderPanel();
     expect(field()).toBeNull();
     expect(toggle().getAttribute("aria-pressed")).toBe("false");
-    const tools = toggle().closest("div")?.parentElement;
-    expect(tools?.querySelectorAll("button")).toHaveLength(5);
+    const searchSlot = toggle().parentElement;
+    expect(searchSlot?.previousElementSibling?.getAttribute("aria-label")).toBe("Hide explorer");
+    expect(searchSlot?.nextElementSibling?.querySelectorAll("button")).toHaveLength(4);
+  });
+
+  it("opens from a hidden explorer, ready to type", async () => {
+    let open: ((open: boolean) => void) | null = null;
+    function Opener({ workspace: initial }: { workspace: VaultWorkspaceState }) {
+      const [workspace, dispatch] = useReducer(vaultWorkspaceReducer, initial);
+      const explorerSearch = useExplorerSearch(workspace, dispatch);
+      open = explorerSearch.show;
+      if (workspace.explorerCollapsed) return null;
+      const fm = {
+        vaultId: "notes",
+        tree: TREE,
+        displayTree: TREE,
+        treeStatus: "ready",
+        workspace,
+        dispatch,
+        explorerSearch,
+        folderPresence: null,
+        pendingImportPaths: NOTHING,
+        processingImportPaths: NOTHING,
+      } as unknown as FileManagerApi;
+      return createElement(FileTreePanel, { fm, splitPercent: 30, layout: "row" });
+    }
+    render(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(Opener, {
+          workspace: { ...createDefaultWorkspaceState(), explorerCollapsed: true },
+        }),
+      }),
+    );
+    await waitFor(() => expect(open).not.toBeNull());
+    act(() => open?.(true));
+    await waitFor(() => expect(field()).not.toBeNull());
+    expect(document.activeElement).toBe(field());
   });
 
   it("opens from the button, ready to type", async () => {

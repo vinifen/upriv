@@ -105,7 +105,7 @@ export const FileEditorSearch = forwardRef<FileEditorSearchHandle, FileEditorSea
           onClick={openAndFocus}
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container-highest/60 hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          <Icon name="search" size={13} />
+          <Icon name="search" size={14} />
         </button>
       );
     }
@@ -120,7 +120,7 @@ export const FileEditorSearch = forwardRef<FileEditorSearchHandle, FileEditorSea
         ref={rootRef}
         role="search"
         aria-label={t("modal.file_manager.search.placeholder")}
-        className="flex h-6 min-w-[7rem] max-w-[12rem] flex-[0_1_12rem] items-center gap-1 rounded-full border border-outline-variant/70 bg-surface-container-highest px-1.5 text-[11px] leading-none transition-all"
+        className="flex h-6 min-w-[7rem] max-w-[12rem] flex-[0_1_12rem] items-center gap-1 rounded-full bg-surface-container-highest px-1.5 text-[11px] leading-none transition-all"
       >
         {hasQuery ? (
           <button

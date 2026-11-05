@@ -1,5 +1,9 @@
-import { useEffect, useRef } from "react";
-import type { MarkdownOutlineEntry, MarkdownOutlineModel } from "@upriv/shared";
+import { useEffect, useRef, type RefObject } from "react";
+import {
+  OUTLINE_MAX_ROW_SHARE,
+  type MarkdownOutlineEntry,
+  type MarkdownOutlineModel,
+} from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { createSmoothScroller, type SmoothScroller, wheelDeltaPx } from "@/lib/smoothWheelScroll";
@@ -36,20 +40,30 @@ export function MarkdownOutlineToggle({
   );
 }
 
+/** Width cap for a saved width; the default keeps its own classes. */
+export const OUTLINE_MAX_WIDTH = `${OUTLINE_MAX_ROW_SHARE * 100}%`;
+/** The default width on most windows (`md:w-[11.5rem]`), where arrow keys start from. */
+export const OUTLINE_DEFAULT_WIDTH_PX = 184;
+
 /** Right-hand map of the note's headings, indented by nesting. Click jumps to the heading. */
 export function MarkdownOutlinePanel({
   outline,
   activeIndex = 0,
   onSelect,
+  asideRef,
+  width,
 }: {
   /** Outline of the open note. */
   outline: MarkdownOutlineModel;
   activeIndex?: number;
   onSelect: (index: number, entry: MarkdownOutlineEntry) => void;
+  /** The panel's own element: a divider drag sizes it directly. */
+  asideRef: RefObject<HTMLElement>;
+  /** This note's width; null draws the default. */
+  width: number | null;
 }) {
   const { t } = useTranslation();
   const entries = outline.entries;
-  const asideRef = useRef<HTMLElement>(null);
   const navRef = useRef<HTMLElement>(null);
 
   /* Keep the current heading in view as it changes. */
@@ -88,13 +102,17 @@ export function MarkdownOutlinePanel({
       aside.removeEventListener("wheel", onWheel);
       scroller?.api.dispose();
     };
-  }, []);
+  }, [asideRef]);
 
   return (
     <aside
       ref={asideRef}
       aria-label={t("modal.file_manager.markdown.outline")}
-      className="flex w-[10.25rem] min-w-0 md:w-[11.5rem] max-w-[40%] shrink-0 flex-col border-l border-outline-variant/40 bg-surface-container-high"
+      style={width === null ? undefined : { width, maxWidth: OUTLINE_MAX_WIDTH }}
+      className={[
+        "flex min-w-0 shrink-0 flex-col border-l border-outline-variant/40 bg-surface-container-high",
+        width === null ? "w-[10.25rem] md:w-[11.5rem] max-w-[40%]" : "",
+      ].join(" ")}
     >
       {outline.status === "unparsed" ? (
         <p className="px-3 py-2 text-xs text-on-surface-variant">

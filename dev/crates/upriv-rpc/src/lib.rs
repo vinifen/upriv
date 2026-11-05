@@ -22,7 +22,7 @@ use upriv_core::logging::{
 };
 use upriv_core::{
     active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
-    close_phase, close_vault, close_vault_auto, close_vault_now, copy_data_folder_into,
+    close_state, close_vault, close_vault_auto, close_vault_now, copy_data_folder_into,
     create_vault_as_job, create_vault_group_with_sort, deactivate_app_home_alias,
     delete_vault_group, discover_bootstrap_root, finish_import_session, hurry_close,
     inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
@@ -32,10 +32,10 @@ use upriv_core::{
     resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
     update_vault_group, vault_list_item, vault_store_on_disk_bytes,
     write_vault_root_alias_for_root, write_vault_root_alias_for_root_with_custom, AppSettings,
-    IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot, ResolveVaultRootOptions,
-    UpdateVaultGroupParams, UprivDirRelocate, VaultConfig, VaultGroup, VaultListItem,
-    VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource, VaultStorageMode,
-    VaultWelcome, VAULT_ROOT_ALIAS_FILE,
+    CloseState, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
+    ResolveVaultRootOptions, UpdateVaultGroupParams, UprivDirRelocate, VaultConfig, VaultGroup,
+    VaultListItem, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource,
+    VaultStorageMode, VaultWelcome, VAULT_ROOT_ALIAS_FILE,
 };
 
 mod data_folder_ops;
@@ -45,7 +45,7 @@ mod secret;
 mod vault_ops;
 
 use secret::SecretString;
-pub use vault_ops::{hurry_shutdown, ingest_content_fd};
+pub use vault_ops::{hurry_shutdown, ingest_content_fd, shutdown_is_now};
 
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
@@ -1568,7 +1568,9 @@ struct VaultIdParams {
     id: String,
 }
 
-/// Where a running close is: its flush or its backup zip.
+/// Where a vault's close stands: `state` is `open`, `closing`, or `closed`,
+/// and `phase` (`flush` or `backup`) is the step of a running close, `null`
+/// otherwise. Light: it answers while the close, or the quit, holds its lane.
 fn vault_close_phase(params: Value) -> RpcResponse {
     let parsed: VaultIdParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1578,9 +1580,14 @@ fn vault_close_phase(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match close_phase(&root, parsed.id.trim()) {
-        Ok(Some(phase)) => ok(json!({ "phase": phase.as_str() })),
-        Ok(None) => ok(json!({ "phase": null })),
+    match close_state(&root, parsed.id.trim()) {
+        Ok(state) => {
+            let phase = match state {
+                CloseState::Closing(phase) => Some(phase.as_str()),
+                CloseState::Open | CloseState::Closed => None,
+            };
+            ok(json!({ "state": state.as_str(), "phase": phase }))
+        }
         Err(error) => map_core_err(error),
     }
 }
@@ -2193,6 +2200,16 @@ mod contract_tests {
     fn handle_rpc(req: RpcRequest) -> RpcResponse {
         crate::isolate_app_home();
         super::handle_rpc(req)
+    }
+
+    #[test]
+    fn shutdown_is_now_only_for_the_close_now_flag() {
+        assert!(shutdown_is_now(&json!({ "now": true })));
+        assert!(!shutdown_is_now(&json!({ "now": false })));
+        assert!(!shutdown_is_now(&json!({})));
+        // Params it cannot read mean the full close.
+        assert!(!shutdown_is_now(&json!({ "now": "yes" })));
+        assert!(!shutdown_is_now(&json!({ "hurry": true })));
     }
 
     const REGISTERED_METHODS: &[&str] = &[

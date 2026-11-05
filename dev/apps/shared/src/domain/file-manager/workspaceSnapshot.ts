@@ -1,4 +1,10 @@
-import { clampCanonicalTreeSplitPercent, findNode, type FileTreeNode } from "../file-tree";
+import {
+  clampCanonicalTreeSplitPercent,
+  findNode,
+  vaultFileLanguageFromPath,
+  type FileTreeNode,
+} from "../file-tree";
+import { persistableOutlineWidth } from "./outlineWidth";
 import type { PerFileWorkspaceState, VaultWorkspaceState } from "./workspaceTypes";
 
 /** Logical file at vault root — encrypted in `store/` with the rest of the vault. */
@@ -19,7 +25,7 @@ export interface WorkspaceSnapshot {
   explorerSearchOpen: boolean;
   /** Missing or not a string loads as no search. */
   explorerSearchQuery: string;
-  /** Per-file view, outline, word wrap, and search. */
+  /** Per-file view, outline and its width, word wrap, and search; defaults are left out. */
   files?: Record<string, PerFileWorkspaceState>;
   /** Vault-specific explorer/editor split percentage (4–65). */
   treeSplitPercent?: number | null;
@@ -61,29 +67,40 @@ function dedupePaths(paths: string[]): string[] {
   return out;
 }
 
-function parseFilesRecord(raw: unknown): Record<string, PerFileWorkspaceState> | undefined {
+/**
+ * The fields that mean something for this file, without their defaults. An
+ * image or a binary file has none of them, and only a note keeps markdown
+ * fields. `null` when nothing is left.
+ */
+function cleanFileState(
+  path: string,
+  entry: Record<string, unknown>,
+): PerFileWorkspaceState | null {
+  const language = vaultFileLanguageFromPath(path);
+  if (language === "binary" || language === "image") return null;
+  const state: PerFileWorkspaceState = {};
+  if (language === "markdown") {
+    if (entry.markdownView === "source") state.markdownView = "source";
+    if (entry.markdownOutlineOpen === false) state.markdownOutlineOpen = false;
+    const width = entry.markdownOutlineWidth;
+    if (typeof width === "number" && Number.isFinite(width)) {
+      state.markdownOutlineWidth = persistableOutlineWidth(width);
+    }
+  }
+  if (isNonEmptyString(entry.searchQuery)) state.searchQuery = entry.searchQuery;
+  if (entry.wordWrap === false) state.wordWrap = false;
+  return Object.keys(state).length > 0 ? state : null;
+}
+
+/** Per-file states from the file or from RAM, each cleaned (`cleanFileState`). */
+function cleanFilesRecord(raw: unknown): Record<string, PerFileWorkspaceState> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const out: Record<string, PerFileWorkspaceState> = {};
   for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
     if (!isNonEmptyString(path) || isInternalVaultPath(path)) continue;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const fileObj = entry as Record<string, unknown>;
-    const fileState: PerFileWorkspaceState = {};
-    if (fileObj.markdownView === "source" || fileObj.markdownView === "preview") {
-      fileState.markdownView = fileObj.markdownView;
-    }
-    if (typeof fileObj.markdownOutlineOpen === "boolean") {
-      fileState.markdownOutlineOpen = fileObj.markdownOutlineOpen;
-    }
-    if (typeof fileObj.searchQuery === "string") {
-      fileState.searchQuery = fileObj.searchQuery;
-    }
-    if (typeof fileObj.wordWrap === "boolean") {
-      fileState.wordWrap = fileObj.wordWrap;
-    }
-    if (Object.keys(fileState).length > 0) {
-      out[path] = fileState;
-    }
+    const state = cleanFileState(path, entry as Record<string, unknown>);
+    if (state) out[path] = state;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -124,7 +141,7 @@ export function parseWorkspaceSnapshot(raw: string): WorkspaceSnapshot | null {
         ? obj.selectedPath
         : null;
 
-  const files = parseFilesRecord(obj.files);
+  const files = cleanFilesRecord(obj.files);
   const treeSplitPercent = parseTreeSplitPercent(obj.treeSplitPercent);
 
   return {
@@ -178,8 +195,9 @@ function sanitizeFilesRecord(
 }
 
 /**
- * Vault tree is source of truth: drop tabs/folders/selection that no longer exist.
- * Always keeps `/` in expandedPaths.
+ * Vault tree is source of truth: drop tabs, folders, selection, and per-file
+ * states whose path no longer exists or is not that kind of node. Always
+ * keeps `/` in expandedPaths.
  */
 export function sanitizeWorkspaceSnapshot(
   snapshot: WorkspaceSnapshot,
@@ -235,12 +253,7 @@ export function sanitizeWorkspaceSnapshot(
 }
 
 export function workspaceSnapshotFromState(state: VaultWorkspaceState): WorkspaceSnapshot {
-  const files: Record<string, PerFileWorkspaceState> = {};
-  for (const [path, entry] of Object.entries(state.fileStates)) {
-    if (!isInternalVaultPath(path) && Object.keys(entry).length > 0) {
-      files[path] = entry;
-    }
-  }
+  const files = cleanFilesRecord(state.fileStates);
 
   return {
     format_version: WORKSPACE_SNAPSHOT_FORMAT_VERSION,
@@ -253,13 +266,14 @@ export function workspaceSnapshotFromState(state: VaultWorkspaceState): Workspac
     explorerCollapsed: state.explorerCollapsed,
     explorerSearchOpen: state.explorerSearchOpen,
     explorerSearchQuery: state.explorerSearchQuery,
-    ...(Object.keys(files).length > 0 ? { files } : {}),
+    ...(files ? { files } : {}),
     ...(typeof state.treeSplitPercent === "number"
       ? { treeSplitPercent: state.treeSplitPercent }
       : {}),
   };
 }
 
+/** Compares cleaned records (`cleanFilesRecord`), where a default is never written out. */
 function fileStatesEqual(
   a?: Record<string, PerFileWorkspaceState>,
   b?: Record<string, PerFileWorkspaceState>,
@@ -271,13 +285,12 @@ function fileStatesEqual(
     const aVal = a?.[key];
     const bVal = b?.[key];
     if (!bVal) return false;
-    const aSearchQuery = aVal?.searchQuery ?? "";
-    const bSearchQuery = bVal?.searchQuery ?? "";
     if (
-      aVal?.markdownView !== bVal?.markdownView ||
-      aVal?.markdownOutlineOpen !== bVal?.markdownOutlineOpen ||
-      aVal?.wordWrap !== bVal?.wordWrap ||
-      aSearchQuery !== bSearchQuery
+      aVal?.markdownView !== bVal.markdownView ||
+      aVal?.markdownOutlineOpen !== bVal.markdownOutlineOpen ||
+      aVal?.markdownOutlineWidth !== bVal.markdownOutlineWidth ||
+      aVal?.wordWrap !== bVal.wordWrap ||
+      aVal?.searchQuery !== bVal.searchQuery
     ) {
       return false;
     }

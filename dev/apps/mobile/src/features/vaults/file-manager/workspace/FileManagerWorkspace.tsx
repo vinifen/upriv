@@ -155,6 +155,7 @@ function OpenFileManagerWorkspace({
             onDelete={fm.requestDelete}
             isPathPending={fm.isImportPending}
             showSave={hasUnsavedEditableTabs(fm)}
+            saving={fm.saving}
             onSave={fm.saveAllFiles}
           />
           <FileEditorPane fm={fm} vaultName={entry.displayName} searchRef={searchRef} />

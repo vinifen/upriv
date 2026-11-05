@@ -19,9 +19,11 @@
 //! beside every job. Electron matches responses by `id`. One Argon2 at a time:
 //! single worker + core `with_unlock_lock`.
 //!
-//! **Quit:** the first `app_shutdown` runs on the close lane. A second one,
-//! sent when the person chooses Close now meanwhile, hurries it from stdin and
-//! answers at once. Electron ends stdin once the first one answers.
+//! **Quit:** the first `app_shutdown` runs on the close lane. A Close now
+//! hurries from stdin first, so it never waits behind a close already on that
+//! lane: as the first call (the quit dialog's Close now), or as a second one
+//! sent while a normal quit runs, which then answers at once. Electron ends
+//! stdin once the first one answers.
 
 mod plain_watch;
 mod wire;
@@ -288,6 +290,12 @@ fn run() -> io::Result<()> {
                         continue;
                     }
                     shutting_down = true;
+                    // Close now straight from the quit dialog: hurry from here
+                    // at once. On the close lane it waits behind any close
+                    // already running, which would not hurry until then.
+                    if upriv_rpc::shutdown_is_now(&params) {
+                        upriv_rpc::hurry_shutdown();
+                    }
                 }
                 if is_heavy_method(&method, &params) {
                     let lane = heavy_lane(&method, &params).expect("heavy method has a lane");

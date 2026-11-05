@@ -165,6 +165,7 @@ export function useSystemInfoData({
     ui.lifecycle_confirm_close_now,
     ui.lifecycle_confirm_stop,
     ui.lifecycle_confirm_lock,
+    ui.lifecycle_row_runs_button,
     ui.always_show_hidden_vaults,
     logging.enabled,
     logging.level,

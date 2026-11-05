@@ -24,7 +24,6 @@ import {
   type ViewStyle,
 } from "react-native";
 import {
-  findNode,
   getParentPath,
   isDescendantPath,
   isImportQueueSlotPath,
@@ -60,12 +59,7 @@ import { colorAlpha, radii } from "@/theme/tokens";
 import { useDoubleTap } from "../hooks/useDoubleTap";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 import { measurePageRect, type PageRect } from "../lib/measurePageRect";
-import {
-  pickImportFiles,
-  DocumentPickerUnavailableError,
-  FolderPickerUnavailableError,
-  type MobileImportPick,
-} from "../lib/osFileImport";
+import { ExplorerActions, TOOL_BUTTON_SIZE } from "./ExplorerActions";
 import { ExplorerSearch, ExplorerSearchToggle } from "./ExplorerSearch";
 
 interface FileTreePanelProps {
@@ -134,22 +128,14 @@ const ROOT_DROP_KEY = "/";
 
 const treeRowKey = (row: VisibleTreeRow) => row.path;
 
-function createTargetPath(fm: FileManagerApi): string {
-  const selected = fm.workspace.selectedPath;
-  if (!selected || selected === "/") return "/";
-  const node = findNode(fm.tree, selected);
-  if (node?.type === "folder") return selected;
-  return getParentPath(selected);
-}
-
 function dropFolderForRow(path: string, folderPaths: Set<string>): string {
   return folderPaths.has(path) ? path : getParentPath(path);
 }
 
-/** Explorer toggle icon and each toolbar action are this square. */
-const TOOL_BUTTON_SIZE = 24;
-/** Toolbar content that fits the label icon and all five actions on one row. */
-const TOOLBAR_ONE_ROW_MIN_WIDTH = TOOL_BUTTON_SIZE * 6;
+/** Between the search button and the actions. */
+const TOOLBAR_SEARCH_GAP = 8;
+/** Toolbar content that fits the label icon, search, its gap, and all four actions on one row. */
+const TOOLBAR_ONE_ROW_MIN_WIDTH = TOOL_BUTTON_SIZE * 6 + TOOLBAR_SEARCH_GAP;
 const TOOLBAR_PADDING_X = 4;
 
 export function FileTreePanel({ fm }: FileTreePanelProps) {
@@ -209,12 +195,12 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
     else fm.dispatch({ type: "toggle_folder", path });
   };
   const searchInputRef = useRef<TextInput>(null);
-  /** The button opened the bar, so typing starts there. A restored bar leaves the keyboard down. */
-  const focusSearchRef = useRef(false);
+  const { focusRef: searchFocusRef, focusTick: searchFocusTick } = fm.explorerSearch;
+  // Also on mount: the empty editor's Find files shows a hidden explorer with its bar open.
   useEffect(() => {
-    if (searchOpen && focusSearchRef.current) searchInputRef.current?.focus();
-    focusSearchRef.current = false;
-  }, [searchOpen]);
+    if (searchOpen && searchFocusRef.current) searchInputRef.current?.focus();
+    searchFocusRef.current = false;
+  }, [searchFocusRef, searchFocusTick, searchOpen]);
 
   const entries = useMemo(
     () =>
@@ -395,30 +381,6 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
 
   const captureDragMove = useCallback(() => dragSourceRef.current !== null, []);
 
-  const runImport = async (pick: () => Promise<MobileImportPick | null>) => {
-    try {
-      const result = await pick();
-      if (!result) return;
-      await fm.importFiles(createTargetPath(fm), result.files, {
-        openFirstViewable: true,
-        skippedUnsupported: result.skippedUnsupported,
-        releaseSafTree: result.releaseSafTree,
-      });
-    } catch (error) {
-      if (error instanceof FolderPickerUnavailableError) {
-        fm.showToast(t("modal.file_manager.toast.import_folder_unavailable"));
-        return;
-      }
-      if (error instanceof DocumentPickerUnavailableError) {
-        fm.showToast(t("modal.file_manager.toast.import_unavailable"));
-        return;
-      }
-      const failedName =
-        error instanceof Error && error.name === "ImportReadError" ? error.message : "file";
-      fm.showToast(t("modal.file_manager.toast.import_failed", { name: failedName }));
-    }
-  };
-
   const isDragging = drag.source !== null;
   const rootDropActive = drag.target === ROOT_DROP_KEY;
   const setRootDropRef = useCallback(
@@ -525,7 +487,10 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
 
   return (
     <View style={[styles.panel, paneStyle, { backgroundColor: colors.surfaceContainer }]}>
-      {/* Label truncates first; once only the icon is left, the actions wrap by group (create, import, search). */}
+      {/*
+        Search follows the label, apart from the actions. The label truncates
+        first; once only its icon is left, the actions wrap by group (create, import).
+      */}
       <View
         style={styles.toolbar}
         onLayout={(event) =>
@@ -535,57 +500,15 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
         }
       >
         <ExplorerToggle fm={fm} showLabel />
+        <View style={styles.toolbarSearch}>
+          <ExplorerSearchToggle
+            open={searchOpen}
+            atWork={!searchOpen && search.trim().length > 0}
+            onToggle={fm.explorerSearch.toggle}
+          />
+        </View>
         <View style={[styles.toolbarActions, toolbarWrapped && styles.toolbarActionsWrapped]}>
-          <View style={[styles.toolbarPair, toolbarWrapped && styles.toolbarPairWrapped]}>
-            <IconButton
-              label={t("modal.file_manager.context.new_file")}
-              icon="file"
-              size={14}
-              tone="muted"
-              onPress={() => fm.createFile(createTargetPath(fm))}
-              style={styles.toolBtn}
-            />
-            <IconButton
-              label={t("modal.file_manager.context.new_folder")}
-              icon="folder"
-              size={14}
-              tone="muted"
-              onPress={() => fm.createFolder(createTargetPath(fm))}
-              style={styles.toolBtn}
-            />
-          </View>
-          <View style={[styles.toolbarPair, toolbarWrapped && styles.toolbarPairWrapped]}>
-            <IconButton
-              label={t("modal.file_manager.explorer.import_files")}
-              icon="arrow-up"
-              size={14}
-              tone="muted"
-              onPress={() => {
-                void runImport(pickImportFiles);
-              }}
-              style={styles.toolBtn}
-            />
-            <IconButton
-              label={t("modal.file_manager.explorer.import_folder")}
-              icon="archive"
-              size={14}
-              tone="muted"
-              onPress={() => {
-                void fm.importPickedFolder(createTargetPath(fm));
-              }}
-              style={styles.toolBtn}
-            />
-          </View>
-          <View style={[styles.toolbarPair, toolbarWrapped && styles.toolbarPairWrapped]}>
-            <ExplorerSearchToggle
-              open={searchOpen}
-              atWork={!searchOpen && search.trim().length > 0}
-              onToggle={() => {
-                focusSearchRef.current = !searchOpen;
-                fm.dispatch({ type: "set_explorer_search_open", open: !searchOpen });
-              }}
-            />
-          </View>
+          <ExplorerActions fm={fm} variant="toolbar" wrapped={toolbarWrapped} />
         </View>
       </View>
       {searchOpen ? (
@@ -1174,15 +1097,7 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
   },
   toolbarActionsWrapped: { flexGrow: 1 },
-  toolbarPair: { flexDirection: "row", flexShrink: 0 },
-  toolbarPairWrapped: { flexGrow: 1, justifyContent: "space-around" },
-  toolBtn: {
-    width: TOOL_BUTTON_SIZE,
-    height: TOOL_BUTTON_SIZE,
-    minWidth: TOOL_BUTTON_SIZE,
-    minHeight: TOOL_BUTTON_SIZE,
-    padding: 0,
-  },
+  toolbarSearch: { flexShrink: 0, marginRight: TOOLBAR_SEARCH_GAP },
   listShell: { flex: 1, minHeight: 0, borderWidth: 1, borderColor: "transparent" },
   list: { flex: 1, minHeight: 0 },
   listContent: { paddingBottom: 4, paddingTop: 0, flexGrow: 1 },

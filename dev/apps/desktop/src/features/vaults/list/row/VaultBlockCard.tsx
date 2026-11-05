@@ -3,13 +3,13 @@ import { useTranslation } from "@/i18n";
 import {
   vaultRowControls,
   resolveVaultListStatus,
-  isVaultListRowActivatable,
-  isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
+  vaultRowClick,
+  vaultRowClickLabelKey,
   vaultRowWorkClock,
   vaultStatusLabelKey,
   type VaultListItem,
@@ -18,7 +18,7 @@ import {
 import { disarmRowButton, useRowArming } from "@upriv/shared/react";
 import { ROW_ARM_ATTR } from "@/hooks/useRowArmingDismiss";
 import type { VaultPipelineListStatus } from "./VaultList";
-import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
+import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
 import { vaultListDropKeyProps } from "../lib/listDropKey";
 import { VaultDragHandle } from "./VaultDragHandle";
@@ -94,16 +94,20 @@ export function VaultBlockCard({
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const canUnlockFromRow =
-    isVaultListRowUnlockTarget(status) && (status !== "queued" || resumeOpen);
-  const openOrUnlock = () => {
-    if (isReorderActive || isDragging) return;
-    if (isOpen) onOpenFileManager(vault);
-    // A click on the card is Unlock, with the button's guard: a click just after Stop turned into Unlock does nothing.
-    else if (role === "unlock") arming.press(() => onUnlockVault(vault));
-    else if (canUnlockFromRow) onUnlockVault(vault);
+  const cardClick = vaultRowClick(role, {
+    open: isOpen,
+    resumeOpen,
+    runsButton: appSettings.ui.lifecycle_row_runs_button,
+  });
+  const activateCard = () => {
+    if (isReorderActive || isDragging || cardClick === null) return;
+    if (cardClick === "file_manager") onOpenFileManager(vault);
+    else if (cardClick === "resume_unlock") onUnlockVault(vault);
+    // The button's own arming: a second press may be needed, and a press just after a role change does nothing.
+    else if (role === "stop") arming.press(() => onStopWork(vault));
+    else arming.press(() => onUnlockVault(vault));
   };
-  const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
+  const cardLabelKey = vaultRowClickLabelKey(role, cardClick);
 
   return (
     <article
@@ -112,31 +116,23 @@ export function VaultBlockCard({
       className={[
         "vault-row relative z-0 flex min-h-0 min-w-0 w-full flex-col gap-2.5 overflow-visible rounded-xl p-3.5 transition-[opacity,box-shadow,background-color] sm:gap-3 sm:p-4",
         vaultStatusRowClass[status],
-        rowActivates ? "cursor-pointer" : "",
+        cardLabelKey ? "cursor-pointer" : "",
         isDragging ? "opacity-45" : "",
         vaultListDropOverClass(isDragOver, isDropBlocked),
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={openOrUnlock}
+      onClick={cardLabelKey ? activateCard : undefined}
       onKeyDown={(event) => {
-        if (!rowActivates) return;
+        if (!cardLabelKey) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          openOrUnlock();
+          activateCard();
         }
       }}
-      role={rowActivates ? "button" : undefined}
-      tabIndex={rowActivates ? 0 : undefined}
-      aria-label={
-        isOpen
-          ? t("action.open_upriv")
-          : canUnlockFromRow
-            ? status === "closed" || status === "recovery"
-              ? t("action.unlock")
-              : t(vaultStatusI18nKey[status])
-            : undefined
-      }
+      role={cardLabelKey ? "button" : undefined}
+      tabIndex={cardLabelKey ? 0 : undefined}
+      aria-label={cardLabelKey ? t(cardLabelKey) : undefined}
     >
       <div className="flex min-w-0 items-start gap-2">
         {!dragDisabled ? (

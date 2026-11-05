@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  ActivityIndicator,
   PanResponder,
   ScrollView,
   StyleSheet,
@@ -38,6 +39,8 @@ interface FileManagerTabBarProps {
   isPathPending: (path: string) => boolean;
   onSave?: () => void;
   showSave?: boolean;
+  /** A save is on its way: Save turns into a spinner, and another tap joins that save. */
+  saving?: boolean;
   /** Pinned before the tabs (show-explorer toggle while the explorer is hidden). */
   leading?: ReactNode;
 }
@@ -54,6 +57,7 @@ export function FileManagerTabBar({
   isPathPending,
   onSave,
   showSave = false,
+  saving = false,
   leading,
 }: FileManagerTabBarProps) {
   const { t } = useTranslation();
@@ -242,13 +246,17 @@ export function FileManagerTabBar({
           ]}
         >
           <IconButton
-            label={t("modal.file_manager.viewer.save")}
+            label={t(
+              saving ? "modal.file_manager.viewer.saving" : "modal.file_manager.viewer.save",
+            )}
             icon="save"
             size={16}
             tone="muted"
             onPress={onSave}
             style={styles.saveButton}
-          />
+          >
+            {saving ? <ActivityIndicator size="small" color={colors.accent} /> : undefined}
+          </IconButton>
         </View>
       ) : null}
     </View>

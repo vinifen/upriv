@@ -131,11 +131,35 @@ pub(crate) fn overwrite_contents(
     opts: &WipeOptions,
     stop: &AtomicBool,
 ) -> io::Result<()> {
+    overwrite_passes(file, len, opts, stop, true)
+}
+
+/// [`overwrite_contents`] without the flush to disk that ends the last pass,
+/// for a caller that makes many overwritten files durable at once. The file
+/// must reach the disk before its name goes.
+#[cfg(unix)]
+pub(crate) fn overwrite_contents_unflushed(
+    file: &mut impl Overwrite,
+    len: u64,
+    opts: &WipeOptions,
+    stop: &AtomicBool,
+) -> io::Result<()> {
+    overwrite_passes(file, len, opts, stop, false)
+}
+
+fn overwrite_passes(
+    file: &mut impl Overwrite,
+    len: u64,
+    opts: &WipeOptions,
+    stop: &AtomicBool,
+    flush_last: bool,
+) -> io::Result<()> {
     if len == 0 {
         return Ok(());
     }
     let mut buf = vec![0u8; 64 * 1024];
-    for _ in 0..opts.passes.max(1) {
+    let passes = opts.passes.max(1);
+    for pass in 1..=passes {
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = len;
         let mut unsynced = 0u64;
@@ -155,7 +179,10 @@ pub(crate) fn overwrite_contents(
             }
         }
         file.flush()?;
-        file.flush_to_disk()?;
+        // Each pass reaches the disk before the next writes over it.
+        if pass < passes || flush_last {
+            file.flush_to_disk()?;
+        }
     }
     Ok(())
 }
@@ -192,6 +219,50 @@ mod tests {
         let mut left = Vec::new();
         io::Read::read_to_end(&mut reader, &mut left).unwrap();
         assert_eq!(left, b"plaintext-secret");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_pass_reaches_the_disk_and_an_unflushed_overwrite_leaves_the_last_to_its_caller() {
+        /// A file in RAM that counts its flushes to disk.
+        struct Counted {
+            bytes: io::Cursor<Vec<u8>>,
+            flushes: std::cell::Cell<u32>,
+        }
+        impl Write for Counted {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.bytes.write(buf)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Seek for Counted {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                self.bytes.seek(pos)
+            }
+        }
+        impl Overwrite for Counted {
+            fn flush_to_disk(&self) -> io::Result<()> {
+                self.flushes.set(self.flushes.get() + 1);
+                Ok(())
+            }
+        }
+        let three = WipeOptions {
+            passes: 3,
+            pattern: VaultWipePattern::Zeros,
+        };
+        let counted = || Counted {
+            bytes: io::Cursor::new(b"plaintext".to_vec()),
+            flushes: std::cell::Cell::new(0),
+        };
+        let mut flushed = counted();
+        overwrite_contents(&mut flushed, 9, &three, &AtomicBool::new(false)).unwrap();
+        assert_eq!(flushed.flushes.get(), 3);
+        let mut unflushed = counted();
+        overwrite_contents_unflushed(&mut unflushed, 9, &three, &AtomicBool::new(false)).unwrap();
+        assert_eq!(unflushed.flushes.get(), 2);
+        assert_eq!(unflushed.bytes.into_inner(), vec![0u8; 9]);
     }
 
     #[test]

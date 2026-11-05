@@ -2,15 +2,14 @@ import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react
 import {
   vaultRowControls,
   resolveVaultListStatus,
-  isVaultListRowActivatable,
-  isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
   vaultRowButtonRole,
   vaultRowButtonTwoStep,
+  vaultRowClick,
+  vaultRowClickLabelKey,
   vaultRowWorkClock,
-  vaultStatusI18nKey,
   vaultStatusLabelKey,
   VAULT_ROW_DENSITY,
   type VaultListItem,
@@ -19,8 +18,8 @@ import {
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { ElapsedTime, TextWidthProbe } from "@/components/ui";
-import { useTranslation, type I18nKey } from "@/i18n";
-import { useRowArming, useRowButtonStack } from "@upriv/shared/react";
+import { useTranslation } from "@/i18n";
+import { disarmRowButton, useRowArming, useRowButtonStack } from "@upriv/shared/react";
 import { claimRowArmTouch } from "@/hooks/useRowArmingDismiss";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
@@ -125,6 +124,23 @@ export function VaultRow({
   const role = vaultRowButtonRole(status, work);
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
   const claimTouch = () => claimRowArmTouch(vault.id);
+  const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
+  const rowClick = vaultRowClick(role, {
+    open: isOpen,
+    resumeOpen,
+    runsButton: appSettings.ui.lifecycle_row_runs_button,
+  });
+  const activateRow = () => {
+    if (isDragging || rowClick === null) return;
+    if (rowClick === "file_manager") onOpenFileManager(vault);
+    else if (rowClick === "resume_unlock") onUnlock(vault);
+    // The button's own arming: a second tap may be needed, and a tap just after a role change does nothing.
+    else if (role === "stop") arming.press(() => onStopWork(vault));
+    else arming.press(() => onUnlock(vault));
+  };
+  const rowLabelKey = vaultRowClickLabelKey(role, rowClick);
+  // A row that presses its button keeps that button armed for a tap anywhere on it.
+  const claimRowTouch = rowClick === "button" ? claimTouch : undefined;
   // The work's elapsed time takes the last-accessed text's place.
   const lastAccessedOrElapsed = (
     <ElapsedTime
@@ -188,6 +204,8 @@ export function VaultRow({
       onLockVault={onLock}
       onUnlockVault={onUnlock}
       onCloseNow={onCloseNow}
+      // Another control in the row puts an armed button back to normal.
+      onTouchStart={claimRowTouch ? disarmRowButton : undefined}
     />
   );
 
@@ -254,16 +272,6 @@ export function VaultRow({
     </View>
   );
 
-  const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const canUnlockFromRow =
-    isVaultListRowUnlockTarget(status) && (status !== "queued" || resumeOpen);
-  const openOrUnlock = () => {
-    if (isDragging) return;
-    if (isOpen) onOpenFileManager(vault);
-    // A tap on the row is Unlock, with the button's guard: a tap just after Stop turned into Unlock does nothing.
-    else if (role === "unlock") arming.press(() => onUnlock(vault));
-    else if (canUnlockFromRow) onUnlock(vault);
-  };
   const lockButton = (layout: "inline" | "block") => (
     <View onTouchStart={claimTouch} style={layout === "block" ? styles.blockLock : null}>
       <VaultLockButton
@@ -280,14 +288,7 @@ export function VaultRow({
       />
     </View>
   );
-  const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
-  const activateLabel = isOpen
-    ? t("action.open_upriv")
-    : canUnlockFromRow
-      ? status === "closed" || status === "recovery"
-        ? t("action.unlock")
-        : t(vaultStatusI18nKey[status] as I18nKey)
-      : undefined;
+  const activateLabel = rowLabelKey ? t(rowLabelKey) : undefined;
   const dropRing = (
     <DropOverRing
       visible={isDragOver}
@@ -302,8 +303,9 @@ export function VaultRow({
       <Pressable
         {...dropTargetProps}
         onLayout={handleLayout}
-        onPress={rowActivates ? openOrUnlock : undefined}
-        accessibilityRole={rowActivates ? "button" : undefined}
+        onTouchStart={claimRowTouch}
+        onPress={rowLabelKey ? activateRow : undefined}
+        accessibilityRole={rowLabelKey ? "button" : undefined}
         accessibilityLabel={activateLabel}
         style={[
           styles.blockCard,
@@ -338,8 +340,9 @@ export function VaultRow({
     <Pressable
       {...dropTargetProps}
       onLayout={handleLayout}
-      onPress={rowActivates ? openOrUnlock : undefined}
-      accessibilityRole={rowActivates ? "button" : undefined}
+      onTouchStart={claimRowTouch}
+      onPress={rowLabelKey ? activateRow : undefined}
+      accessibilityRole={rowLabelKey ? "button" : undefined}
       accessibilityLabel={activateLabel}
       style={[
         styles.row,

@@ -76,6 +76,7 @@ import {
 } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { publishRunningWork, type RunningWorkItem } from "@/lib/runningWork";
+import { useQuitCloseProgress } from "./useQuitCloseProgress";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultImportDrop } from "./useVaultImportDrop";
@@ -685,8 +686,10 @@ export function useVaultListScreen() {
   );
   const rewrapJob = rewrap.job;
   const backupNowJob = backupJob.job;
+  const quitClose = useQuitCloseProgress(vaults, setVaultRuntimeState);
   const pipelineListStatus = useMemo(() => {
-    const rowWork = { ...lifecycle.pipelineListStatus.rowWork };
+    // A close this window started keeps its own row; the quit only adds the rest.
+    const rowWork = { ...quitClose.rowWork, ...lifecycle.pipelineListStatus.rowWork };
     for (const job of [rewrapJob, backupNowJob]) {
       if (!job) continue;
       rowWork[job.vaultId] = vaultRowJobWork({
@@ -697,6 +700,18 @@ export function useVaultListScreen() {
     }
     return {
       ...lifecycle.pipelineListStatus,
+      closingVaultIds: [
+        ...new Set([
+          ...(lifecycle.pipelineListStatus.closingVaultIds ?? []),
+          ...quitClose.closingVaultIds,
+        ]),
+      ],
+      backingUpVaultIds: [
+        ...new Set([
+          ...(lifecycle.pipelineListStatus.backingUpVaultIds ?? []),
+          ...quitClose.backingUpVaultIds,
+        ]),
+      ],
       passwordChangeVaultIds: rewrapJob?.kind === "password" ? [rewrapJob.vaultId] : undefined,
       kdfChangeVaultIds: rewrapJob?.kind === "kdf" ? [rewrapJob.vaultId] : undefined,
       backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
@@ -709,6 +724,7 @@ export function useVaultListScreen() {
     backupNowJob,
     dataFolderExport.job,
     lifecycle.pipelineListStatus,
+    quitClose,
     rewrapJob,
   ]);
 

@@ -373,7 +373,9 @@ export function VaultBackupsModal({
       {deleteTargets !== null ? (
         <View style={[styles.confirmCard, { backgroundColor: colors.surfaceContainer }]}>
           <Text style={typography.bodyMuted}>
-            {t("modal.backup.delete_confirm", { count: String(deleteCount) })}
+            {deleteCount === 1
+              ? t("modal.backup.delete_confirm_one")
+              : t("modal.backup.delete_confirm", { count: String(deleteCount) })}
           </Text>
           <Text style={[typography.mono, styles.confirmPhrase]}>
             {backupDeleteConfirmPhrase(vault.displayName, deleteCount)}

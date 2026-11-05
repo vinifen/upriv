@@ -84,6 +84,18 @@ describe("normalizeAppSettings", () => {
     expect(normalizeAppSettings(settings).ui.lifecycle_confirm_lock).toBe(true);
   });
 
+  it("leaves a row click on the file manager unless lifecycle_row_runs_button is set", () => {
+    const settings = normalizeAppSettings(createDefaultAppSettings());
+    expect(settings.ui.lifecycle_row_runs_button).toBe(false);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, lifecycle_row_runs_button: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.lifecycle_row_runs_button).toBe(false);
+    settings.ui.lifecycle_row_runs_button = true;
+    expect(normalizeAppSettings(settings).ui.lifecycle_row_runs_button).toBe(true);
+  });
+
   it("defaults lifecycle_confirm_close_now to true", () => {
     const settings = createDefaultAppSettings();
     expect(settings.ui.lifecycle_confirm_close_now).toBe(true);

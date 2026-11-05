@@ -1,3 +1,4 @@
+import { persistableOutlineWidth } from "./outlineWidth";
 import { markdownViewMode } from "./workspaceTypes";
 import type {
   MarkdownViewMode,
@@ -5,24 +6,7 @@ import type {
   UnsavedPromptAction,
   VaultWorkspaceState,
 } from "./workspaceTypes";
-import { ancestorFolderPaths, remapLogicalPath } from "../file-tree/treeOps";
-
-export type {
-  PerFileWorkspaceState,
-  UnsavedPromptAction,
-  VaultWorkspaceState,
-} from "./workspaceTypes";
-export {
-  createDefaultWorkspaceState,
-  fileEditorWordWrap,
-  fileMarkdownOutlineOpen,
-  fileMarkdownView,
-  fileSearchQuery,
-  hasUnsavedWorkspaceChanges,
-  isPathDirty,
-  sessionPathKind,
-  type SessionPathKind,
-} from "./workspaceTypes";
+import { ancestorFolderPaths, isDescendantPath, remapLogicalPath } from "../file-tree/treeOps";
 
 export type VaultWorkspaceAction =
   | { type: "toggle_folder"; path: string }
@@ -65,6 +49,7 @@ export type VaultWorkspaceAction =
   | { type: "set_explorer_search_open"; open: boolean }
   | { type: "set_explorer_search_query"; query: string }
   | { type: "set_file_markdown_outline_open"; path: string; open: boolean }
+  | { type: "set_file_markdown_outline_width"; path: string; width: number }
   | { type: "set_file_word_wrap"; path: string; wrap: boolean }
   | { type: "set_file_search_query"; path: string; query: string }
   | { type: "set_tree_split_percent"; percent: number }
@@ -95,10 +80,6 @@ function remapPath(path: string, map: Record<string, string>): string {
 
 function remapList(paths: string[], map: Record<string, string>): string[] {
   return mergeUniquePaths([], paths.map((p) => remapPath(p, map)).filter(Boolean));
-}
-
-function removeFromList(paths: string[], removeSet: Set<string>): string[] {
-  return paths.filter((p) => !removeSet.has(p));
 }
 
 /** Move `fromPath` to the index of `toPath` in the open-tabs strip. */
@@ -174,37 +155,37 @@ function applyPathMap(
   };
 }
 
+/** Forget each path and everything under it: a deleted folder takes its files with it. */
 function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWorkspaceState {
-  const removeSet = new Set(paths);
-  const openTabs = removeFromList(state.openTabs, removeSet);
+  const removed = (path: string) => paths.some((gone) => isDescendantPath(gone, path));
+  const keep = (list: readonly string[]) => list.filter((path) => !removed(path));
+  const openTabs = keep(state.openTabs);
   let activeTabPath = state.activeTabPath;
-  if (activeTabPath && removeSet.has(activeTabPath)) {
+  if (activeTabPath && removed(activeTabPath)) {
     const closedIndex = state.openTabs.indexOf(activeTabPath);
     activeTabPath = openTabs[closedIndex] ?? openTabs[closedIndex - 1] ?? null;
   }
   const editorDrafts = { ...state.editorDrafts };
-  for (const path of paths) delete editorDrafts[path];
+  for (const path of Object.keys(editorDrafts)) {
+    if (removed(path)) delete editorDrafts[path];
+  }
   const fileStates = { ...state.fileStates };
   for (const path of Object.keys(fileStates)) {
-    if (removeSet.has(path) || paths.some((p) => p !== "/" && path.startsWith(`${p}/`))) {
-      delete fileStates[path];
-    }
+    if (removed(path)) delete fileStates[path];
   }
   return {
     ...state,
     openTabs,
     activeTabPath,
-    selectedPath:
-      state.selectedPath && removeSet.has(state.selectedPath) ? null : state.selectedPath,
-    renamingPath:
-      state.renamingPath && removeSet.has(state.renamingPath) ? null : state.renamingPath,
+    selectedPath: state.selectedPath && removed(state.selectedPath) ? null : state.selectedPath,
+    renamingPath: state.renamingPath && removed(state.renamingPath) ? null : state.renamingPath,
     editorDrafts,
     fileStates,
-    dirtyPaths: state.dirtyPaths.filter((p) => !removeSet.has(p)),
-    sessionCreatedPaths: state.sessionCreatedPaths.filter((p) => !removeSet.has(p)),
-    sessionModifiedPaths: state.sessionModifiedPaths.filter((p) => !removeSet.has(p)),
-    expandedPaths: state.expandedPaths.filter((p) => !removeSet.has(p)),
-    userCollapsedPaths: state.userCollapsedPaths.filter((p) => !removeSet.has(p)),
+    dirtyPaths: keep(state.dirtyPaths),
+    sessionCreatedPaths: keep(state.sessionCreatedPaths),
+    sessionModifiedPaths: keep(state.sessionModifiedPaths),
+    expandedPaths: keep(state.expandedPaths),
+    userCollapsedPaths: keep(state.userCollapsedPaths),
   };
 }
 
@@ -480,6 +461,13 @@ export function vaultWorkspaceReducer(
       return { ...state, explorerSearchQuery: action.query };
     case "set_file_markdown_outline_open":
       return patchFileState(state, action.path, "markdownOutlineOpen", action.open);
+    case "set_file_markdown_outline_width":
+      return patchFileState(
+        state,
+        action.path,
+        "markdownOutlineWidth",
+        persistableOutlineWidth(action.width),
+      );
     case "set_file_word_wrap":
       return patchFileState(state, action.path, "wordWrap", action.wrap);
     case "set_file_search_query":

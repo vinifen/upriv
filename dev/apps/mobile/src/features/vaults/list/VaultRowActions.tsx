@@ -59,6 +59,8 @@ interface VaultRowActionsProps {
   onCloseNow: (vault: VaultListItem) => void;
   /** Block cards: stack ⋯ / settings to the right of the title. */
   layout?: "row" | "column";
+  /** A touch on these buttons, before the row sees it. */
+  onTouchStart?: () => void;
 }
 
 export function VaultRowActions({
@@ -75,6 +77,7 @@ export function VaultRowActions({
   onUnlockVault,
   onCloseNow,
   layout = "row",
+  onTouchStart,
 }: VaultRowActionsProps) {
   const { t } = useTranslation();
   const { settings } = useAppSettingsContext();
@@ -143,6 +146,7 @@ export function VaultRowActions({
 
   return (
     <View
+      onTouchStart={onTouchStart}
       style={{
         flexDirection: stacked ? "column" : "row",
         alignItems: "center",

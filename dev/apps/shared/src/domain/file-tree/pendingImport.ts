@@ -1,6 +1,6 @@
 import { sanitizeLogicalFileName } from "./fileNameValidation";
 import { importPathSegments } from "./importPaths";
-import { addChild } from "./treeOps";
+import { addChild, isDescendantPath } from "./treeOps";
 import type { FileTreeNode } from "./types";
 import { fileBaseName, findNode, joinPath } from "./treeUtils";
 
@@ -211,6 +211,14 @@ export function dropSessionPending(
   return pending.filter((entry) => entry.sessionId !== sessionId);
 }
 
+/** Without the entries at `path` or under it: that item was deleted. */
+export function dropPendingUnder(
+  pending: readonly PendingImportEntry[],
+  path: string,
+): PendingImportEntry[] {
+  return pending.filter((entry) => !isDescendantPath(path, entry.path));
+}
+
 export function ensureNodeAtPath(
   root: FileTreeNode,
   path: string,
@@ -283,6 +291,14 @@ export function dropActiveImportWritePath(
   sessionId: number,
 ): ActiveImportWrite[] {
   return writes.filter((write) => write.path !== path || write.sessionId !== sessionId);
+}
+
+/** Without the writes at `path` or under it: that item was deleted. */
+export function dropActiveImportWritesUnder(
+  writes: readonly ActiveImportWrite[],
+  path: string,
+): ActiveImportWrite[] {
+  return writes.filter((write) => !isDescendantPath(path, write.path));
 }
 
 export function activeImportWriteForPath(

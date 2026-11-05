@@ -1,3 +1,4 @@
+import type { I18nKey } from "../../i18n/catalog";
 import { isVaultPipelineDisplayBusy, type VaultDisplayStatus, type VaultRowWork } from "../vault";
 
 /**
@@ -51,6 +52,42 @@ export function vaultRowButtonRole(
   if (status === "open") return "lock";
   if (isVaultPipelineDisplayBusy(status)) return "busy";
   return "unlock";
+}
+
+/**
+ * What a click on the row itself does. A running or waiting open reopens its
+ * password window, and an open vault opens its file manager: a row click
+ * never locks. Any other row, with `ui.lifecycle_row_runs_button` on, presses
+ * its button when that is Unlock or Stop (through the same arming); off, it
+ * does nothing.
+ */
+export type VaultRowClick = "file_manager" | "resume_unlock" | "button" | null;
+
+export function vaultRowClick(
+  role: VaultRowButtonRole,
+  row: { open: boolean; resumeOpen: boolean; runsButton: boolean },
+): VaultRowClick {
+  if (row.resumeOpen) return "resume_unlock";
+  if (row.open) return "file_manager";
+  if (!row.runsButton) return null;
+  return role === "stop" || role === "unlock" ? "button" : null;
+}
+
+/** The accessible name of the row while a click does something (`vaultRowClick`). */
+export function vaultRowClickLabelKey(
+  role: VaultRowButtonRole,
+  click: VaultRowClick,
+): I18nKey | null {
+  switch (click) {
+    case "file_manager":
+      return "action.open_upriv";
+    case "resume_unlock":
+      return "action.unlock";
+    case "button":
+      return role === "stop" ? "action.stop" : "action.unlock";
+    case null:
+      return null;
+  }
 }
 
 /** Whether this role waits for a second press, from the two System settings switches. */

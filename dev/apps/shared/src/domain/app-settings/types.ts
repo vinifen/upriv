@@ -91,10 +91,17 @@ export interface AppSettingsConfig {
      */
     lifecycle_confirm_stop: boolean;
     /**
-     * When true, Open and Close on a vault row (and a click on the row that
-     * opens it) need a second click to confirm. Default false.
+     * When true, Lock on a vault row needs a second click to confirm. Default
+     * false. Unlock only opens its password window, so it never asks twice.
      */
     lifecycle_confirm_lock: boolean;
+    /**
+     * When true, a click on the row of a vault that is not open presses its
+     * button (Unlock, Stop), with the same second press. Default false. An
+     * open vault's row always opens its file manager, and a running or
+     * waiting open reopens its password window (`vaultRowClick`).
+     */
+    lifecycle_row_runs_button: boolean;
   };
   logging: {
     enabled: boolean;
@@ -161,6 +168,7 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.lifecycle_confirm_close_now === b.ui.lifecycle_confirm_close_now &&
     a.ui.lifecycle_confirm_stop === b.ui.lifecycle_confirm_stop &&
     a.ui.lifecycle_confirm_lock === b.ui.lifecycle_confirm_lock &&
+    a.ui.lifecycle_row_runs_button === b.ui.lifecycle_row_runs_button &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&

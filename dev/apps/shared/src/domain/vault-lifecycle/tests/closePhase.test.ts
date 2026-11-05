@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askCloseToHurry,
   parseVaultCloseHurry,
-  parseVaultCloseProgress,
+  parseVaultCloseState,
   waitForClose,
-  type VaultCloseProgress,
+  type VaultCloseState,
 } from "../closePhase";
 
-const flush: VaultCloseProgress = { phase: "flush" };
-const backup: VaultCloseProgress = { phase: "backup" };
+const flush: VaultCloseState = { state: "closing", phase: "flush" };
+const backup: VaultCloseState = { state: "closing", phase: "backup" };
 
 describe("parseVaultCloseHurry", () => {
   it("is true only when a running close heard it", () => {
@@ -57,13 +57,19 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-describe("parseVaultCloseProgress", () => {
-  it("accepts known phases only", () => {
-    expect(parseVaultCloseProgress({ phase: "flush" })).toEqual(flush);
-    expect(parseVaultCloseProgress({ phase: "backup" })).toEqual(backup);
-    expect(parseVaultCloseProgress({ phase: null })).toBeNull();
-    expect(parseVaultCloseProgress({ phase: "other" })).toBeNull();
-    expect(parseVaultCloseProgress(null)).toBeNull();
+describe("parseVaultCloseState", () => {
+  it("reads open, closing at its step, and closed", () => {
+    expect(parseVaultCloseState({ state: "open", phase: null })).toEqual({ state: "open" });
+    expect(parseVaultCloseState({ state: "closing", phase: "flush" })).toEqual(flush);
+    expect(parseVaultCloseState({ state: "closing", phase: "backup" })).toEqual(backup);
+    expect(parseVaultCloseState({ state: "closed", phase: null })).toEqual({ state: "closed" });
+  });
+
+  it("refuses anything else", () => {
+    expect(parseVaultCloseState({ state: "closing", phase: null })).toBeNull();
+    expect(parseVaultCloseState({ state: "closing", phase: "other" })).toBeNull();
+    expect(parseVaultCloseState({ phase: "flush" })).toBeNull();
+    expect(parseVaultCloseState(null)).toBeNull();
   });
 });
 
@@ -77,7 +83,7 @@ describe("waitForClose", () => {
 
   it("reports backup once, then stops asking", async () => {
     const work = deferred<string>();
-    const answers: (VaultCloseProgress | null)[] = [flush, backup];
+    const answers: (VaultCloseState | null)[] = [flush, backup];
     const readProgress = vi.fn(async () => answers.shift() ?? backup);
     const onBackup = vi.fn();
 
@@ -96,7 +102,7 @@ describe("waitForClose", () => {
 
   it("does not report backup after the close settled", async () => {
     const work = deferred<void>();
-    const answer = deferred<VaultCloseProgress | null>();
+    const answer = deferred<VaultCloseState | null>();
     const onBackup = vi.fn();
 
     const watched = waitForClose(work.promise, () => answer.promise, { onBackup }, 100);
@@ -111,7 +117,7 @@ describe("waitForClose", () => {
   it("retries a read failure and still reports backup", async () => {
     const work = deferred<number>();
     let calls = 0;
-    const readProgress = vi.fn(async (): Promise<VaultCloseProgress | null> => {
+    const readProgress = vi.fn(async (): Promise<VaultCloseState | null> => {
       calls += 1;
       if (calls === 1) throw new Error("unknown method");
       return backup;

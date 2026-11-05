@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  collectFilePaths,
   fileBaseName,
   fileNameErrorI18nKey,
   findNode,
@@ -36,6 +35,9 @@ import {
   upsertActiveImportWrite,
   dropActiveImportWritesForSession,
   dropActiveImportWritePath,
+  dropActiveImportWritesUnder,
+  dropPendingUnder,
+  removeNode,
   activeImportWriteForPath,
   releaseLandedImportPaths,
   type ActiveImportWrite,
@@ -48,6 +50,7 @@ import {
 } from "@upriv/shared";
 import { useJobService, useVaultFileSystemService, useVaultService } from "@/platform/services";
 import {
+  useExplorerSearch,
   useFolderFallback,
   useOpenTabContents,
   useToast,
@@ -159,6 +162,8 @@ export function useVaultFileManager({
       ),
     [landedImportPaths, pendingImports, processingPathSet, tree],
   );
+  const displayTreeRef = useRef(displayTree);
+  displayTreeRef.current = displayTree;
 
   useEffect(() => {
     setImportInFlight(vaultId, importBusy);
@@ -213,7 +218,8 @@ export function useVaultFileManager({
     dispatch({ type: "tree_mutated", revision });
   }, [dispatch, fs, vaultId]);
 
-  const publishImportedTree = useCallback(async () => {
+  /** Show the tree core holds now. */
+  const reloadTree = useCallback(async () => {
     try {
       const nextTree = await fs.getFileTree(vaultId);
       const revision = await fs.getTreeRevision(vaultId);
@@ -223,7 +229,7 @@ export function useVaultFileManager({
       try {
         await syncTree();
       } catch {
-        /* The caller still drops this batch's placeholders. */
+        /* The caller still drops its placeholders. */
       }
     }
   }, [dispatch, fs, setTree, syncTree, vaultId]);
@@ -341,7 +347,7 @@ export function useVaultFileManager({
     [contents, workspace.editorDrafts],
   );
 
-  const saveFile = useCallback(
+  const writeDirtyFile = useCallback(
     async (path: string): Promise<boolean> => {
       for (let pass = 0; pass < MAX_DIRTY_DRAFT_SAVE_PASSES; pass++) {
         const current = workspaceRef.current;
@@ -373,6 +379,28 @@ export function useVaultFileManager({
     [contentOf, dispatch, fs, showToast, storeSavedText, t, vaultId],
   );
 
+  /**
+   * A file has one save on its way at most: another ask joins it, and it
+   * writes what was typed meanwhile before it ends. `saving` turns on with the
+   * ask, so Save answers at once while the write seals the vault.
+   */
+  const savesRef = useRef(new Map<string, Promise<boolean>>());
+  const [saving, setSaving] = useState(false);
+  const saveFile = useCallback(
+    (path: string): Promise<boolean> => {
+      const running = savesRef.current.get(path);
+      if (running) return running;
+      const save = writeDirtyFile(path).finally(() => {
+        savesRef.current.delete(path);
+        setSaving(savesRef.current.size > 0);
+      });
+      savesRef.current.set(path, save);
+      setSaving(true);
+      return save;
+    },
+    [writeDirtyFile],
+  );
+
   const saveFiles = useCallback(
     async (paths: readonly string[]): Promise<boolean> => {
       let blocked = false;
@@ -400,6 +428,8 @@ export function useVaultFileManager({
 
   const [unsavedSaving, setUnsavedSaving] = useState(false);
   const unsavedSaveGenRef = useRef(0);
+
+  const explorerSearch = useExplorerSearch(workspace, dispatch);
 
   /** VS Code-style: click a file in the explorer → open/activate it in the editor. */
   const openFile = useCallback(
@@ -498,35 +528,53 @@ export function useVaultFileManager({
     [dispatch, fs, nameErrorMessage, showToast, syncTree, t, vaultId],
   );
 
-  const requestDelete = useCallback(
-    (path: string) => {
-      if (path === "/") return;
-      void (async () => {
-        const [currentTree, asksFirst] = await Promise.all([
-          fs.getFileTree(vaultId),
-          // A settings read that fails still asks: deleting is permanent.
-          vaultService.getSettings(vaultId).then(
-            (settings) => settings?.file_manager.confirm_delete !== false,
-            () => true,
-          ),
-        ]);
-        const node = findNode(currentTree, path);
-        if (!node) return;
-        if (!asksFirst) {
-          const pathsToRemove =
-            node.type === "folder" ? [...collectFilePaths(node, path), path] : [path];
-          await fs.deletePath(vaultId, path);
-          await syncTree();
-          dispatch({ type: "remove_paths", paths: pathsToRemove });
+  /**
+   * Take `path` off the tree at once, with any import still on its way into
+   * it, while core deletes it. Its tabs close once core confirms, so a failed
+   * delete keeps their edits; it says so and shows the tree core holds.
+   */
+  const deleteNow = useCallback(
+    (path: string, name: string) => {
+      setTree((prev) => removeNode(prev, path));
+      setPendingImports((prev) => dropPendingUnder(prev, path));
+      setActiveImportWrites((prev) => dropActiveImportWritesUnder(prev, path));
+      void fs.deletePath(vaultId, path).then(async (deleted) => {
+        if (!deleted) {
+          showToast(t("modal.file_manager.toast.delete_failed", { name }));
+          await reloadTree();
           return;
         }
-        dispatch({
-          type: "set_delete_target",
-          target: { path, name: node.name, isFolder: node.type === "folder" },
-        });
-      })();
+        dispatch({ type: "remove_paths", paths: [path] });
+        await syncTree().catch(() => undefined);
+      });
     },
-    [dispatch, fs, syncTree, vaultId, vaultService],
+    [dispatch, fs, reloadTree, setTree, showToast, syncTree, t, vaultId],
+  );
+
+  const requestDelete = useCallback(
+    (path: string) => {
+      if (path === "/" || isImportWalkPlaceholderPath(path) || isImportQueueSlotPath(path)) return;
+      const node = findNode(displayTreeRef.current, path);
+      if (!node) return;
+      // A settings read that fails still asks: deleting is permanent.
+      void vaultService
+        .getSettings(vaultId)
+        .then(
+          (settings) => settings?.file_manager.confirm_delete !== false,
+          () => true,
+        )
+        .then((asksFirst) => {
+          if (!asksFirst) {
+            deleteNow(path, node.name);
+            return;
+          }
+          dispatch({
+            type: "set_delete_target",
+            target: { path, name: node.name, isFolder: node.type === "folder" },
+          });
+        });
+    },
+    [deleteNow, dispatch, vaultId, vaultService],
   );
 
   /** "Don't ask again" is saved in this vault's settings, where it can be turned back on. */
@@ -544,19 +592,9 @@ export function useVaultFileManager({
   const confirmDelete = useCallback(() => {
     const target = workspace.deleteTarget;
     if (!target) return;
-    void (async () => {
-      const currentTree = await fs.getFileTree(vaultId);
-      const node = findNode(currentTree, target.path);
-      const pathsToRemove =
-        node?.type === "folder"
-          ? [...collectFilePaths(node, target.path), target.path]
-          : [target.path];
-      await fs.deletePath(vaultId, target.path);
-      await syncTree();
-      dispatch({ type: "remove_paths", paths: pathsToRemove });
-      dispatch({ type: "set_delete_target", target: null });
-    })();
-  }, [dispatch, fs, syncTree, vaultId, workspace.deleteTarget]);
+    dispatch({ type: "set_delete_target", target: null });
+    deleteNow(target.path, target.name);
+  }, [deleteNow, dispatch, workspace.deleteTarget]);
 
   const movePath = useCallback(
     (fromPath: string, toFolderPath: string) => {
@@ -671,6 +709,11 @@ export function useVaultFileManager({
               dropActiveImportWritePath(prev, planned ?? path, sessionId),
             );
           },
+          onImportDropped: (path, relativePath) => {
+            const planned = plannedByRelative.get(relativePath) ?? path;
+            setActiveImportWrites((prev) => dropActiveImportWritePath(prev, planned, sessionId));
+            setPendingImports((prev) => dropResolvedPending(prev, planned, planned, sessionId));
+          },
         },
       );
 
@@ -710,7 +753,7 @@ export function useVaultFileManager({
         return;
       }
 
-      await publishImportedTree();
+      await reloadTree();
       clearImportSession(sessionId);
       for (const folder of result.foldersToExpand) {
         dispatch({ type: "expand_folder", path: folder });
@@ -722,7 +765,7 @@ export function useVaultFileManager({
       commitLandedImportPaths,
       dispatch,
       fs,
-      publishImportedTree,
+      reloadTree,
       setTree,
       showToast,
       syncTree,
@@ -754,7 +797,7 @@ export function useVaultFileManager({
       try {
         await applyImportedBatch(sessionId, parentPath, files, options, signal, planTree);
       } catch {
-        await publishImportedTree();
+        await reloadTree();
         clearImportSession(sessionId);
         if (!signal.aborted) {
           showToast(t("modal.file_manager.toast.import_seal_failed"));
@@ -769,7 +812,7 @@ export function useVaultFileManager({
       clearImportSession,
       dispatch,
       endImportSession,
-      publishImportedTree,
+      reloadTree,
       revealPendingImport,
       showToast,
       t,
@@ -807,7 +850,7 @@ export function useVaultFileManager({
         await yieldToPaint();
         await applyImportedBatch(sessionId, parentPath, files, options, signal, planTree);
       } catch {
-        await publishImportedTree();
+        await reloadTree();
         clearImportSession(sessionId);
         if (!signal.aborted) {
           showToast(t("modal.file_manager.toast.import_seal_failed"));
@@ -822,7 +865,7 @@ export function useVaultFileManager({
       clearImportSession,
       dispatch,
       endImportSession,
-      publishImportedTree,
+      reloadTree,
       revealPendingImport,
       showToast,
       t,
@@ -1005,6 +1048,8 @@ export function useVaultFileManager({
     processingImportPaths: processingPathSet,
     saveFile,
     saveAllFiles,
+    saving,
+    explorerSearch,
     openFile,
     createFile,
     createFolder,

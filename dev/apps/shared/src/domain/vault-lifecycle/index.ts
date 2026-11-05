@@ -42,8 +42,8 @@ export {
   CLOSE_PHASE_POLL_MS,
   askCloseToHurry,
   parseVaultCloseHurry,
-  parseVaultCloseProgress,
+  parseVaultCloseState,
   waitForClose,
   type ClosePhaseEvents,
-  type VaultCloseProgress,
+  type VaultCloseState,
 } from "./closePhase";

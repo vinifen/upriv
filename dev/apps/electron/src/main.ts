@@ -13,7 +13,7 @@ import {
   stopDaemon,
   type DaemonConnection,
 } from "./daemon";
-import { SHUTDOWN_NOW_TIMEOUT_MS, settleInvoke } from "./daemonProtocol";
+import { QUIT_PROBE_TIMEOUT_MS, SHUTDOWN_NOW_TIMEOUT_MS, settleInvoke } from "./daemonProtocol";
 import { IDLE_WORK, parseWorkReport, workKeepsAwake, type WorkReport } from "./workReport";
 import {
   classifyDroppedPath,
@@ -302,7 +302,7 @@ async function showQuitClosing(now: boolean): Promise<void> {
 async function readUiLocale(): Promise<string> {
   if (!daemon?.alive) return "en";
   try {
-    const raw = await daemonRpc(daemon, "app_settings_get", {}, 10_000);
+    const raw = await daemonRpc(daemon, "app_settings_get", {}, QUIT_PROBE_TIMEOUT_MS);
     if (typeof raw !== "object" || raw === null) return "en";
     const settings = (raw as { settings?: { ui?: { locale?: unknown } } }).settings;
     const locale = settings?.ui?.locale;
@@ -312,28 +312,34 @@ async function readUiLocale(): Promise<string> {
   }
 }
 
+/**
+ * A vault is open or closing. A daemon that does not answer in time may still
+ * hold one, so the quit asks rather than closing without a word.
+ */
 async function anyVaultSessionOpen(): Promise<boolean> {
   if (!daemon?.alive) return false;
   try {
-    const raw = await daemonRpc(daemon, "vault_list", {}, 10_000);
-    if (typeof raw !== "object" || raw === null) return false;
+    const raw = await daemonRpc(daemon, "vault_list", {}, QUIT_PROBE_TIMEOUT_MS);
+    if (typeof raw !== "object" || raw === null) return true;
     const vaults = (raw as { vaults?: unknown }).vaults;
-    if (!Array.isArray(vaults)) return false;
+    if (!Array.isArray(vaults)) return true;
     return vaults.some((item) => {
       if (typeof item !== "object" || item === null) return false;
       const session = (item as { session?: unknown }).session;
       return session === "open" || session === "closing";
     });
   } catch {
-    return false;
+    return true;
   }
 }
 
 /** Ask before quitting while a vault is open or the renderer reports work running. */
 async function confirmQuitIfBusy(): Promise<QuitChoice> {
-  const vaultOpen = await anyVaultSessionOpen();
+  // Both asks at once, each within `QUIT_PROBE_TIMEOUT_MS`, so a busy daemon
+  // cannot keep the dialog from showing.
+  const [vaultOpen, locale] = await Promise.all([anyVaultSessionOpen(), readUiLocale()]);
   if (!vaultOpen && work.jobs === 0) return "flush";
-  const copy = quitCopyForLocale(await readUiLocale());
+  const copy = quitCopyForLocale(locale);
   const options: Electron.MessageBoxOptions = {
     type: "warning",
     buttons: [copy.confirm, copy.now, copy.cancel],

@@ -131,15 +131,6 @@ fn child_rel(parent: &str, name: &str) -> String {
     }
 }
 
-fn overwrite(
-    file: &mut std::fs::File,
-    len: u64,
-    opts: &WipeOptions,
-    stop: &AtomicBool,
-) -> std::io::Result<()> {
-    crate::vault::wipe::overwrite_contents(file, len, opts, stop)
-}
-
 #[cfg(unix)]
 mod local {
     use std::ffi::{CStr, CString};
@@ -149,8 +140,100 @@ mod local {
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
 
-    use super::{child_rel, overwrite, DiskStamp, Visit, Walk, MAX_DEPTH};
-    use crate::vault::wipe::WipeOptions;
+    use super::{child_rel, DiskStamp, Visit, Walk, MAX_DEPTH};
+    use crate::vault::wipe::{overwrite_contents_unflushed, WipeOptions};
+
+    /// Overwritten files a batch holds before they are made durable together,
+    /// and their bytes. Bounds the open descriptors and how long a stop waits.
+    const BATCH_FILES: usize = 256;
+    const BATCH_BYTES: u64 = 64 * 1024 * 1024;
+
+    /// Files overwritten in one folder whose names wait for the overwrite to
+    /// reach the disk. One flush of the drive's cache serves all of them; a
+    /// flush per file costs about a millisecond each even on a fast SSD.
+    #[derive(Default)]
+    struct Batch {
+        files: Vec<(CString, String, std::fs::File)>,
+        bytes: u64,
+    }
+
+    impl Batch {
+        fn add(&mut self, name: CString, rel: String, file: std::fs::File, len: u64) {
+            self.files.push((name, rel, file));
+            self.bytes = self.bytes.saturating_add(len);
+        }
+
+        fn full(&self) -> bool {
+            self.files.len() >= BATCH_FILES || self.bytes >= BATCH_BYTES
+        }
+
+        /// Make every file durable, then remove the names. A flush that fails
+        /// keeps them all, overwritten, for a later sweep, and so does a name
+        /// another file took meanwhile. True when every name is gone.
+        fn settle(&mut self, dir: &Dir, walk: &mut Walk<'_>) -> bool {
+            if self.files.is_empty() {
+                return true;
+            }
+            let files = std::mem::take(&mut self.files);
+            self.bytes = 0;
+            let open: Vec<&std::fs::File> = files.iter().map(|(_, _, file)| file).collect();
+            let durable = make_durable(&open).is_ok();
+            drop(open);
+            let mut all = true;
+            for (name, rel, file) in files {
+                let still_named = match (fstat(file.as_raw_fd()), dir.stat_child(&name)) {
+                    (Ok(held), Ok(named)) => held.same_node(&named),
+                    _ => false,
+                };
+                drop(file);
+                if !(durable && still_named && walk.out.count(dir.unlink(&name, false))) {
+                    walk.out.keep(&rel);
+                    all = false;
+                }
+            }
+            all
+        }
+    }
+
+    /// Every file's overwrite on the disk, with one flush of the drive's cache
+    /// for all of them. One file is a plain flush of that file.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn make_durable(files: &[&std::fs::File]) -> io::Result<()> {
+        match files {
+            [] => Ok(()),
+            [only] => only.sync_all(),
+            [first, .., last] => {
+                // Writes back and waits for every dirty file on this
+                // filesystem, these included.
+                check(unsafe { libc::syncfs(first.as_raw_fd()) })?;
+                // FAT and exFAT leave the drive's cache to an fsync.
+                last.sync_data()
+            }
+        }
+    }
+
+    /// Every file's overwrite on the disk, with one flush of the drive's cache
+    /// for all of them. One file is a plain flush of that file.
+    #[cfg(target_vendor = "apple")]
+    fn make_durable(files: &[&std::fs::File]) -> io::Result<()> {
+        match files {
+            [] => Ok(()),
+            [only] => only.sync_all(),
+            [.., last] => {
+                // `fsync` hands each file's bytes to the drive; one
+                // `F_FULLFSYNC` then empties the drive's cache for all of them.
+                for file in files {
+                    check(unsafe { libc::fsync(file.as_raw_fd()) })?;
+                }
+                check(unsafe { libc::fcntl(last.as_raw_fd(), libc::F_FULLFSYNC) })
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    fn make_durable(files: &[&std::fs::File]) -> io::Result<()> {
+        files.iter().try_for_each(|file| file.sync_all())
+    }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Kind {
@@ -330,6 +413,7 @@ mod local {
             walk.out.keep(rel);
             return false;
         };
+        let mut batch = Batch::default();
         let mut emptied = true;
         for name in names {
             let text = String::from_utf8_lossy(name.to_bytes()).into_owned();
@@ -348,13 +432,26 @@ mod local {
                 }
             };
             let removed = match stat.kind {
-                Kind::Dir => sweep_child_dir(dir, &name, &child, &stat, root_dev, depth, walk),
+                Kind::Dir => {
+                    // Settled first, so open files do not pile up down the tree.
+                    if !batch.settle(dir, walk) {
+                        emptied = false;
+                    }
+                    sweep_child_dir(dir, &name, &child, &stat, root_dev, depth, walk)
+                }
                 Kind::File => match (walk.choose)(&child, &stat.stamp) {
                     Visit::Keep => false,
-                    Visit::Wipe => {
-                        let wiped = wipe_file_at(dir, &name, &stat, walk.opts, walk.stop);
-                        walk.out.count(wiped)
-                    }
+                    Visit::Wipe => match overwrite_at(dir, &name, &stat, walk.opts, walk.stop) {
+                        Ok(Some(file)) => {
+                            batch.add(name, child, file, stat.stamp.len);
+                            if batch.full() && !batch.settle(dir, walk) {
+                                emptied = false;
+                            }
+                            continue;
+                        }
+                        Ok(None) => walk.out.count(dir.unlink(&name, false)),
+                        Err(error) => walk.out.count(Err(error)),
+                    },
                     Visit::Delete => walk.out.count(dir.unlink(&name, false)),
                 },
                 // A link, pipe, socket, or device holds no vault bytes.
@@ -366,6 +463,9 @@ mod local {
                 }
                 emptied = false;
             }
+        }
+        if !batch.settle(dir, walk) {
+            emptied = false;
         }
         emptied
     }
@@ -402,6 +502,31 @@ mod local {
         true
     }
 
+    /// Overwrite the file `seen` describes, not yet flushed to disk. `None`
+    /// when there is nothing to overwrite: it is empty, or it has another
+    /// name, which keeps the bytes.
+    fn overwrite_at(
+        dir: &Dir,
+        name: &CStr,
+        seen: &Stat,
+        opts: &WipeOptions,
+        stop: &AtomicBool,
+    ) -> io::Result<Option<std::fs::File>> {
+        if seen.nlink > 1 || seen.stamp.len == 0 {
+            return Ok(None);
+        }
+        let mut file = open_writable(dir, name, seen)?;
+        let now = fstat(file.as_raw_fd())?;
+        if !now.same_node(seen) {
+            return Err(io::Error::other("file was replaced"));
+        }
+        if now.nlink > 1 {
+            return Ok(None);
+        }
+        overwrite_contents_unflushed(&mut file, now.stamp.len, opts, stop)?;
+        Ok(Some(file))
+    }
+
     fn wipe_file_at(
         dir: &Dir,
         name: &CStr,
@@ -409,15 +534,8 @@ mod local {
         opts: &WipeOptions,
         stop: &AtomicBool,
     ) -> io::Result<()> {
-        if seen.nlink <= 1 && seen.stamp.len > 0 {
-            let mut file = open_writable(dir, name, seen)?;
-            let now = fstat(file.as_raw_fd())?;
-            if !now.same_node(seen) {
-                return Err(io::Error::other("file was replaced"));
-            }
-            if now.nlink <= 1 {
-                overwrite(&mut file, now.stamp.len, opts, stop)?;
-            }
+        if let Some(file) = overwrite_at(dir, name, seen, opts, stop)? {
+            make_durable(&[&file])?;
         }
         dir.unlink(name, false)
     }
@@ -472,14 +590,14 @@ mod local {
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
 
-    use super::{child_rel, overwrite, DiskStamp, Visit, Walk, MAX_DEPTH};
+    use super::{child_rel, DiskStamp, Visit, Walk, MAX_DEPTH};
     use crate::host_fs::{
         windows_file_info, windows_open_attributes, WindowsFileInfo,
         WINDOWS_FILE_ATTRIBUTE_DIRECTORY as DIRECTORY,
         WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT as REPARSE_POINT,
     };
     use crate::vault::plain::disk::stamp_of_info;
-    use crate::vault::wipe::WipeOptions;
+    use crate::vault::wipe::{overwrite_contents as overwrite, WipeOptions};
 
     const FILE_SHARE_READ: u32 = 0x1;
     const FILE_SHARE_WRITE: u32 = 0x2;
@@ -949,6 +1067,35 @@ mod tests {
         let mut left = Vec::new();
         std::io::Read::read_to_end(&mut reader, &mut left).unwrap();
         assert_eq!(left, vec![0u8; b"plaintext".len()]);
+    }
+
+    #[test]
+    fn files_wiped_in_batches_are_each_overwritten_and_the_tree_is_left_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("leaf");
+        // More files than one batch holds, and folders between them.
+        let mut readers = Vec::new();
+        for dir in ["", "a", "a/b", "c"] {
+            std::fs::create_dir_all(folder.join(dir)).unwrap();
+            for i in 0..300 {
+                let path = folder.join(dir).join(format!("{i}.txt"));
+                std::fs::write(&path, format!("plaintext {i}")).unwrap();
+                if i % 97 == 0 {
+                    readers.push((std::fs::File::open(&path).unwrap(), path));
+                }
+            }
+        }
+
+        let swept = sweep_folder(&folder, &[], &opts(), &mut wipe_all).unwrap();
+        assert_eq!(swept.removed, 1200);
+        assert!(swept.kept.is_empty(), "{:?}", swept.kept);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
+        for (mut reader, path) in readers {
+            assert!(!path.exists());
+            let mut left = Vec::new();
+            std::io::Read::read_to_end(&mut reader, &mut left).unwrap();
+            assert!(left.iter().all(|&byte| byte == 0), "{path:?} kept {left:?}");
+        }
     }
 
     #[test]
