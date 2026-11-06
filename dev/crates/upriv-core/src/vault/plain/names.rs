@@ -103,7 +103,7 @@ fn is_device_name(name: &str) -> bool {
 /// same entry as another one there. A bad folder is listed once, not with
 /// every file under it; both spellings of a clash are listed.
 pub(super) fn unsupported_names(index: &VaultIndex, rules: &NameRules) -> Vec<String> {
-    let paths = index.nodes.iter().map(|node| node.path.as_str());
+    let paths = index.nodes().iter().map(|node| node.path.as_str());
     unsupported_paths(paths.filter(|path| !is_reserved_logical(path)), rules)
 }
 
@@ -153,9 +153,7 @@ mod tests {
     fn index(paths: &[&str]) -> VaultIndex {
         let mut index = VaultIndex::empty();
         for path in paths {
-            index
-                .nodes
-                .push(VaultNode::file(path, "f".into(), 1, vec![], vec![]));
+            index.push(VaultNode::file(path, "f".into(), 1, vec![], vec![]));
         }
         index
     }

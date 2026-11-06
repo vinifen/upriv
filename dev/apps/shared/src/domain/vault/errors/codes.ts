@@ -31,6 +31,13 @@ export const VAULT_ERROR_CODES = {
   PATH_NOT_FOUND: "vault_path_not_found",
   PATH_EXISTS: "vault_path_exists",
   FILE_TOO_LARGE: "vault_file_too_large",
+  /**
+   * Part of a file's data is missing or damaged (`details.problem`). The file
+   * stays in the vault, marked in the explorer; the rest of the vault works.
+   */
+  FILE_UNREADABLE: "vault_file_unreadable",
+  /** No set-aside file of that name can be put back: it was put back or deleted already. */
+  HELD_NOT_FOUND: "vault_held_not_found",
   VAULT_LOCKED: "vault_locked",
   MOUNT_FAILED: "vault_mount_failed",
   /** Windows directory mount needs NTFS or ReFS. exFAT and FAT cannot hold it. */

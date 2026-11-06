@@ -109,6 +109,10 @@ const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 /// On-disk vault body leaf: `vaults/<id>/store/` (`header/` + `index/` + `data/`).
 pub const STORE_DIR_NAME: &str = "store";
 
+/// Blobs no file of the tree names, beside `store/`: `vaults/<id>/held/`.
+/// Backups and store zips leave it out.
+pub const HELD_DIR_NAME: &str = "held";
+
 /// Atomically write `bytes` to `path` (temp + `sync_all` + rename + parent fsync).
 /// The destination is never truncated in place, on a storage-access folder
 /// too: a drive pulled mid-write keeps the previous bytes.
@@ -128,6 +132,10 @@ pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 /// on a read-only handle.
 pub(crate) fn sync_file_durable(path: &Path) -> Result<()> {
     let file = open_nofollow(path, NofollowMode::ReadWrite)?;
+    #[cfg(test)]
+    if take_one(&FAILED_FILE_FLUSHES) {
+        return Err(std::io::Error::other("test: file flush failed").into());
+    }
     sync_handle(&file)
 }
 
@@ -268,13 +276,56 @@ pub(crate) fn write_bytes_atomic_existing_parent(path: &Path, bytes: &[u8]) -> R
     write_bytes_atomic_inner(path, bytes, false)
 }
 
+/// How far an atomic write got when it failed.
+#[derive(Debug)]
+pub(crate) enum AtomicWriteError {
+    /// The previous file is still in place: nothing changed on disk.
+    NotWritten(UprivError),
+    /// The new file is in place, but its folder could not be flushed, so a
+    /// power cut may still bring the previous file back. The flush is not
+    /// tried again: after a failed `fsync` a second one can report success
+    /// for data that never reached the disk. Writing the file again is the
+    /// way back. Only Unix flushes a folder, so only Unix reports it.
+    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
+    Unflushed(UprivError),
+}
+
+impl From<AtomicWriteError> for UprivError {
+    fn from(error: AtomicWriteError) -> Self {
+        match error {
+            AtomicWriteError::NotWritten(error) | AtomicWriteError::Unflushed(error) => error,
+        }
+    }
+}
+
+/// [`write_bytes_atomic`], saying whether a failure left the new file in
+/// place. For a write whose callers act on the file being there, such as the
+/// sealed index.
+pub(crate) fn write_bytes_atomic_reporting(
+    path: &Path,
+    bytes: &[u8],
+) -> std::result::Result<(), AtomicWriteError> {
+    write_bytes_atomic_staged(path, bytes, true)
+}
+
 fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> Result<()> {
+    write_bytes_atomic_staged(path, bytes, create_parents).map_err(UprivError::from)
+}
+
+fn write_bytes_atomic_staged(
+    path: &Path,
+    bytes: &[u8],
+    create_parents: bool,
+) -> std::result::Result<(), AtomicWriteError> {
     use std::io::Write;
     if let Some(parent) = path.parent() {
         if create_parents {
-            crate::host_fs::create_dir_all(parent)?;
+            crate::host_fs::create_dir_all(parent)
+                .map_err(|error| AtomicWriteError::NotWritten(error.into()))?;
         } else if !parent.host_is_dir() {
-            return Err(UprivError::VaultRootNotFound(path.to_path_buf()));
+            return Err(AtomicWriteError::NotWritten(UprivError::VaultRootNotFound(
+                path.to_path_buf(),
+            )));
         }
     }
     let nonce = std::time::SystemTime::now()
@@ -282,25 +333,88 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp = path.with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
-    let result = (|| -> Result<()> {
+    let placed = (|| -> Result<()> {
         let mut file = crate::host_fs::File::create(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         crate::host_fs::rename(&tmp, path)?;
-        // The file body is durable before the rename. The directory entry is
-        // not, until the parent is synced. A failure here is a failed write:
-        // ignoring it reported success for a rename a crash could still drop.
-        #[cfg(unix)]
-        if let Some(parent) = path.parent() {
-            sync_dir_durable(parent)?;
-        }
         Ok(())
     })();
-    if result.is_err() {
+    if let Err(error) = placed {
         let _ = crate::host_fs::remove_file(&tmp);
+        return Err(AtomicWriteError::NotWritten(error));
     }
-    result
+    #[cfg(test)]
+    if take_failed_folder_flush() {
+        return Err(AtomicWriteError::Unflushed(
+            std::io::Error::other("test: folder flush failed").into(),
+        ));
+    }
+    // The file body is durable before the rename. The directory entry is not,
+    // until the parent is synced, so a failure here is reported, not ignored.
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        sync_dir_durable(parent).map_err(AtomicWriteError::Unflushed)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Folder flushes still to fail on this thread, so a test can leave a
+    /// file in place but not flushed. Tests run side by side on other threads.
+    static FAILED_FOLDER_FLUSHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// [`sync_file_durable`] calls still to fail on this thread.
+    static FAILED_FILE_FLUSHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    /// Flushes of the folders that name staged blobs still to fail on this
+    /// thread. Only Unix flushes a folder.
+    static FAILED_BLOB_FOLDER_FLUSHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Make the next `count` atomic writes on this thread put their file in place
+/// and then fail to flush its folder.
+#[cfg(test)]
+pub(crate) fn fail_folder_flushes(count: u32) {
+    FAILED_FOLDER_FLUSHES.with(|left| left.set(count));
+}
+
+/// Make the next `count` file flushes on this thread fail.
+#[cfg(test)]
+pub(crate) fn fail_file_flushes(count: u32) {
+    FAILED_FILE_FLUSHES.with(|left| left.set(count));
+}
+
+/// Make the next `count` flushes of folders that name staged blobs on this
+/// thread fail.
+#[cfg(all(test, unix))]
+pub(crate) fn fail_blob_folder_flushes(count: u32) {
+    FAILED_BLOB_FOLDER_FLUSHES.with(|left| left.set(count));
+}
+
+#[cfg(test)]
+fn take_failed_folder_flush() -> bool {
+    take_one(&FAILED_FOLDER_FLUSHES)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn take_failed_blob_folder_flush() -> bool {
+    take_one(&FAILED_BLOB_FOLDER_FLUSHES)
+}
+
+#[cfg(test)]
+fn take_one(counter: &'static std::thread::LocalKey<std::cell::Cell<u32>>) -> bool {
+    counter.with(|left| {
+        let count = left.get();
+        if count > 0 {
+            left.set(count - 1);
+        }
+        count > 0
+    })
 }
 
 /// True when `path` contains the Upriv vault-root marker (`.upriv/settings.toml`).

@@ -1,6 +1,35 @@
-export type { FileTreeNode, FileTreeNodeType, VaultFileContent, VaultFileLanguage } from "./types";
+export type {
+  FileProblem,
+  FileTreeNode,
+  FileTreeNodeType,
+  VaultFileContent,
+  VaultFileLanguage,
+} from "./types";
 export { parseFileTreeNode } from "./parse";
 export { treeFolderPresence, type FolderPresence } from "./folderPresence";
+export {
+  FILE_PROBLEM_BODY_I18N_KEYS,
+  FILE_PROBLEM_MARK_I18N_KEYS,
+  treeFileProblems,
+  editorFileProblem,
+  treeMarkBehindRead,
+  fileProblemMark,
+  fileProblemRows,
+  fileProblemOfError,
+  type FileProblemMark,
+  type TreeFileProblems,
+} from "./fileProblems";
+export {
+  HELD_FILE_STANDING_I18N_KEYS,
+  heldFileStanding,
+  heldSummary,
+  parseHeldItems,
+  type HeldFile,
+  type HeldFileItem,
+  type HeldFileStanding,
+  type HeldItem,
+  type HeldSummary,
+} from "./heldFiles";
 export { searchTreeRows } from "./searchTree";
 export { vaultFileLanguageFromPath, imageMimeFromPath, imageDataUrlFromBase64 } from "./language";
 export {

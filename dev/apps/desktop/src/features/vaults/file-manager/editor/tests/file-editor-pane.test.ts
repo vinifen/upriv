@@ -23,6 +23,7 @@ function createMockFm(overrides: Partial<FileManagerApi> = {}) {
       path === "/notes.md" ? "# Header\nHello world" : "",
     ),
     fileLoadError: vi.fn(() => null),
+    fileProblem: vi.fn(() => null),
     isFileContentReady: vi.fn(() => true),
     isFileEditable: vi.fn(() => true),
     isFileViewable: vi.fn(() => true),
@@ -77,6 +78,38 @@ describe("FileEditorPane preview notice", () => {
     expect(await screen.findByText(/too large for the memory available/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send to folder" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open in file manager" })).toBeNull();
+  });
+});
+
+describe("FileEditorPane file that cannot be read", () => {
+  function renderProblem(problem: "missing" | "damaged") {
+    const requestDelete = vi.fn();
+    const { fm } = createMockFm({
+      fileProblem: vi.fn(() => problem),
+      isFileContentReady: vi.fn(() => false),
+      requestDelete,
+    });
+    render(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(FileEditorPane, { fm, vaultName: "Personal", active: true }),
+      }),
+    );
+    return { requestDelete };
+  }
+
+  it("says what is wrong before any read lands, points to Backups, and offers Delete", async () => {
+    const { requestDelete } = renderProblem("damaged");
+    expect(await screen.findByText("This file can't be read")).toBeTruthy();
+    expect(screen.getByText(/Part of “notes.md” is damaged/)).toBeTruthy();
+    expect(screen.getByText(/create a new vault from that backup in Backups/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(requestDelete).toHaveBeenCalledWith("/notes.md");
+  });
+
+  it("names missing data apart from damaged data", async () => {
+    renderProblem("missing");
+    expect(await screen.findByText(/data of “notes.md” is missing/)).toBeTruthy();
   });
 });
 

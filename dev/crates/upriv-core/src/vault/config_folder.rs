@@ -13,7 +13,7 @@ use std::path::Path;
 
 use zeroize::Zeroizing;
 
-use crate::error::Result;
+use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::store::{
@@ -73,18 +73,21 @@ pub(crate) fn config_folder_files(
         });
     }
     if include.workspace && index.find(INTERNAL_WORKSPACE_FILE).is_some() {
-        let layout = Zeroizing::new(read_logical_file(
+        let read = read_logical_file(
             source.store_dir,
             source.header,
             source.content_key,
             index,
             INTERNAL_WORKSPACE_FILE,
-        )?);
-        if !layout.is_empty() {
-            files.push(ConfigFile {
+        );
+        match read.map(Zeroizing::new) {
+            Ok(layout) if !layout.is_empty() => files.push(ConfigFile {
                 name: WORKSPACE_FILE,
                 bytes: layout,
-            });
+            }),
+            // A layout that cannot be read stays out: it is not vault data.
+            Ok(_) | Err(UprivError::VaultFileUnreadable { .. }) => {}
+            Err(error) => return Err(error),
         }
     }
     if !files.is_empty() {

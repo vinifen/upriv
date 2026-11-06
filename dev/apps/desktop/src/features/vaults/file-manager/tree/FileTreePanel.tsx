@@ -20,13 +20,18 @@ import {
   isImportWalkPlaceholderPath,
   liveFileNameError,
   fileNameErrorI18nKey,
+  fileProblemMark,
+  fileProblemRows,
+  formatBytes,
   FILE_MANAGER_LONG_PRESS_MS,
   FILE_MANAGER_LONG_PRESS_MOVE_PX,
+  FILE_PROBLEM_MARK_I18N_KEYS,
   LOGICAL_FILE_NAME_MAX_LENGTH,
   renameBasenameSelection,
   searchTreeRows,
   sessionPathKind,
   visibleTreeRows,
+  type FileProblemMark,
   type FolderPresence,
   type SessionPathKind,
   type VaultWorkspaceAction,
@@ -80,6 +85,8 @@ interface FileTreeRowProps {
   isProcessing: boolean;
   /** How much of this entry is in a chosen-files vault's folder. */
   folderMark: FolderPresence | null;
+  /** A file that cannot be read in full, or a folder above one. */
+  problemMark: FileProblemMark | null;
   actions: FileTreeRowActions;
 }
 
@@ -120,6 +127,7 @@ const FileTreeRow = memo(function FileTreeRow({
   isQueueSlot,
   isProcessing,
   folderMark,
+  problemMark,
   actions,
 }: FileTreeRowProps) {
   const { t } = useTranslation();
@@ -378,6 +386,7 @@ const FileTreeRow = memo(function FileTreeRow({
           {isDirty ? (
             <span className="size-1.5 shrink-0 rounded-full bg-white" aria-hidden />
           ) : null}
+          {problemMark ? <ProblemMark mark={problemMark} /> : null}
           {folderMark === "all" || folderMark === "some" ? (
             <FolderMark partial={folderMark === "some"} />
           ) : null}
@@ -386,6 +395,95 @@ const FileTreeRow = memo(function FileTreeRow({
     </div>
   );
 });
+
+function ProblemMark({ mark }: { mark: FileProblemMark }) {
+  const { t } = useTranslation();
+  const label = t(FILE_PROBLEM_MARK_I18N_KEYS[mark]);
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={[
+        "shrink-0 text-[var(--vault-status-recovery)]",
+        mark === "inside" ? "opacity-60" : "",
+      ].join(" ")}
+    >
+      <Icon name="warning" size={11} aria-hidden />
+    </span>
+  );
+}
+
+/**
+ * Says how many files cannot be read, and shows only them in the explorer or
+ * every file again.
+ */
+function FileProblemsBar({ fm }: { fm: FileManagerApi }) {
+  const { t } = useTranslation();
+  const { problems, only, show } = fm.explorerProblems;
+  if (!problems) return null;
+  const count = problems.files.size;
+  return (
+    <div
+      role="status"
+      className="flex shrink-0 items-center gap-1.5 px-2 pb-1 text-[11px] leading-snug text-on-surface-variant"
+    >
+      <Icon
+        name="warning"
+        size={11}
+        className="shrink-0 text-[var(--vault-status-recovery)]"
+        aria-hidden
+      />
+      <span className="min-w-0 flex-1">
+        {t(
+          only
+            ? "modal.file_manager.explorer.problems_shown"
+            : "modal.file_manager.explorer.problems_found",
+          { count },
+        )}
+      </span>
+      <button
+        type="button"
+        aria-pressed={only}
+        onClick={() => show(!only)}
+        className="shrink-0 rounded px-1 font-medium text-on-surface outline-none hover:bg-surface-container-highest focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+      >
+        {t(
+          only
+            ? "modal.file_manager.explorer.problems_show_all"
+            : "modal.file_manager.explorer.problems_show",
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** Data the vault set aside, and the way to the window that reviews it. */
+function HeldFilesBar({ fm }: { fm: FileManagerApi }) {
+  const { t } = useTranslation();
+  const { summary, show } = fm.held;
+  if (!summary) return null;
+  return (
+    <div
+      role="status"
+      className="flex shrink-0 items-center gap-1.5 px-2 pb-1 text-[11px] leading-snug text-on-surface-variant"
+    >
+      <Icon name="archive" size={11} className="shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1">
+        {summary.files.length > 0
+          ? t("modal.file_manager.held.bar_files", { count: summary.files.length })
+          : t("modal.file_manager.held.bar_pieces", { size: formatBytes(summary.pieceBytes) })}
+      </span>
+      <button
+        type="button"
+        onClick={() => show(true)}
+        className="shrink-0 rounded px-1 font-medium text-on-surface outline-none hover:bg-surface-container-highest focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+      >
+        {t("modal.file_manager.held.review")}
+      </button>
+    </div>
+  );
+}
 
 function FolderMark({ partial }: { partial: boolean }) {
   const { t } = useTranslation();
@@ -445,11 +543,21 @@ function FileTreeSkeleton({ label }: { label: string }) {
  * marks change: typing, a divider drag, or opening another file leave the rest.
  * A search shows its matches with the folders that lead to them, open. Those
  * folders collapse for that search only; the saved ones stay as they are.
+ * Showing only the files that cannot be read takes the place of a search.
  */
 function FileTreeRows({ fm, search }: { fm: FileManagerApi; search: string }) {
   const { t } = useTranslation();
-  const { displayTree, folderPresence, workspace, pendingImportPaths, processingImportPaths } = fm;
-  const searching = search.trim().length > 0;
+  const {
+    displayTree,
+    folderPresence,
+    workspace,
+    pendingImportPaths,
+    processingImportPaths,
+    explorerProblems,
+  } = fm;
+  const problems = explorerProblems.problems;
+  const problemsOnly = explorerProblems.only && problems !== null;
+  const searching = !problemsOnly && search.trim().length > 0;
   const { collapsed: searchCollapsed, toggle: toggleSearchFolder } = useSearchCollapsedFolders(
     fm.vaultId,
     search,
@@ -478,14 +586,18 @@ function FileTreeRows({ fm, search }: { fm: FileManagerApi; search: string }) {
 
   const rows = useMemo(
     () =>
-      searching
-        ? searchTreeRows(displayTree, search, {
-            renamingPath: workspace.renamingPath,
-            collapsed: searchCollapsed,
-          })
-        : visibleTreeRows(displayTree, workspace.expandedPaths),
+      problemsOnly && problems
+        ? fileProblemRows(displayTree, problems, workspace.expandedPaths)
+        : searching
+          ? searchTreeRows(displayTree, search, {
+              renamingPath: workspace.renamingPath,
+              collapsed: searchCollapsed,
+            })
+          : visibleTreeRows(displayTree, workspace.expandedPaths),
     [
       displayTree,
+      problems,
+      problemsOnly,
       search,
       searchCollapsed,
       searching,
@@ -531,6 +643,7 @@ function FileTreeRows({ fm, search }: { fm: FileManagerApi; search: string }) {
         isQueueSlot,
         isProcessing: processingImportPaths.has(path) || isWalkPlaceholder || isQueueSlot,
         folderMark: folderPresence?.get(path) ?? null,
+        problemMark: fileProblemMark(problems, path),
         actions,
       };
     };
@@ -562,6 +675,7 @@ function FileTreeRows({ fm, search }: { fm: FileManagerApi; search: string }) {
     expanded,
     folderPresence,
     pendingImportPaths,
+    problems,
     processingImportPaths,
     renamingPath,
     rows,
@@ -726,6 +840,8 @@ export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePan
           {t("modal.file_manager.explorer.folder_empty")}
         </p>
       ) : null}
+      <FileProblemsBar fm={fm} />
+      <HeldFilesBar fm={fm} />
       <nav
         className={[
           "min-h-0 flex-1 overflow-y-auto overscroll-y-contain pb-1.5 pt-0",

@@ -4,6 +4,9 @@ import {
   rpcVaultFsCreateFolder,
   rpcVaultFsDelete,
   rpcVaultFsEnsureFolder,
+  rpcVaultFsHeld,
+  rpcVaultFsHeldDelete,
+  rpcVaultFsHeldRestore,
   rpcVaultFsImportOsFile,
   rpcVaultFsList,
   rpcVaultFsMove,
@@ -41,4 +44,7 @@ export const nativeVaultFileSystemService = createLiveVaultFileSystemService({
   previewFits: (id, path) => rpcVaultFsPreviewFits(id, path),
   plainSend: (id, paths) => rpcVaultPlainSend(id, paths),
   plainUnsend: (id, paths) => rpcVaultPlainUnsend(id, paths),
+  held: (id) => rpcVaultFsHeld(id),
+  heldRestore: (id, names) => rpcVaultFsHeldRestore(id, names),
+  heldDelete: (id, names) => rpcVaultFsHeldDelete(id, names),
 });

@@ -26,7 +26,7 @@ use crate::host_fs::HostFsQuery;
 use crate::host_fs::{File, Metadata, OpenOptions};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::runtime_state::UnfinishedWork;
+use crate::runtime_state::{vault_held_elsewhere, UnfinishedWork};
 use crate::session::{
     any_preparing_under, any_session_under, is_vault_closing_at, is_vault_open_at,
     with_vault_dir_lock, with_vault_registry_lock, DataFolderExportGuard, Job, JobKind,
@@ -138,6 +138,12 @@ fn hold_data_folder(root: &VaultRoot) -> Result<HeldDataFolder> {
         }
         let mut vaults = Vec::new();
         for dir in vault_dirs(&vaults_dir)? {
+            // The core of an app that went away may still be closing it. A
+            // folder whose name is no vault id has no lock.
+            let id = dir.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            if vault_held_elsewhere(root, id) {
+                return Err(UprivError::DataFolderBusy);
+            }
             match PreparingGuard::enter_exclusive(&dir) {
                 Ok(hold) => vaults.push(hold),
                 Err(UprivError::VaultBusy) => return Err(UprivError::DataFolderBusy),

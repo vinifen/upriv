@@ -45,6 +45,14 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
     matches!(method, "vault_open" | "vault_create" | "vault_ingest_open")
 }
 
+/// A `vault_open` whose vault the core of an app that went away still holds.
+/// It waits on a thread of its own ([`upriv_rpc::vault_open_wait`]), with no
+/// time limit, and joins the `upriv-argon2` worker after, so opens and
+/// creates of other vaults do not queue behind that wait.
+pub fn waits_before_lane(method: &str, params: &Value) -> bool {
+    method == "vault_open" && upriv_rpc::vault_open_must_wait(params)
+}
+
 /// Close, delete, and plaintext-folder work that waits for a sync pass. Own
 /// worker so a lock is not stuck behind a multi-minute import, export, or
 /// rewrap, and stdin is not stuck behind a pass.
@@ -170,6 +178,9 @@ mod tests {
     #[test]
     fn argon2_worker_is_only_short_unlocks() {
         let empty = Value::Null;
+        // Only an open that names a vault can wait before the lane.
+        assert!(!waits_before_lane("vault_open", &empty));
+        assert!(!waits_before_lane("vault_create", &empty));
         assert!(is_argon2_bound_method("vault_open", &empty));
         assert!(is_argon2_bound_method("vault_ingest_open", &empty));
         assert!(is_lifecycle_io_method("vault_discard_import"));
@@ -182,7 +193,7 @@ mod tests {
         assert!(!is_argon2_bound_method("vault_close", &empty));
         assert!(!is_argon2_bound_method("app_settings_save", &empty));
         assert!(!is_argon2_bound_method("vault_list", &empty));
-        assert!(!is_heavy_method("vault_store_size", &empty));
+        assert!(!is_heavy_method("vault_disk_usage", &empty));
         assert!(!is_heavy_method("vault_close_phase", &empty));
         assert!(!is_argon2_bound_method("app_shutdown", &empty));
         assert_eq!(

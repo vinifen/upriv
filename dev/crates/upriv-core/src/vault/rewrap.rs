@@ -5,14 +5,25 @@
 //! that material, so both are resealed. A crash must leave either the old
 //! password or the new one able to open the vault.
 //!
+//! In order: a change that would change nothing is refused (the preset from
+//! the header alone, before any unlock), the current password unlocks, the
+//! safety zip copies `store/` as it is, blobs no file names are set aside as
+//! an open does (the resealed index replaces the index copy that may name
+//! them), and the header commit runs. Until the zip is written the change
+//! itself writes nothing to `store/`: only the unlock may repair a header or
+//! index file that does not open from its twin, as every unlock does. So a
+//! refusal or a failed zip leaves the vault's content and password as they
+//! were.
+//!
 //! `with_unlock_lock` covers only the Argon2 derives. The safety zip and the
 //! header commit run outside that lock. Retention of that zip runs only after
 //! the header commit succeeds. Desktop and Android run the whole call on the
 //! rewrap worker, not the close worker.
 //!
 //! A change is a job the person can stop until its header commit: a stop
-//! removes the safety zip it wrote and leaves `store/` and the password as they
-//! were. The commit itself refuses a stop ([`Job::final_step`]).
+//! removes the safety zip it wrote and leaves the password as it was; blobs
+//! already set aside stay recorded, as after an open. The commit itself
+//! refuses a stop ([`Job::final_step`]).
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +32,7 @@ use crate::error::{Result, RewrapUnchangedKind, UprivError};
 use crate::host_fs::HostFsQuery;
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
+use crate::runtime_state::refuse_if_held_elsewhere;
 use crate::session::{
     check_unlock_allowed, ensure_vault_session_closed, is_vault_closing_at, is_vault_open_at,
     record_unlock_failure, record_unlock_success, with_unlock_lock, with_vault_dir_lock, Job,
@@ -47,6 +59,18 @@ pub(crate) enum RewrapStep {
     HeaderCopy,
     /// Both header files and both index files are the new wrap.
     IndexPrimary,
+}
+
+impl RewrapStep {
+    /// The step's name in the log.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::IndexCopy => "index_copy",
+            Self::HeaderPrimary => "header_primary",
+            Self::HeaderCopy => "header_copy",
+            Self::IndexPrimary => "index_primary",
+        }
+    }
 }
 
 enum RewrapKind<'a> {
@@ -108,9 +132,13 @@ fn rewrap(
         if new_password.is_empty() {
             return Err(UprivError::WrongPassword);
         }
+        if *new_password == current_password {
+            return Err(unchanged(RewrapUnchangedKind::Password));
+        }
     }
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     ensure_vault_session_closed(&vault_dir)?;
+    refuse_if_held_elsewhere(root, vault_id)?;
     let _preparing = PreparingGuard::enter_exclusive(&vault_dir)?;
     with_vault_dir_lock(&vault_dir, || {
         if is_vault_open_at(&vault_dir) || is_vault_closing_at(&vault_dir) {
@@ -118,31 +146,27 @@ fn rewrap(
         }
         super::plain::ensure_no_leftover(root, vault_id)?;
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-        let opened = with_unlock_lock(|| unlock_current(&vault_dir, &store, current_password))?;
-        let master = opened.master_key.clone();
-        let index_key = opened.index_key.clone();
-        let index = opened.index.clone();
+        // The header keeps its unlock cost in the clear: the preset it already
+        // has is refused before an unlock that can take seconds.
+        if let RewrapKind::Preset(preset) = &kind {
+            if crate::store::probe_unlock_preset(&store) == Some(*preset) {
+                return Err(unchanged(RewrapUnchangedKind::UnlockRam));
+            }
+        }
+        let mut opened = with_unlock_lock(|| unlock_current(&vault_dir, &store, current_password))?;
         let header = opened.header.clone();
-        drop(opened);
-
         let password_change = matches!(kind, RewrapKind::Password(_));
         let (memory_kib, time_cost, parallelism, next_password) = match kind {
-            RewrapKind::Password(new_password) => {
-                if new_password == current_password {
-                    return Err(unchanged(RewrapUnchangedKind::Password));
-                }
-                (
-                    header.kdf.memory_kib,
-                    header.kdf.time_cost,
-                    header.kdf.parallelism,
-                    new_password,
-                )
-            }
+            RewrapKind::Password(new_password) => (
+                header.kdf.memory_kib,
+                header.kdf.time_cost,
+                header.kdf.parallelism,
+                new_password,
+            ),
             RewrapKind::Preset(preset) => {
-                if preset.memory_kib() == header.kdf.memory_kib
-                    && preset.time_cost() == header.kdf.time_cost
-                    && preset.parallelism() == header.kdf.parallelism
-                {
+                // The header the password opened decides: the other file may
+                // hold another cost after a change a crash cut short.
+                if header.unlock_preset() == Some(preset) {
                     return Err(unchanged(RewrapUnchangedKind::UnlockRam));
                 }
                 (
@@ -155,8 +179,8 @@ fn rewrap(
         };
 
         job.ensure_running()?;
-        // Zip the current body before any header byte changes. A failure here
-        // leaves `store/` as it was. Older zips stay until the header commit.
+        // Zip the current body before anything in `store/` changes. A failure
+        // here leaves `store/` as it was. Older zips stay until the header commit.
         let safety_zip = match backup_before_rewrap(root, vault_id, job) {
             Ok(zip) => zip,
             Err(_) if job.is_stopped() => return Err(UprivError::JobCancelled),
@@ -169,6 +193,14 @@ fn rewrap(
                 return Err(UprivError::VaultBackupFailed);
             }
         };
+        // The commit replaces the index copy, which may be the only index that
+        // names some blobs: set them aside and record them first, as an open
+        // does. Nothing is deleted, and the zip above holds them as they were.
+        super::open_close::settle_opened(&vault_dir, &mut opened)?;
+        let master = opened.master_key.clone();
+        let index_key = opened.index_key.clone();
+        let index = opened.index.clone();
+        drop(opened);
 
         let next_header = with_unlock_lock(|| {
             rewrap_header(
@@ -333,7 +365,20 @@ pub(crate) fn commit_rewrap(
             RewrapStep::IndexCopy | RewrapStep::IndexPrimary => index,
             RewrapStep::HeaderPrimary | RewrapStep::HeaderCopy => header,
         };
-        crate::paths::write_bytes_atomic(&path, bytes)?;
+        // A file in place whose folder did not flush is still written: past
+        // `HeaderCopy` the new password is the one on disk, and reporting a
+        // failure would tell the person their old password still works.
+        match crate::paths::write_bytes_atomic_reporting(&path, bytes) {
+            Ok(()) => {}
+            Err(crate::paths::AtomicWriteError::Unflushed(_)) => {
+                log_event(
+                    LogLevel::Warn,
+                    "vault_rewrap_unflushed",
+                    &[("step", step.as_str())],
+                );
+            }
+            Err(crate::paths::AtomicWriteError::NotWritten(error)) => return Err(error),
+        }
         if step == through {
             break;
         }
@@ -712,6 +757,43 @@ mode = "encrypted_dir"
     }
 
     #[test]
+    fn a_commit_in_place_but_not_flushed_counts_as_done() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            OLD,
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let store = root.vault_store_dir("notes").unwrap();
+        let opened = open_store(&store, OLD).unwrap();
+        let next = rewrap_header(
+            &opened.header,
+            &opened.master_key,
+            NEW,
+            opened.header.kdf.memory_kib,
+            opened.header.kdf.time_cost,
+            opened.header.kdf.parallelism,
+        )
+        .unwrap();
+        let index_bytes = sealed_index_bytes(&next, &opened.index_key, &opened.index).unwrap();
+        let header_file = header_bytes(&next).unwrap();
+        drop(opened);
+
+        // Every step puts its file in place; no folder flushes.
+        crate::paths::fail_folder_flushes(4);
+        commit_rewrap(&store, &header_file, &index_bytes, RewrapStep::IndexPrimary)
+            .expect("files in place are the new password, not a failure");
+        crate::paths::fail_folder_flushes(0);
+        open_store(&store, NEW).expect("the new password opens");
+        assert!(matches!(
+            open_store(&store, OLD),
+            Err(UprivError::WrongPassword)
+        ));
+    }
+
+    #[test]
     fn password_change_keeps_a_note_written_before_it() {
         let (_tmp, root) = vault_root_with(&[]);
         let mut config = sample_config("notes", "Notes");
@@ -843,5 +925,114 @@ mode = "encrypted_dir"
         ));
         let saved = load_vault_config(&vault_dir).unwrap();
         assert!(saved.security.password_changed_at.is_some());
+    }
+
+    /// Every file under `dir` with its bytes, by path inside it.
+    fn tree_bytes(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = BTreeMap::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(folder) = pending.pop() {
+            for entry in crate::host_fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.host_is_dir() {
+                    pending.push(path);
+                } else {
+                    let rel = path.strip_prefix(dir).unwrap().to_path_buf();
+                    out.insert(rel, crate::host_fs::read(&path).unwrap());
+                }
+            }
+        }
+        out
+    }
+
+    /// A change refused as unchanged, and one whose safety zip fails, leave
+    /// `store/` as it was, though a blob only the index copy names waits to
+    /// be set aside.
+    #[test]
+    fn a_refused_change_or_a_failed_safety_zip_leaves_the_store_as_it_was() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            OLD,
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
+        let index = store.join(INDEX_DIR_NAME).join(INDEX_FILE_NAME);
+        let previous = crate::host_fs::read(&index).unwrap();
+        open_vault(&root, "notes", OLD).unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/b.txt", b"second").unwrap();
+        close_vault(&root, "notes").unwrap();
+        crate::host_fs::write(&index, previous).unwrap();
+        let backups = vault_dir.join("backups");
+        crate::host_fs::remove_dir_all(&backups).unwrap();
+        let before = tree_bytes(&store);
+        let held = vault_dir.join(crate::paths::HELD_DIR_NAME);
+
+        assert!(matches!(
+            change_vault_password(&root, "notes", OLD, OLD, &test_job_id()),
+            Err(UprivError::RewrapUnchanged(RewrapUnchangedKind::Password))
+        ));
+        assert!(matches!(
+            change_vault_kdf(&root, "notes", OLD, KdfUnlockPreset::M32, &test_job_id()),
+            Err(UprivError::RewrapUnchanged(RewrapUnchangedKind::UnlockRam))
+        ));
+        // Refused from the header alone: no unlock runs, so the password is
+        // not even checked.
+        assert!(matches!(
+            change_vault_kdf(
+                &root,
+                "notes",
+                b"not-the-password",
+                KdfUnlockPreset::M32,
+                &test_job_id()
+            ),
+            Err(UprivError::RewrapUnchanged(RewrapUnchangedKind::UnlockRam))
+        ));
+        assert_eq!(tree_bytes(&store), before);
+        assert!(!held.host_exists());
+
+        // A file where the backups folder goes: the zip cannot be written.
+        crate::host_fs::write(&backups, b"not a folder").unwrap();
+        assert!(matches!(
+            change_vault_password(&root, "notes", OLD, NEW, &test_job_id()),
+            Err(UprivError::VaultBackupFailed)
+        ));
+        assert_eq!(tree_bytes(&store), before);
+        assert!(!held.host_exists());
+        assert!(open_store(&store, OLD).is_ok());
+    }
+
+    #[test]
+    fn a_change_records_a_file_only_the_index_copy_names_before_replacing_it() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            OLD,
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let index = vault_dir
+            .join(crate::paths::STORE_DIR_NAME)
+            .join(INDEX_DIR_NAME)
+            .join(INDEX_FILE_NAME);
+        let previous = crate::host_fs::read(&index).unwrap();
+        open_vault(&root, "notes", OLD).unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/b.txt", b"second").unwrap();
+        close_vault(&root, "notes").unwrap();
+        // The primary index of that close never landed, and no backup is left.
+        crate::host_fs::write(&index, previous).unwrap();
+        crate::host_fs::remove_dir_all(vault_dir.join("backups")).unwrap();
+
+        change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
+        open_vault(&root, "notes", NEW).unwrap();
+        let held = crate::vault::fs_held_list(&root, "notes").unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].file.as_ref().unwrap().path, "/b.txt");
+        close_vault(&root, "notes").unwrap();
     }
 }

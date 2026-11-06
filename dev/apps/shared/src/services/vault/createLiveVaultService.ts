@@ -2,9 +2,9 @@ import { RpcError } from "../../domain/core-rpc/errors";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import { forgetVaultSettings, rememberVaultSettings } from "./vaultSettingsMemory";
 import type { CreateVaultInput, VaultRenameResult, VaultService } from "./VaultService";
-import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list";
+import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../../domain/vault-list";
 import type { VaultRow } from "../../domain/vault";
-import type { VaultPathWriteResult } from "../backup/createLiveBackupService";
+import type { VaultDiskUsage } from "../../domain/vault-info";
 
 function notImplemented(what: string): never {
   throw new RpcError("not_implemented", `${what} is not implemented`);
@@ -14,8 +14,8 @@ export interface LiveVaultRpc {
   listVaults: () => Promise<VaultListItem[]>;
   createVault: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
   getSettings: (vaultId: string) => Promise<VaultSettingsConfig | undefined>;
-  /** Regular-file bytes under `store/`. Omitted adapters leave Info on an em dash. */
-  storeOnDiskBytes?: (vaultId: string) => Promise<number>;
+  /** Regular-file bytes under `store/` and `held/`. Omitted adapters leave Info on an em dash. */
+  diskUsage?: (vaultId: string) => Promise<VaultDiskUsage>;
   /** Persist full `config.toml` via `vault_config_save` (enforces edit-policy). */
   saveSettings?: (vaultId: string, config: VaultSettingsConfig) => Promise<void>;
   /** Deep rename via `vault_rename` (display name + optional folder migration). */
@@ -26,7 +26,7 @@ export interface LiveVaultRpc {
     request: VaultExportRequest,
     destDir: string,
     job: string,
-  ) => Promise<VaultPathWriteResult>;
+  ) => Promise<VaultExportResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
   sweepUnfinished?: () => Promise<void>;
   importZip?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
@@ -70,8 +70,7 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       if (settings) rememberVaultSettings(vaultId, settings);
       return settings;
     },
-    storeOnDiskBytes: (vaultId) =>
-      rpc.storeOnDiskBytes ? rpc.storeOnDiskBytes(vaultId) : Promise.resolve(null),
+    diskUsage: (vaultId) => (rpc.diskUsage ? rpc.diskUsage(vaultId) : Promise.resolve(null)),
 
     async registerSettings(vaultId, config) {
       if (!rpc.saveSettings) {

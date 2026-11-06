@@ -312,7 +312,7 @@ export function createMobileMockServices(): AppServices {
         }
         return item;
       },
-      async storeOnDiskBytes() {
+      async diskUsage() {
         return null;
       },
       async getSettings(vaultId) {
@@ -344,6 +344,7 @@ export function createMobileMockServices(): AppServices {
         return {
           path: `${destDir.replace(/\/+$/, "")}/${filename}`,
           size: mockVaultExportBytes(vault, request).byteLength,
+          unreadable: [],
         };
       },
       async exportCapabilities() {

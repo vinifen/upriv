@@ -1,9 +1,9 @@
 import type { KdfUnlockPreset } from "../../domain/vault-settings/kdf";
-import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list";
+import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { VaultRow } from "../../domain/vault";
 import type { VaultWelcomeFiles } from "../../domain/vault-create/welcomeReadme";
-import type { VaultPathWriteResult } from "../backup/createLiveBackupService";
+import type { VaultDiskUsage } from "../../domain/vault-info";
 
 export type VaultImportPackageKind = "store_zip" | "seven_zip" | "files_zip" | "os_tree";
 
@@ -66,10 +66,10 @@ export interface VaultService {
   getSettings(vaultId: string): Promise<VaultSettingsConfig | undefined>;
 
   /**
-   * On-disk size of regular files in `store/`. Metadata only.
+   * On-disk size of regular files in `store/` and `held/`. Metadata only.
    * `null` when the live adapter does not measure it.
    */
-  storeOnDiskBytes(vaultId: string): Promise<number | null>;
+  diskUsage(vaultId: string): Promise<VaultDiskUsage | null>;
 
   /** Persist settings (`vault_config_save` — enforces edit-policy on quiet targets). */
   registerSettings(vaultId: string, config: VaultSettingsConfig): Promise<void>;
@@ -88,15 +88,17 @@ export interface VaultService {
    * `destDir` in core, as the job `job`. Zip = envelope of `store/` (no zip
    * password). `.7z` = logical stream (never `.enc` blobs). When that name is
    * already in the folder the file gets the next free number
-   * (`{display_name} 2.zip`, see `vaultExportSavedAs`); nothing is replaced.
-   * Rejects with `job_cancelled` after `JobService.cancel`.
+   * (`{display_name} 2.zip`, see `vaultExportToast`); nothing is replaced.
+   * Every file goes in; the result names the ones kept with zeros where their
+   * data was missing or damaged. Rejects with `job_cancelled` after
+   * `JobService.cancel`.
    */
   exportToFolder(
     vault: VaultRow,
     request: VaultExportRequest,
     destDir: string,
     job: string,
-  ): Promise<VaultPathWriteResult>;
+  ): Promise<VaultExportResult>;
 
   /** Whether portable `.7z` export can run in RAM (always on when core is linked). Zip of `store/` is always available. */
   exportCapabilities(): Promise<{ sevenZip: boolean }>;

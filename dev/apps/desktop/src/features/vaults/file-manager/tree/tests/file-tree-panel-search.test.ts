@@ -10,7 +10,7 @@ import {
   type FileTreeNode,
   type VaultWorkspaceState,
 } from "@upriv/shared";
-import { useExplorerSearch } from "@upriv/shared/react";
+import { useExplorerProblems, useExplorerSearch, type VaultHeld } from "@upriv/shared/react";
 import { I18nProvider } from "@/i18n";
 import type { FileManagerApi } from "../../hooks/useVaultFileManager";
 import { FileTreePanel } from "../FileTreePanel";
@@ -25,6 +25,14 @@ const TREE: FileTreeNode = {
   ],
 };
 const NOTHING: ReadonlySet<string> = new Set();
+const NO_HELD: VaultHeld = {
+  summary: null,
+  open: false,
+  show: () => undefined,
+  working: NOTHING,
+  restore: async () => null,
+  remove: async () => false,
+};
 
 let latest = createDefaultWorkspaceState();
 /** The file the layout would save right now. */
@@ -34,6 +42,7 @@ function Panel({ workspace: initial }: { workspace: VaultWorkspaceState }) {
   const [workspace, dispatch] = useReducer(vaultWorkspaceReducer, initial);
   latest = workspace;
   const explorerSearch = useExplorerSearch(workspace, dispatch);
+  const explorerProblems = useExplorerProblems(TREE, workspace, dispatch, explorerSearch.show);
   const fm = {
     vaultId: "notes",
     tree: TREE,
@@ -42,6 +51,8 @@ function Panel({ workspace: initial }: { workspace: VaultWorkspaceState }) {
     workspace,
     dispatch,
     explorerSearch,
+    explorerProblems,
+    held: NO_HELD,
     folderPresence: null,
     pendingImportPaths: NOTHING,
     processingImportPaths: NOTHING,
@@ -87,6 +98,7 @@ describe("FileTreePanel search", () => {
     function Opener({ workspace: initial }: { workspace: VaultWorkspaceState }) {
       const [workspace, dispatch] = useReducer(vaultWorkspaceReducer, initial);
       const explorerSearch = useExplorerSearch(workspace, dispatch);
+      const explorerProblems = useExplorerProblems(TREE, workspace, dispatch, explorerSearch.show);
       open = explorerSearch.show;
       if (workspace.explorerCollapsed) return null;
       const fm = {
@@ -97,6 +109,8 @@ describe("FileTreePanel search", () => {
         workspace,
         dispatch,
         explorerSearch,
+        explorerProblems,
+        held: NO_HELD,
         folderPresence: null,
         pendingImportPaths: NOTHING,
         processingImportPaths: NOTHING,

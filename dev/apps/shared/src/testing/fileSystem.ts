@@ -441,6 +441,12 @@ export function createAsyncVaultFileSystemService(): VaultFileSystemService {
     },
     sendToFolder: async () => 0,
     removeFromFolder: async () => ({ removed: 0, kept: 0 }),
+    // A mock vault never sets data aside.
+    getHeld: async () => [],
+    restoreHeld: async (_vaultId: string, names: string[]) => {
+      throw new RpcError(VAULT_ERROR_CODES.HELD_NOT_FOUND, `not held: ${names.join(", ")}`);
+    },
+    deleteHeld: async () => 0,
     previewFits: async () => true,
     languageFromPath: (path: string) => languageFromPath(path),
   };

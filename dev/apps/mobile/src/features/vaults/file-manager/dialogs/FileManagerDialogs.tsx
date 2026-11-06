@@ -10,6 +10,7 @@ import {
 import { useOperationLimit } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { HeldFilesDialog } from "./HeldFilesDialog";
 
 interface FileManagerDialogsProps {
   fm: FileManagerApi;
@@ -157,6 +158,8 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
           {unsavedPrompt ? t(unsavedPromptBodyKey(unsavedPrompt)) : null}
         </Text>
       </Modal>
+
+      <HeldFilesDialog fm={fm} open={promptsOpen} />
 
       {promptsOpen || !fm.toast ? (
         <Toast toast={fm.toast} onDismiss={fm.dismissToast} bottomExtra={56} />

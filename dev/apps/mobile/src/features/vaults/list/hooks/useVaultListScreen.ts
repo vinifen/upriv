@@ -33,8 +33,7 @@ import {
   dataFolderCanExport,
   fileNameOfPath,
   vaultDeleteHold,
-  vaultExportFilename,
-  vaultExportSavedAs,
+  vaultExportToast,
   vaultRowControls,
   VAULT_DELETE_HOLD_I18N_KEY,
   resolveVaultListStatus,
@@ -201,17 +200,8 @@ export function useVaultListScreen() {
   exportWindowVaultIdRef.current = exportVault?.id ?? null;
   const vaultExport = useVaultExportJob(vaultService, jobs, {
     onExported: (written, target) => {
-      // A file already used the name: core saved this one with a number.
-      const savedAs = vaultExportSavedAs(target.displayName, target.format, written.path);
-      show(
-        savedAs
-          ? t("vault.export.success_numbered", {
-              filename: vaultExportFilename(target.displayName, target.format),
-              name: target.displayName,
-              saved: savedAs,
-            })
-          : t("vault.export.success", { name: target.displayName }),
-      );
+      const toast = vaultExportToast(target, written, t);
+      show(toast.message, toast.durationMs ?? undefined);
       setExportVault(null);
     },
     onFailed: (error, target) => {

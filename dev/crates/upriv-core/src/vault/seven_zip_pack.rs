@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 use crate::config::vault_config::{VaultArchiveMode, VaultSevenZipSection};
 use crate::error::{Result, UprivError};
 use crate::session::Job;
-use crate::store::{read_file_chunks, VaultHeader, VaultIndex, VaultNode, CHUNK_SIZE};
+use crate::store::{read_file_chunks_keeping, VaultHeader, VaultIndex, VaultNode, CHUNK_SIZE};
 
 use super::config_folder::ConfigFile;
 
@@ -559,7 +559,7 @@ pub(super) fn export_file_nodes<'a>(
     skip: &impl Fn(&str) -> bool,
 ) -> Vec<&'a VaultNode> {
     index
-        .nodes
+        .nodes()
         .iter()
         .filter(|node| !skip(&node.path) && !node.is_dir() && node.as_file().is_some())
         .collect()
@@ -570,7 +570,7 @@ pub(super) fn export_dir_nodes<'a>(
     skip: &impl Fn(&str) -> bool,
 ) -> Vec<&'a VaultNode> {
     let mut dirs: Vec<&VaultNode> = index
-        .nodes
+        .nodes()
         .iter()
         .filter(|node| !skip(&node.path) && node.is_dir())
         .collect();
@@ -670,18 +670,28 @@ impl Read for QueuedFile<'_> {
     }
 }
 
-/// Decrypt `files` in order into `queue`. Returns without an error once the
-/// encoder stops reading: the encoder reports why.
+/// What a readable export wrote: its length, and the logical paths of the
+/// files it kept with zeros in place of data that was missing or damaged.
+pub(crate) struct ReadableExport {
+    pub size: u64,
+    pub unreadable: Vec<String>,
+}
+
+/// Decrypt `files` in order into `queue`. A file whose data is missing or
+/// damaged goes in with zeros in those parts, so it keeps its place and size;
+/// its path is returned. Returns without an error once the encoder stops
+/// reading: the encoder reports why.
 fn decrypt_in_order(
     source: LogicalSource<'_>,
     files: &[&VaultNode],
     queue: SyncSender<Zeroizing<Vec<u8>>>,
     job: &Job,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let mut unreadable = Vec::new();
     for node in files {
         job.ensure_running()?;
         let mut encoder_gone = false;
-        let read = read_file_chunks(
+        let read = read_file_chunks_keeping(
             source.store_dir,
             source.header,
             source.content_key,
@@ -697,11 +707,13 @@ fn decrypt_in_order(
             },
         );
         if encoder_gone {
-            return Ok(());
+            return Ok(unreadable);
         }
-        read?;
+        if read?.is_some() {
+            unreadable.push(node.path.clone());
+        }
     }
-    Ok(())
+    Ok(unreadable)
 }
 
 fn push_blocks<W: Write + Seek>(
@@ -764,7 +776,7 @@ fn push_config_block<W: Write + Seek>(
 
 /// Stream the files of `plan` into `writer`, one 7z block at a time, while a
 /// worker thread decrypts them. A decrypt failure is the error returned: it
-/// is why the encoder ran dry.
+/// is why the encoder ran dry. Returns the files kept with zeros.
 fn push_file_blocks<W: Write + Seek>(
     writer: &mut ArchiveWriter<W>,
     source: LogicalSource<'_>,
@@ -773,7 +785,7 @@ fn push_file_blocks<W: Write + Seek>(
     outer_folder: &str,
     plan: &SevenZipPackPlan<'_>,
     job: &Job,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let (decrypted, queue) = sync_channel(DECRYPT_QUEUE_CHUNKS);
     let files = plan.files.as_slice();
     std::thread::scope(|scope| {
@@ -788,13 +800,14 @@ fn push_file_blocks<W: Write + Seek>(
         let read = worker
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-        job.settle(read.and(pushed))
+        job.settle(read.and_then(|unreadable| pushed.map(|()| unreadable)))
     })
 }
 
 /// Pack the files of `plan` into `dest`. `job` is checked before each block,
 /// every archive write fails once it is asked to stop, and its progress counts
-/// the logical bytes packed.
+/// the logical bytes packed. Returns `dest` and the files kept with zeros
+/// where their data was missing or damaged.
 pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     dest: W,
     source: LogicalSource<'_>,
@@ -803,7 +816,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     layout: ArchiveLayout<'_>,
     plan: &SevenZipPackPlan<'_>,
     job: &Job,
-) -> Result<W> {
+) -> Result<(W, Vec<String>)> {
     job.ensure_running()?;
     let password = sevenz_password(archive_password)?;
     let buffered = BufWriter::with_capacity(ARCHIVE_WRITE_BUFFER, dest);
@@ -822,7 +835,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     }
     job.set_total(plan.bytes);
     push_config_block(&mut writer, opts, &password, layout)?;
-    push_file_blocks(
+    let unreadable = push_file_blocks(
         &mut writer,
         source,
         opts,
@@ -835,9 +848,10 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     // The header is sealed with its own salt and IV.
     writer.set_content_methods(content_methods(opts, password, plan.threads));
     let buffered = writer.finish().map_err(map_io_error)?.into_inner();
-    buffered
+    let dest = buffered
         .into_inner()
-        .map_err(|error| map_io_error(error.into_error()))
+        .map_err(|error| map_io_error(error.into_error()))?;
+    Ok((dest, unreadable))
 }
 
 #[cfg(test)]
@@ -885,7 +899,7 @@ mod tests {
     fn index_of(sizes: &[u64]) -> VaultIndex {
         let mut index = VaultIndex::empty();
         for (at, size) in sizes.iter().enumerate() {
-            index.nodes.push(VaultNode::file(
+            index.push(VaultNode::file(
                 &format!("docs/file-{at}.bin"),
                 uuid::Uuid::new_v4().to_string(),
                 *size,
@@ -928,14 +942,15 @@ mod tests {
         (tmp, root)
     }
 
-    /// Pack the closed vault `notes` into `dest` with `limits`.
+    /// Pack the closed vault `notes` into `dest` with `limits`. Also returns
+    /// the files kept with zeros.
     fn pack_into<W: Write + Seek>(
         root: &crate::paths::VaultRoot,
         dest: W,
         opts: &VaultSevenZipSection,
         limits: PackLimits,
         job: &Job,
-    ) -> Result<W> {
+    ) -> Result<(W, Vec<String>)> {
         let store = root
             .vault_dir("notes")
             .unwrap()
@@ -1185,7 +1200,7 @@ mod tests {
             writes: 0,
         };
         let copy = VaultSevenZipSection::default();
-        let packed = pack_into(&root, dest, &copy, roomy(1), &Job::untracked()).unwrap();
+        let (packed, _) = pack_into(&root, dest, &copy, roomy(1), &Job::untracked()).unwrap();
         assert!(packed.inner.get_ref().len() as u64 > 3 * MIB);
         // The AES coder emits 16 bytes per write; the buffer turns those into a few.
         assert!(packed.writes < 32, "{} writes", packed.writes);
@@ -1208,6 +1223,7 @@ mod tests {
             &Job::untracked(),
         )
         .unwrap()
+        .0
         .into_inner();
         // Copy-only blocks follow the 32-byte signature header in order, each
         // as long as its file.
@@ -1274,6 +1290,7 @@ mod tests {
                 &Job::untracked(),
             )
             .unwrap()
+            .0
             .into_inner();
             assert!(packed.len() < text.len() * 3 / 4, "{} bytes", packed.len());
             let imported = import_logical_seven_zip(
@@ -1301,33 +1318,65 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_chunk_fails_the_export_with_the_store_error() {
-        let (_tmp, root) = closed_vault(&[("/docs/hi.txt", b"hello-export")]);
+    fn files_with_damaged_or_missing_data_go_in_with_zeros_and_are_named() {
+        let (_tmp, root) = closed_vault(&[
+            ("/docs/hi.txt", b"hello-export"),
+            ("/gone.txt", b"gone-data"),
+            ("/fine.txt", b"still-fine"),
+        ]);
         let store = root
             .vault_dir("notes")
             .unwrap()
             .join(crate::paths::STORE_DIR_NAME);
         let opened = open_store(&store, PASSWORD).unwrap();
-        let node = opened.index.find("docs/hi.txt").unwrap();
-        let blob = blob_path(&store, node.as_file().unwrap().0).unwrap();
-        let mut bytes = crate::host_fs::read(&blob).unwrap();
+        let blob_of = |path: &str| {
+            let node = opened.index.find(path).unwrap();
+            blob_path(&store, node.as_file().unwrap().0).unwrap()
+        };
+        let damaged = blob_of("docs/hi.txt");
+        let mut bytes = crate::host_fs::read(&damaged).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0x01;
-        crate::host_fs::write(&blob, &bytes).unwrap();
+        crate::host_fs::write(&damaged, &bytes).unwrap();
+        crate::host_fs::remove_file(blob_of("gone.txt")).unwrap();
 
         let copy = VaultSevenZipSection::default();
-        let err = pack_into(
+        let (packed, mut unreadable) = pack_into(
             &root,
             Cursor::new(Vec::new()),
             &copy,
             roomy(1),
             &Job::untracked(),
         )
-        .unwrap_err();
-        assert!(
-            matches!(&err, UprivError::VaultStoreInvalid { detail, .. } if detail == "chunk tag failed"),
-            "{err:?}"
+        .unwrap();
+        unreadable.sort();
+        assert_eq!(unreadable, ["docs/hi.txt", "gone.txt"]);
+
+        let imported = import_logical_seven_zip(
+            &root,
+            vault_config("kept"),
+            PASSWORD,
+            KdfUnlockPreset::M32,
+            &packed.into_inner(),
+            PASSWORD,
+            ImportExtras::default(),
+            &test_job_id(),
+        )
+        .unwrap();
+        open_vault(&root, &imported, PASSWORD).unwrap();
+        assert_eq!(
+            fs_read_file(&root, &imported, "/docs/hi.txt").unwrap(),
+            vec![0u8; 12]
         );
+        assert_eq!(
+            fs_read_file(&root, &imported, "/gone.txt").unwrap(),
+            vec![0u8; 9]
+        );
+        assert_eq!(
+            fs_read_file(&root, &imported, "/fine.txt").unwrap(),
+            b"still-fine"
+        );
+        close_vault(&root, &imported).unwrap();
     }
 
     #[test]

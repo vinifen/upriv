@@ -423,6 +423,29 @@ pub(crate) fn vault_is_live(root: &VaultRoot, id: &str) -> bool {
     }
 }
 
+/// True while another process holds the lock of the vault `id`: with one
+/// Upriv running, the core of an app that went away, still closing that
+/// vault. A session of this process, open or closing, holds the lock itself,
+/// so then no other process can. An id with no lock path has no holder.
+pub fn vault_held_elsewhere(root: &VaultRoot, id: &str) -> bool {
+    if let Ok(dir) = root.vault_dir(id) {
+        if crate::session::is_vault_open_at(&dir) || crate::session::is_vault_closing_at(&dir) {
+            return false;
+        }
+    }
+    root.runtime_lock_path(id)
+        .is_ok_and(|lock_path| crate::lockfile::lock_held_elsewhere(&lock_path))
+}
+
+/// [`UprivError::VaultLocked`] while [`vault_held_elsewhere`]: work on that
+/// vault's folder waits until the previous session has closed it.
+pub(crate) fn refuse_if_held_elsewhere(root: &VaultRoot, id: &str) -> Result<()> {
+    if vault_held_elsewhere(root, id) {
+        return Err(UprivError::VaultLocked(root.runtime_lock_path(id)?));
+    }
+    Ok(())
+}
+
 /// Vault ids that need recovery and are not live in this process or behind a
 /// live lock: a session recorded as open (a crash), or a plaintext folder this
 /// computer can reach that was never wiped.

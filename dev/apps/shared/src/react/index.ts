@@ -88,6 +88,9 @@ export {
   type UseTreeSplitDragOptions,
 } from "./useTreeSplitDrag";
 export { useExplorerSearch, type ExplorerSearch } from "./useExplorerSearch";
+export { useExplorerProblems, type ExplorerProblems } from "./useExplorerProblems";
+export { useVaultHeld, type VaultHeld } from "./useVaultHeld";
+export { useHeldReview, type HeldDeleteAsk, type HeldReview } from "./useHeldReview";
 export {
   useOutlineWidthDrag,
   type OutlineWidthDrag,

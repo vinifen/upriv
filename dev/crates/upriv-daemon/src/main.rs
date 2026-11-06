@@ -5,7 +5,9 @@
 //!
 //! **Concurrency:** Off-stdin lanes, so a long import or rewrap does not sit in
 //! front of a lock.
-//! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`).
+//! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`). An open
+//!   whose vault the core of an app that went away still holds first waits
+//!   on an `upriv-open-wait` thread of its own, so it holds no lane.
 //! - `upriv-fs-io`: close, delete, and the quit (`app_shutdown`).
 //! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header commit).
 //! - `upriv-pack`: zip and `.7z` import, vault and backup export. One at a time.
@@ -37,7 +39,8 @@ use std::thread::{self, JoinHandle};
 use serde_json::json;
 use upriv_rpc::RpcErrorBody;
 use wire::{
-    handle_request, heavy_lane, is_heavy_method, HeavyLane, WireIn, WireOut, SHUTDOWN_METHOD,
+    handle_request, heavy_lane, is_heavy_method, waits_before_lane, HeavyLane, WireIn, WireOut,
+    SHUTDOWN_METHOD,
 };
 use zeroize::Zeroizing;
 
@@ -296,6 +299,24 @@ fn run() -> io::Result<()> {
                     if upriv_rpc::shutdown_is_now(&params) {
                         upriv_rpc::hurry_shutdown();
                     }
+                }
+                if waits_before_lane(&method, &params) {
+                    let tx = argon2_tx.clone();
+                    let out = Arc::clone(&stdout);
+                    let waiting =
+                        thread::Builder::new()
+                            .name("upriv-open-wait".into())
+                            .spawn(move || {
+                                upriv_rpc::vault_open_wait(&params);
+                                if tx.send(HeavyJob::Request { id, method, params }).is_err() {
+                                    let _ = write_out(&out, &internal_error_response(id));
+                                }
+                            });
+                    if waiting.is_err() && write_out(&stdout, &internal_error_response(id)).is_err()
+                    {
+                        break;
+                    }
+                    continue;
                 }
                 if is_heavy_method(&method, &params) {
                     let lane = heavy_lane(&method, &params).expect("heavy method has a lane");

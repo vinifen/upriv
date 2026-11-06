@@ -1,6 +1,6 @@
 import { useCallback } from "react";
-import type { VaultExportFormat, VaultExportRequest, VaultRow } from "../domain";
-import type { JobService, VaultPathWriteResult, VaultService } from "../services";
+import type { VaultExportFormat, VaultExportRequest, VaultExportResult, VaultRow } from "../domain";
+import type { JobService, VaultService } from "../services";
 import { useCoreJob, type CoreJob } from "./useCoreJob";
 
 /** What a vault export was started for. */
@@ -14,7 +14,7 @@ export interface VaultExportTarget {
 export type VaultExportJob = CoreJob<VaultExportTarget>;
 
 export interface VaultExportJobEvents {
-  onExported: (result: VaultPathWriteResult, target: VaultExportTarget) => void;
+  onExported: (result: VaultExportResult, target: VaultExportTarget) => void;
   /** Includes a refused password, which the Export window marks on its field. */
   onFailed: (error: unknown, target: VaultExportTarget) => void;
   /** The export was stopped and left no file. */
@@ -37,7 +37,7 @@ export function useVaultExportJob(
     job,
     start: startJob,
     stop,
-  } = useCoreJob<VaultExportTarget, VaultPathWriteResult>(jobs, {
+  } = useCoreJob<VaultExportTarget, VaultExportResult>(jobs, {
     onDone: (result, target) => events.onExported(result, target),
     onFailed: (error, target) => events.onFailed(error, target),
     onCancelled: (target) => events.onCancelled(target),

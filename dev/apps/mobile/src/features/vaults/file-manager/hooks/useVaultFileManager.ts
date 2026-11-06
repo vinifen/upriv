@@ -3,8 +3,10 @@ import { Platform } from "react-native";
 import { nativeProcessorCount } from "upriv-core";
 import {
   joinPath,
+  editorFileProblem,
   fileBaseName,
   fileNameErrorI18nKey,
+  treeMarkBehindRead,
   findNode,
   formatImportOutcomeToast,
   importLogicalFiles,
@@ -46,17 +48,20 @@ import {
   type ActiveImportWrite,
   type FileManagerEntry,
   type FileNameErrorCode,
+  type FileProblem,
   type JobStopBy,
   type PendingImportEntry,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
 import {
+  useExplorerProblems,
   useExplorerSearch,
   useFolderFallback,
   useOpenTabContents,
   useToast,
   useTreeFolderPresence,
   useVaultFileTree,
+  useVaultHeld,
 } from "@upriv/shared/react";
 import { useJobService, useVaultFileSystemService, useVaultService } from "@/platform/services";
 import { rpcImportContentUri } from "@/lib/rpc";
@@ -179,10 +184,14 @@ export function useVaultFileManager({
     dispatch({ type: "set_unsaved_prompt", prompt: null });
   }, [dispatch, importBusy, workspace.unsavedPrompt]);
 
+  const treeMutated = useCallback(
+    (revision: number) => dispatch({ type: "tree_mutated", revision }),
+    [dispatch],
+  );
+
   const syncTree = useCallback(async () => {
-    const revision = await fs.getTreeRevision(vaultId);
-    dispatch({ type: "tree_mutated", revision });
-  }, [dispatch, fs, vaultId]);
+    treeMutated(await fs.getTreeRevision(vaultId));
+  }, [fs, treeMutated, vaultId]);
 
   /** Show the tree core holds now. */
   const reloadTree = useCallback(async () => {
@@ -236,9 +245,20 @@ export function useVaultFileManager({
     [fs, showToast, syncTree, t, vaultId],
   );
 
+  /**
+   * A file core found missing or damaged is marked in the tree, and the editor
+   * says so: that failure fetches the mark and shows no toast. Any other
+   * failure toasts.
+   */
   const showReadFailed = useCallback(
-    () => showToast(t("modal.file_manager.toast.read_failed")),
-    [showToast, t],
+    (_path: string, problem: FileProblem | null) => {
+      if (problem) {
+        void syncTree().catch(() => undefined);
+        return;
+      }
+      showToast(t("modal.file_manager.toast.read_failed"));
+    },
+    [showToast, syncTree, t],
   );
   const { contents, contentOf, storeSavedText } = useOpenTabContents({
     fs,
@@ -382,6 +402,29 @@ export function useVaultFileManager({
   const unsavedSaveGenRef = useRef(0);
 
   const explorerSearch = useExplorerSearch(workspace, dispatch);
+  const explorerProblems = useExplorerProblems(tree, workspace, dispatch, explorerSearch.show);
+  const showHeldError = useCallback(
+    (error: unknown) => showToast(t(mobileErrorI18nKey(error, "error.unexpected"))),
+    [showToast, t],
+  );
+  const held = useVaultHeld(fs, vaultId, {
+    mutated: treeMutated,
+    synced: syncTree,
+    failed: showHeldError,
+  });
+
+  /** Why the editor cannot show `path` (`editorFileProblem`). */
+  const fileProblem = useCallback(
+    (path: string): FileProblem | null =>
+      editorFileProblem(explorerProblems.problems, path, contents[path]),
+    [contents, explorerProblems.problems],
+  );
+
+  // A tab read a marked file in full, so core cleared its mark: fetch it.
+  const markBehind = treeMarkBehindRead(explorerProblems.problems, contents);
+  useEffect(() => {
+    if (markBehind) void syncTree().catch(() => undefined);
+  }, [markBehind, syncTree]);
 
   const openFile = useCallback(
     (path: string) => {
@@ -1021,6 +1064,9 @@ export function useVaultFileManager({
     saveAllFiles,
     saving,
     explorerSearch,
+    explorerProblems,
+    fileProblem,
+    held,
     openFile,
     createFile,
     createFolder,

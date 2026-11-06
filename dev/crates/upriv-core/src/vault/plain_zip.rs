@@ -19,12 +19,13 @@ use zip::{CompressionMethod, ZipWriter};
 use crate::error::Result;
 use crate::host_fs::{File, OpenOptions};
 use crate::session::Job;
-use crate::store::{is_reserved_logical, read_file_chunks, VaultIndex};
+use crate::store::{is_reserved_logical, read_file_chunks_keeping, VaultIndex};
 
 use super::config_folder::ConfigFile;
 use super::files_zip::PLAIN_ZIP_COMMENT;
 use super::seven_zip_pack::{
     archive_member_name, export_dir_nodes, export_file_nodes, file_size, LogicalSource,
+    ReadableExport,
 };
 use super::zip_io::{buffered_zip_file, finish_zip_file, zip_err};
 
@@ -41,14 +42,16 @@ fn create_owner_only(dest: &Path) -> std::io::Result<File> {
 }
 
 /// Stored zip of the vault's logical files at `dest`. Each write fails once
-/// `job` is asked to stop; its progress counts the logical bytes written.
+/// `job` is asked to stop; its progress counts the logical bytes written. A
+/// file whose data is missing or damaged goes in with zeros in those parts,
+/// so it keeps its place and size, and is named in the result.
 pub(super) fn write_plain_zip(
     source: LogicalSource<'_>,
     index: &VaultIndex,
     config_files: &[ConfigFile],
     dest: &Path,
     job: &Job,
-) -> Result<u64> {
+) -> Result<ReadableExport> {
     job.ensure_running()?;
     let dirs = export_dir_nodes(index, &is_reserved_logical);
     let files = export_file_nodes(index, &is_reserved_logical);
@@ -67,13 +70,14 @@ pub(super) fn write_plain_zip(
             .map_err(|e| zip_err(dest, e))?;
         zip.write_all(&file.bytes).map_err(|e| zip_err(dest, e))?;
     }
+    let mut unreadable = Vec::new();
     for node in files {
         job.ensure_running()?;
         let name = archive_member_name(&node.path)?;
         let large = file_size(node) >= u64::from(u32::MAX);
         zip.start_file(name, options.large_file(large))
             .map_err(|e| zip_err(dest, e))?;
-        read_file_chunks(
+        let problem = read_file_chunks_keeping(
             source.store_dir,
             source.header,
             source.content_key,
@@ -84,6 +88,12 @@ pub(super) fn write_plain_zip(
                 Ok(())
             },
         )?;
+        if problem.is_some() {
+            unreadable.push(node.path.clone());
+        }
     }
-    finish_zip_file(zip, dest)
+    Ok(ReadableExport {
+        size: finish_zip_file(zip, dest)?,
+        unreadable,
+    })
 }

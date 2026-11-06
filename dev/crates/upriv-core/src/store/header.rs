@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::aead::{unwrap_master_key, wrap_master_key, MASTER_KEY_LEN, XCHACHA_NONCE_LEN};
+use super::index::ChunkVersion;
 use super::kdf::{derive_kek, KdfUnlockPreset, SALT_LEN};
 use crate::error::{Result, UprivError};
 use crate::paths;
@@ -121,7 +122,7 @@ struct ChunkAad<'a> {
     file_id: &'a str,
     chunk_index: u32,
     chunk_len: u32,
-    version: &'a str,
+    version: ChunkVersion,
 }
 
 fn header_aad_bytes(
@@ -161,7 +162,7 @@ pub fn chunk_aad(
     file_id: &str,
     chunk_index: u32,
     chunk_len: u32,
-    version: &str,
+    version: ChunkVersion,
 ) -> Result<Vec<u8>> {
     serde_json::to_vec(&ChunkAad {
         v: header.format_version,
@@ -404,6 +405,12 @@ fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// Read `raw` as the header of a copy of a store held elsewhere, such as a
+/// backup zip. Nothing is unwrapped.
+pub(crate) fn parse_header_bytes(raw: &[u8]) -> Result<VaultHeader> {
+    parse_structural(Path::new(HEADER_FILE_NAME), raw)
+}
+
 fn parse_structural(path: &Path, raw: &[u8]) -> Result<VaultHeader> {
     let text = std::str::from_utf8(raw).map_err(|_| UprivError::VaultStoreInvalid {
         path: path.to_path_buf(),
@@ -611,6 +618,10 @@ mod aad_golden_tests {
     use super::*;
     use uuid::Uuid;
 
+    /// `a1b2c3d4e5f60718`, the version every golden AAD below carries.
+    const VERSION: ChunkVersion =
+        ChunkVersion::from_bytes([0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18]);
+
     fn fixture_header() -> VaultHeader {
         VaultHeader {
             warning: HEADER_WARNING.into(),
@@ -640,7 +651,7 @@ mod aad_golden_tests {
             "11111111-1111-4111-8111-111111111111",
             2,
             37756,
-            "a1b2c3d4e5f60718",
+            VERSION,
         )
         .unwrap();
         assert_eq!(
@@ -668,7 +679,7 @@ mod aad_golden_tests {
             "11111111-1111-4111-8111-111111111111",
             2,
             37756,
-            "a1b2c3d4e5f60718",
+            VERSION,
         )
         .unwrap();
         let text = String::from_utf8(chunk).unwrap();
@@ -685,8 +696,8 @@ mod aad_golden_tests {
     fn chunk_version_changes_the_aad() {
         let header = fixture_header();
         let fid = "11111111-1111-4111-8111-111111111111";
-        let a = chunk_aad(&header, fid, 0, 16, "aaaaaaaaaaaaaaaa").unwrap();
-        let b = chunk_aad(&header, fid, 0, 16, "bbbbbbbbbbbbbbbb").unwrap();
+        let a = chunk_aad(&header, fid, 0, 16, ChunkVersion::from_bytes([0xaa; 8])).unwrap();
+        let b = chunk_aad(&header, fid, 0, 16, ChunkVersion::from_bytes([0xbb; 8])).unwrap();
         assert_ne!(a, b, "a rewritten chunk must not accept the stale blob");
     }
 }

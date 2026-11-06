@@ -134,9 +134,23 @@ pub enum UprivError {
     #[error("vault path exists: {0}")]
     VaultPathExists(String),
 
+    /// No held blob of this name holds a file that can be put back: it was
+    /// deleted or put back already, or no index names it.
+    #[error("vault held file not found: {0}")]
+    VaultHeldNotFound(String),
+
     /// Full-file RPC payload exceeds the stdio / FFI envelope.
     #[error("vault file too large: {size} bytes (max {max}) at {path}")]
     VaultFileTooLarge { path: PathBuf, size: u64, max: u64 },
+
+    /// Part of this file's data is missing or damaged, so it cannot be read in
+    /// full. `path` is the logical path. The file stays in the vault, marked,
+    /// and the rest of the vault is unaffected.
+    #[error("vault file unreadable ({}): {path}", problem.as_str())]
+    VaultFileUnreadable {
+        path: String,
+        problem: crate::store::FileProblem,
+    },
 
     /// `runtime/<id>.lock` is held by a live process (this host or another).
     #[error("vault locked: {0}")]

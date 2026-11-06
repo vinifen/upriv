@@ -5,6 +5,7 @@ import {
   appWorkspace,
   type BackupService,
   type VaultBackupEntry,
+  type VaultDiskUsage,
   type VaultLifecycleService,
   type VaultListItem,
   type VaultRootService,
@@ -39,10 +40,10 @@ const backup: VaultBackupEntry = {
 
 function renderInfo() {
   const backups = deferred<VaultBackupEntry[]>();
-  const storeBytes = deferred<number | null>();
+  const diskUsage = deferred<VaultDiskUsage | null>();
   const vaultService = {
     getSettings: async () => null,
-    storeOnDiskBytes: () => storeBytes.promise,
+    diskUsage: () => diskUsage.promise,
   } as unknown as VaultService;
   const backupService = { listBackups: () => backups.promise } as unknown as BackupService;
   const lifecycleService = {
@@ -67,7 +68,7 @@ function renderInfo() {
       fallbackVaultRootBase: "/data",
     }),
   );
-  return { ...hook, backups, storeBytes };
+  return { ...hook, backups, diskUsage };
 }
 
 describe("useVaultInfoData", () => {
@@ -76,18 +77,20 @@ describe("useVaultInfoData", () => {
     await waitFor(() => expect(result.current.snapshot).not.toBeNull());
     expect(result.current.snapshot?.backups).toBeNull();
     expect(result.current.snapshot?.runtime.storeBytes).toBe("measuring");
+    expect(result.current.snapshot?.runtime.heldBytes).toBe("measuring");
     expect(result.current.snapshot?.storeOpenPath).toBe("/data/.upriv/vaults/notes/store");
   });
 
   it("fills in each slow value as it lands", async () => {
-    const { result, backups, storeBytes } = renderInfo();
+    const { result, backups, diskUsage } = renderInfo();
     await waitFor(() => expect(result.current.snapshot).not.toBeNull());
 
     await act(async () => backups.resolve([backup]));
     expect(result.current.snapshot?.backups).toEqual([backup]);
     expect(result.current.snapshot?.runtime.storeBytes).toBe("measuring");
 
-    await act(async () => storeBytes.resolve(2048));
+    await act(async () => diskUsage.resolve({ storeBytes: 2048, heldBytes: 64 }));
     expect(result.current.snapshot?.runtime.storeBytes).toBe(2048);
+    expect(result.current.snapshot?.runtime.heldBytes).toBe(64);
   });
 });

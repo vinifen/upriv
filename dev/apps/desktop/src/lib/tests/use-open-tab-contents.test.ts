@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultWorkspaceState,
   FilePreviewTooLargeError,
+  RpcError,
   TAB_CONTENT_CACHE_CHARS,
   type VaultFileContent,
   type VaultWorkspaceState,
@@ -140,6 +141,24 @@ describe("useOpenTabContents", () => {
     );
     await waitFor(() => expect(result.current.contents["/a.md"]?.state).toBe("failed"));
     expect(onReadFailed).toHaveBeenCalledTimes(1);
+    expect(onReadFailed).toHaveBeenCalledWith("/a.md", null);
+  });
+
+  it("keeps the problem core found on a tab whose data is missing or damaged", async () => {
+    const fs = fsReading(async () => {
+      throw new RpcError("vault_file_unreadable", "unreadable", { problem: "missing" });
+    });
+    const { result, onReadFailed } = renderContents(
+      fs,
+      workspaceWith({ openTabs: ["/a.md"], activeTabPath: "/a.md" }),
+    );
+    await waitFor(() =>
+      expect(result.current.contents["/a.md"]).toMatchObject({
+        state: "failed",
+        problem: "missing",
+      }),
+    );
+    expect(onReadFailed).toHaveBeenCalledWith("/a.md", "missing");
   });
 
   it("does not read a file past the preview cap again after the tree changes", async () => {

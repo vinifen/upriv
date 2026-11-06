@@ -768,6 +768,45 @@ mod tests {
     }
 
     #[test]
+    fn a_whole_vault_folder_holds_a_damaged_file_with_zeros_and_marks_it() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_plain_vault(&tmp, &root);
+        crate::vault::fs_write_file(&root, "notes", "/broken.txt", b"lost bytes").unwrap();
+        let blob =
+            crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+                let (file_id, _, _) = session
+                    .index
+                    .find("broken.txt")
+                    .and_then(|node| node.as_file())
+                    .expect("broken.txt");
+                crate::store::blob_path(root.vault_store_dir("notes").unwrap(), file_id)
+            })
+            .unwrap();
+        crate::close_vault(&root, "notes").unwrap();
+        // Past the 24-byte nonce: the first chunk fails its tag.
+        let mut bytes = std::fs::read(&blob).unwrap();
+        bytes[24] ^= 0x01;
+        std::fs::write(&blob, &bytes).unwrap();
+
+        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder, &test_job_id())
+            .unwrap();
+        assert_eq!(std::fs::read(folder.join("hello.txt")).unwrap(), b"secret");
+        assert_eq!(
+            std::fs::read(folder.join("broken.txt")).unwrap(),
+            vec![0u8; b"lost bytes".len()]
+        );
+        let mark = crate::vault::fs_list_tree(&root, "notes")
+            .unwrap()
+            .children
+            .unwrap_or_default()
+            .into_iter()
+            .find(|child| child.name == "broken.txt")
+            .and_then(|child| child.problem);
+        assert_eq!(mark, Some(crate::store::FileProblem::Damaged));
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
     fn a_whole_vault_folder_keeps_every_file() {
         let (tmp, root) = vault_root_with(&[]);
         let folder = open_plain_vault(&tmp, &root);

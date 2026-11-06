@@ -58,9 +58,10 @@ pub use files_zip::{
     probe_import_zip_path, ImportZipProbe, ZipImportClass,
 };
 pub use fs::{
-    fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
-    fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_preview_fits, fs_read_file, fs_read_range,
-    fs_rename, fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
+    fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_held_delete, fs_held_list,
+    fs_held_restore, fs_import_from_os_path, fs_list_tree, fs_mkdir, fs_move, fs_os_path,
+    fs_preview_fits, fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate,
+    fs_write_file, fs_write_from_reader, fs_write_range, HeldFile, HeldItem,
 };
 pub use import::{
     import_store_from_archive_path, import_store_zip, parse_backup_import_path,
@@ -70,7 +71,8 @@ pub use import_slots::{import_slots, import_slots_for};
 pub use open_close::{
     close_all_vaults, close_all_vaults_now, close_state, close_vault, close_vault_auto,
     close_vault_now, confirm_plain_destination, hurry_close, hurry_quit, open_vault,
-    open_vault_as_job, open_vault_confirmed, CloseState, CloseVaultOutcome, OpenVaultOutcome,
+    open_vault_as_job, open_vault_confirmed, wait_for_previous_app, CloseState, CloseVaultOutcome,
+    OpenVaultOutcome,
 };
 pub use os_import::{
     abort_import_vault, finish_import_session, import_logical_os_path, ingest_import_directory,
@@ -314,9 +316,18 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
         .collect())
 }
 
-/// Byte length of regular files under `store/`. Directory entries and symlink
-/// targets are not included. File contents are not read.
-pub fn vault_store_on_disk_bytes(root: &VaultRoot, vault_id: &str) -> Result<u64> {
+/// What a vault takes on disk, in bytes of regular files: its `store/`, and
+/// the blobs it set aside in `held/` (none when that folder is absent; other
+/// files left there are not the vault's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultDiskUsage {
+    pub store_bytes: u64,
+    pub held_bytes: u64,
+}
+
+/// [`VaultDiskUsage`] of a vault. Directory entries and symlink targets are
+/// not included. File contents are not read.
+pub fn vault_disk_usage(root: &VaultRoot, vault_id: &str) -> Result<VaultDiskUsage> {
     let vault_dir = root.vault_dir(vault_id)?;
     if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
@@ -329,7 +340,10 @@ pub fn vault_store_on_disk_bytes(root: &VaultRoot, vault_id: &str) -> Result<u64
             detail: "store directory is missing".into(),
         });
     }
-    sum_regular_file_bytes(&store)
+    Ok(VaultDiskUsage {
+        store_bytes: sum_regular_file_bytes(&store)?,
+        held_bytes: crate::store::held_disk_bytes(&store)?,
+    })
 }
 
 pub(crate) fn sum_regular_file_bytes(root: &Path) -> Result<u64> {
@@ -400,7 +414,7 @@ mod tests {
     use crate::test_support::{vault_root_with, VaultSpec};
 
     #[test]
-    fn store_on_disk_bytes_sums_regular_files_only() {
+    fn disk_usage_sums_regular_files_only() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("notes", "Notes", 1)]);
         let store = root
             .vault_dir("notes")
@@ -420,8 +434,33 @@ mod tests {
             std::os::unix::fs::symlink("/etc/passwd", store.join("data").join("escape")).unwrap();
         }
         assert_eq!(
-            vault_store_on_disk_bytes(&root, "notes").unwrap(),
-            10 + 25 + 4
+            vault_disk_usage(&root, "notes").unwrap(),
+            VaultDiskUsage {
+                store_bytes: 10 + 25 + 4,
+                held_bytes: 0
+            }
+        );
+        let held = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::HELD_DIR_NAME);
+        crate::host_fs::create_dir_all(&held).unwrap();
+        crate::host_fs::write(
+            held.join("00000000-0000-4000-8000-000000000001.blob"),
+            vec![3u8; 64],
+        )
+        .unwrap();
+        crate::host_fs::write(
+            held.join("00000000-0000-4000-8000-000000000001.2.blob"),
+            vec![3u8; 16],
+        )
+        .unwrap();
+        // Files an OS file manager leaves there are not set-aside data.
+        crate::host_fs::write(held.join(".DS_Store"), vec![4u8; 6_000]).unwrap();
+        crate::host_fs::write(held.join("notes.blob"), vec![4u8; 500]).unwrap();
+        assert_eq!(
+            vault_disk_usage(&root, "notes").unwrap().held_bytes,
+            64 + 16
         );
     }
 

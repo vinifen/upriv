@@ -24,6 +24,8 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_path_not_found: "error.vault_path_not_found",
   vault_path_exists: "error.vault_path_exists",
   vault_file_too_large: "error.vault_file_too_large",
+  vault_file_unreadable: "error.vault_file_unreadable",
+  vault_held_not_found: "error.vault_held_not_found",
   vault_locked: "error.vault_locked",
   vault_mount_failed: "error.vault_mount_failed",
   vault_mount_filesystem: "error.vault_mount_filesystem",

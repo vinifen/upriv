@@ -2,20 +2,42 @@
 
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{Result, UprivError};
 
-/// Fallible Argon2 working buffer (~`m` bytes). Avoids `vec![]` abort on OOM so
-/// create/open can return `InsufficientRam` instead of killing the process.
-fn try_alloc_argon2_blocks(block_count: usize) -> Result<Vec<Block>> {
-    let mut blocks = Vec::new();
-    if blocks.try_reserve_exact(block_count).is_err() {
-        return Err(UprivError::InsufficientRam);
+/// Argon2's working memory (~`m` bytes), wiped when it drops, whether the
+/// derive finished, failed, or panicked: its last block is one hash away from
+/// the KEK, so leftover bytes would open the vault with no password guess.
+///
+/// The wipe runs after the derive, one pass over the blocks. It takes nothing
+/// from the memory and passes every guess still pays. `Zeroizing<Vec<_>>`
+/// would wipe the whole buffer a second time, a byte at a time, as spare
+/// capacity once the vector is cleared; this buffer has none to wipe.
+struct Argon2Memory(Vec<Block>);
+
+impl Argon2Memory {
+    /// Fallible allocation. Avoids `vec![]` abort on OOM so create/open can
+    /// return `InsufficientRam` instead of killing the process.
+    fn try_new(block_count: usize) -> Result<Self> {
+        let mut blocks = Vec::new();
+        if blocks.try_reserve_exact(block_count).is_err() {
+            return Err(UprivError::InsufficientRam);
+        }
+        // Touch pages so overcommit hosts fail here (when possible) before derive.
+        blocks.resize(block_count, Block::default());
+        Ok(Self(blocks))
     }
-    // Touch pages so overcommit hosts fail here (when possible) before derive.
-    blocks.resize(block_count, Block::default());
-    Ok(blocks)
+
+    fn wipe(&mut self) {
+        self.0.iter_mut().zeroize();
+    }
+}
+
+impl Drop for Argon2Memory {
+    fn drop(&mut self) {
+        self.wipe();
+    }
 }
 
 /// Shipping unlock-cost ids — keep in sync with TS `KdfUnlockPreset`.
@@ -115,9 +137,14 @@ pub fn derive_kek(
     // Version 0x13 is hardcoded, not in header/AAD. Putting it in AAD is a format bump.
     let block_count = params.block_count();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut blocks = try_alloc_argon2_blocks(block_count)?;
+    let mut memory = Argon2Memory::try_new(block_count)?;
     let mut kek = Zeroizing::new([0u8; KEK_LEN]);
-    match argon2.hash_password_into_with_memory(password, salt, kek.as_mut(), &mut blocks) {
+    match argon2.hash_password_into_with_memory(
+        password,
+        salt,
+        kek.as_mut(),
+        memory.0.as_mut_slice(),
+    ) {
         Ok(()) => Ok(kek),
         Err(argon2::Error::MemoryTooLittle) | Err(argon2::Error::MemoryTooMuch) => {
             Err(UprivError::InsufficientRam)
@@ -149,11 +176,34 @@ mod tests {
     }
 
     #[test]
-    fn try_alloc_argon2_blocks_maps_reserve_failure_to_insufficient_ram() {
+    fn argon2_memory_maps_reserve_failure_to_insufficient_ram() {
         assert!(matches!(
-            try_alloc_argon2_blocks(usize::MAX / Block::SIZE),
+            Argon2Memory::try_new(usize::MAX / Block::SIZE),
             Err(UprivError::InsufficientRam)
         ));
+    }
+
+    /// What a drop runs: every block of a finished derive goes back to zeros.
+    #[test]
+    fn argon2_memory_is_all_zeros_after_its_wipe() {
+        let params = Params::new(MIN_KDF_MEMORY_KIB, 1, 1, Some(KEK_LEN)).unwrap();
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params.clone());
+        let mut memory = Argon2Memory::try_new(params.block_count()).unwrap();
+        let mut kek = [0u8; KEK_LEN];
+        argon2
+            .hash_password_into_with_memory(
+                b"pass-word-ok",
+                &[7u8; SALT_LEN],
+                &mut kek,
+                memory.0.as_mut_slice(),
+            )
+            .unwrap();
+        let zero = |block: &Block| block.as_ref().iter().all(|word| *word == 0);
+        assert!(!memory.0.iter().all(zero), "the derive filled the memory");
+
+        memory.wipe();
+        assert_eq!(memory.0.len(), params.block_count());
+        assert!(memory.0.iter().all(zero));
     }
 
     #[test]

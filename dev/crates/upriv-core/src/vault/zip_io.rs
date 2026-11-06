@@ -522,6 +522,21 @@ impl<'a> ZipTree<'a> {
         self.prefix.join(rel).to_string_lossy().replace('\\', "/")
     }
 
+    /// Where the bytes of `rel` come from. The index copy of a store goes in
+    /// as its primary index, the commit: the zip holds the committed tree in
+    /// both files, as a backup's check requires, even when a seal stopped
+    /// between them. The vault keeps its own copy for its next unlock.
+    fn source_of(&self, rel: &Path) -> PathBuf {
+        let index = Path::new(INDEX_DIR_NAME);
+        if rel == index.join(INDEX_COPY_FILE_NAME) {
+            let primary = self.root.join(index).join(INDEX_FILE_NAME);
+            if primary.host_is_file() {
+                return primary;
+            }
+        }
+        self.root.join(rel)
+    }
+
     /// Each entry into `zip`. A file is opened again without following a
     /// link, so one swapped in since the listing is refused.
     fn write<W: Write + Seek>(
@@ -539,7 +554,7 @@ impl<'a> ZipTree<'a> {
                         .map_err(|e| zip_err(&self.root.join(rel), e))?;
                 }
                 TreeEntry::File(rel) => {
-                    let path = self.root.join(rel);
+                    let path = self.source_of(rel);
                     zip.start_file(self.zip_name(rel), options)
                         .map_err(|e| zip_err(&path, e))?;
                     let mut file = job.progress_reader(open_regular_nofollow(&path)?);

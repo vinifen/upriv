@@ -17,6 +17,7 @@ import {
   fileMarkdownView,
   fileSearchQuery,
   findTextMatches,
+  FILE_PROBLEM_BODY_I18N_KEYS,
   MARKDOWN_OUTLINE_SETTLE_MS,
   stepMatchIndex,
   vaultFileLanguageFromPath,
@@ -87,6 +88,7 @@ function EmptyState({
 
 export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps) {
   const { t } = useTranslation();
+  const { colors } = useTheme();
   const {
     workspace,
     dispatch,
@@ -226,6 +228,26 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
       <View style={styles.importNotice}>
         {processing ? <ElapsedTime startedAt={editorImportStartedAt} /> : null}
         <Button label={t("action.stop")} variant="ghost" size="sm" onPress={stopImports} />
+      </View>,
+    );
+  }
+
+  // Before any read lands: the tree already knows this file cannot be read.
+  const problem = fm.fileProblem(activeTabPath);
+  if (problem) {
+    return fileNotice(
+      t("modal.file_manager.viewer.problem_kicker"),
+      t(FILE_PROBLEM_BODY_I18N_KEYS[problem], { name: fileName }),
+      <View style={styles.importNotice}>
+        <Text style={[styles.problemHint, { color: colors.onSurfaceVariant }]}>
+          {t("modal.file_manager.viewer.problem_backup_hint")}
+        </Text>
+        <Button
+          label={t("modal.file_manager.context.delete")}
+          variant="ghost"
+          size="sm"
+          onPress={() => fm.requestDelete(activeTabPath)}
+        />
       </View>,
     );
   }
@@ -419,6 +441,7 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
 const styles = StyleSheet.create({
   editorColumn: { flex: 1, minHeight: 0, minWidth: 0 },
   importNotice: { alignItems: "center", gap: spacing.sm },
+  problemHint: { maxWidth: 360, fontSize: 12, lineHeight: 18, textAlign: "center" },
   emptyActions: {
     flexDirection: "row",
     flexWrap: "wrap",

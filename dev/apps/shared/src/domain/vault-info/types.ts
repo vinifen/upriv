@@ -10,6 +10,8 @@ export interface VaultRuntimeStats {
   sessionRamBytes: number | null;
   /** Regular-file bytes in `store/`. `null` when that measurement did not run. */
   storeBytes: number | null | "measuring";
+  /** Regular-file bytes set aside in `held/`, measured with `storeBytes`. */
+  heldBytes: number | null | "measuring";
   logicalFileCount: number | null;
 }
 

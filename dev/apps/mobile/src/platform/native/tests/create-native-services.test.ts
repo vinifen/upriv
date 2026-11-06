@@ -58,7 +58,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultPlainConfirm: vi.fn(async () => undefined),
   rpcVaultClose: vi.fn(),
   rpcVaultConfigGet: vi.fn(),
-  rpcVaultStoreSize: vi.fn(async () => 0),
+  rpcVaultDiskUsage: vi.fn(async () => ({ storeBytes: 0, heldBytes: 0 })),
   rpcVaultConfigSave: vi.fn(),
   rpcVaultRename: vi.fn(),
   rpcVaultDelete: vi.fn(),

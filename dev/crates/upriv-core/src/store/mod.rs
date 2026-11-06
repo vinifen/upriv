@@ -8,6 +8,7 @@ use crate::host_fs::HostFsQuery;
 mod aead;
 mod chunk;
 mod header;
+mod held;
 mod index;
 mod kdf;
 mod tree;
@@ -22,8 +23,9 @@ use crate::error::{Result, UprivError};
 #[cfg(test)]
 pub(crate) use chunk::blob_path;
 pub(crate) use chunk::{
-    blobs_need_pack, mutation_blob_ids, pack_blob_waste, read_file_chunks, record_imported_file,
-    remove_file_chunks, seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
+    blobs_need_pack, mutation_blob_ids, pack_blob_waste, read_file_chunks_keeping,
+    read_logical_range_keeping, record_imported_file, remove_file_chunks, seal_import_chunk,
+    BlobPackMode, ChunkBlobMutation, ImportBlob, StagedBlobs,
 };
 pub use chunk::{
     read_logical_file, read_logical_range, seed_plaintext, truncate_logical_file,
@@ -34,10 +36,13 @@ pub use header::{
     ensure_danger_notice, header_bytes, load_header, rewrap_header, unlock_header, VaultHeader,
     CHUNK_SIZE, FORMAT_VERSION, HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
 };
+pub(crate) use held::{
+    delete_held, held_disk_bytes, remove_empty_held, restore_held, settle_held, HeldSources,
+};
 pub(crate) use index::sha256_hex;
 pub use index::{
-    sealed_index_bytes, ContentDigest, VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME,
-    INDEX_DIR_NAME, INDEX_FILE_NAME,
+    sealed_index_bytes, ChunkVersion, ContentDigest, FileProblem, HeldBlob, Sealed, VaultIndex,
+    VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME, INDEX_FILE_NAME,
 };
 pub use kdf::KdfUnlockPreset;
 pub use tree::{
@@ -53,8 +58,9 @@ pub(crate) use tree::require_parent_dir;
 
 use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
 use header::{create_header, save_header};
-pub(crate) use index::load_sealed_index;
-use index::{save_sealed_index, VaultIndex as Index};
+#[cfg(test)]
+pub(crate) use index::load_index_files;
+use index::{save_new_sealed_index, save_sealed_index, VaultIndex as Index};
 
 pub struct OpenedStore {
     pub header: VaultHeader,
@@ -62,6 +68,9 @@ pub struct OpenedStore {
     pub content_key: ContentKey,
     pub index_key: Zeroizing<[u8; INDEX_KEY_LEN]>,
     pub index: Index,
+    /// The tree in the index copy when that file holds another one; see
+    /// [`index::load_index_files`].
+    pub other_copy: Option<Index>,
 }
 
 /// Wrap a master key and persist `vault.header`. Caller writes the sealed index
@@ -92,7 +101,7 @@ pub fn create_empty_store(
 ) -> Result<VaultHeader> {
     let store_dir = store_dir.as_ref();
     let (header, _, index_key) = create_store_core(store_dir, password, preset)?;
-    save_sealed_index(store_dir, &header, &index_key, &Index::empty())?;
+    save_new_sealed_index(store_dir, &header, &index_key, &Index::empty())?;
     Ok(header)
 }
 
@@ -123,11 +132,13 @@ pub fn create_seeded_store(
         )?;
         mutation.sync_before_index()?;
     }
-    save_sealed_index(store_dir, &header, &index_key, &index)?;
+    save_new_sealed_index(store_dir, &header, &index_key, &index)?;
     Ok(header)
 }
 
-/// Unlock an existing `store/` (empty or populated index).
+/// Unlock an existing `store/` (empty or populated index). `data/` stays as
+/// it is: the unlocks that go on to change the store match its blobs with the
+/// index ([`settle_held`]).
 ///
 /// Bypasses the in-app unlock throttle on purpose (library API). `open_vault` is
 /// the throttled surface.
@@ -135,14 +146,14 @@ pub fn open_store(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<Opened
     let store_dir = store_dir.as_ref();
     let header = unlock_header(store_dir, password)?;
     let (content_key, index_key) = derive_layer_keys(&header.master_key)?;
-    let index = load_sealed_index(store_dir, &header.header, &index_key)?;
-    chunk::remove_unreferenced_blobs(store_dir, &index);
+    let loaded = index::load_index_files(store_dir, &header.header, &index_key)?;
     Ok(OpenedStore {
         header: header.header,
         master_key: header.master_key,
         content_key,
         index_key,
-        index,
+        index: loaded.index,
+        other_copy: loaded.other_copy,
     })
 }
 
@@ -152,8 +163,10 @@ pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPrese
 
 #[cfg(test)]
 pub fn flush_index(store_dir: impl AsRef<Path>, store: &mut OpenedStore) -> Result<()> {
-    flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)?;
-    store.index.clear_unsealed_holes();
+    let (_, sealed) = flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)?;
+    if sealed == Sealed::Flushed {
+        store.index.clear_unsealed_holes();
+    }
     Ok(())
 }
 
@@ -164,19 +177,39 @@ pub fn sealed_index_contains(
     index_key: &[u8; INDEX_KEY_LEN],
     logical_path: &str,
 ) -> Result<bool> {
-    let index = load_sealed_index(store_dir, header, index_key)?;
-    Ok(index.find(logical_path).is_some())
+    let loaded = load_index_files(store_dir, header, index_key)?;
+    Ok(loaded.index.find(logical_path).is_some())
 }
 
 /// Seal `index` into `store/index/` and return the sealed bytes, which are now
-/// the primary index file.
+/// the primary index file, and whether that file is flushed. An error leaves
+/// the previous primary in place. A seal that does not flush is logged
+/// (`vault_index_unflushed`).
 pub fn flush_index_parts(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
     index_key: &[u8; aead::INDEX_KEY_LEN],
     index: &Index,
-) -> Result<Vec<u8>> {
-    save_sealed_index(store_dir, header, index_key, index)
+) -> Result<(Vec<u8>, Sealed)> {
+    let store_dir = store_dir.as_ref();
+    let (bytes, sealed) = save_sealed_index(store_dir, header, index_key, index)?;
+    if sealed == Sealed::Unflushed {
+        index::log_index_unflushed(store_dir);
+    }
+    Ok((bytes, sealed))
+}
+
+/// [`flush_index_parts`] for the index written again right after a seal that
+/// did not flush, to record the blobs that seal let go of
+/// ([`VaultIndex::released`]). That seal already logged its folder, so this
+/// write does not log it again.
+pub(crate) fn reflush_index_parts(
+    store_dir: &Path,
+    header: &VaultHeader,
+    index_key: &[u8; aead::INDEX_KEY_LEN],
+    index: &Index,
+) -> Result<Sealed> {
+    save_sealed_index(store_dir, header, index_key, index).map(|(_, sealed)| sealed)
 }
 
 /// SHA-256 of header + index ciphertext (recovery A / persistence `content_hash`).
@@ -237,7 +270,7 @@ fn counts_as_vault_content(node: &VaultNode) -> bool {
 /// storage is the same bytes, and different storage only costs one more zip.
 pub fn index_logical_hash(index: &VaultIndex) -> String {
     let mut content: Vec<&VaultNode> = index
-        .nodes
+        .nodes()
         .iter()
         .filter(|node| counts_as_vault_content(node))
         .collect();
@@ -279,9 +312,10 @@ mod tests {
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"correct-horse", KdfUnlockPreset::M32).expect("create");
         let mut opened = open_store(&dir, b"correct-horse").expect("open");
-        opened.index.nodes.push(VaultNode::dir("docs"));
-        let sealed =
+        opened.index.push(VaultNode::dir("docs"));
+        let (sealed, flushed) =
             flush_index_parts(&dir, &opened.header, &opened.index_key, &opened.index).unwrap();
+        assert_eq!(flushed, Sealed::Flushed);
         assert_eq!(
             content_hash_with_index(&dir, &sealed).unwrap(),
             content_hash_hex(&dir).unwrap()
@@ -301,7 +335,7 @@ mod tests {
         let password = b"correct-horse";
         create_empty_store(&dir, password, KdfUnlockPreset::M32).expect("create");
         let opened = open_store(&dir, password).expect("open");
-        assert!(opened.index.nodes.is_empty());
+        assert!(opened.index.nodes().is_empty());
         assert_eq!(opened.header.unlock_preset(), Some(KdfUnlockPreset::M32));
         let hash = index_logical_hash(&opened.index);
         assert!(hash.starts_with("sha256:"));
@@ -317,16 +351,28 @@ mod tests {
         node
     }
 
+    fn version(byte: u8) -> ChunkVersion {
+        ChunkVersion::from_bytes([byte; 8])
+    }
+
+    /// `node` with its first chunk written again.
+    fn rewrite_first_chunk(mut node: VaultNode, to: ChunkVersion) -> VaultNode {
+        if let index::VaultNodeKind::File { chunk_versions, .. } = &mut node.kind {
+            chunk_versions[0] = to;
+        }
+        node
+    }
+
     #[test]
     fn index_logical_hash_ignores_storage_timestamps_and_order() {
         let mut index = VaultIndex::empty();
-        index.nodes.push(VaultNode::dir("docs"));
-        index.nodes.push(digested(
-            VaultNode::file("docs/a.txt", "file-a".into(), 4, vec!["v1".into()], vec![0]),
+        index.push(VaultNode::dir("docs"));
+        index.push(digested(
+            VaultNode::file("docs/a.txt", "file-a".into(), 4, vec![version(1)], vec![0]),
             "sha256:aaaa",
         ));
-        index.nodes.push(digested(
-            VaultNode::file("b.txt", "file-b".into(), 2, vec!["v1".into()], vec![0]),
+        index.push(digested(
+            VaultNode::file("b.txt", "file-b".into(), 2, vec![version(1)], vec![0]),
             "sha256:bbbb",
         ));
         let before = index_logical_hash(&index);
@@ -335,125 +381,115 @@ mod tests {
         // Same bytes written again: new blob, versions, offsets, times, and the
         // rewritten node moved to the end of the list.
         let mut rewritten = index.clone();
-        let again = VaultNode::file("docs/a.txt", "a2".into(), 4, vec!["v9".into()], vec![64]);
+        let again = VaultNode::file("docs/a.txt", "a2".into(), 4, vec![version(9)], vec![64]);
         let mut again = digested(again, "sha256:aaaa");
         again.created_at += 1_000;
         again.modified_at += 5_000;
-        rewritten.nodes.remove(1);
-        rewritten.nodes.push(again);
+        assert!(rewritten.remove("docs/a.txt"));
+        rewritten.push(again);
         assert!(same(&rewritten));
 
         let mut edited = index.clone();
-        edited.nodes[2] = digested(
-            VaultNode::file("b.txt", "file-b".into(), 2, vec!["v2".into()], vec![0]),
+        edited.put(digested(
+            VaultNode::file("b.txt", "file-b".into(), 2, vec![version(2)], vec![0]),
             "sha256:cccc",
-        );
+        ));
         assert!(!same(&edited));
 
         let mut renamed = index.clone();
-        renamed.nodes[2].path = "c.txt".into();
+        renamed.move_tree("b.txt", "c.txt", 0);
         assert!(!same(&renamed));
 
         let mut folder = index.clone();
-        folder.nodes.push(VaultNode::dir("empty"));
+        folder.push(VaultNode::dir("empty"));
         assert!(!same(&folder));
     }
 
     #[test]
     fn a_file_without_a_current_digest_counts_by_its_storage() {
         let mut index = VaultIndex::empty();
-        index.nodes.push(VaultNode::file(
-            "note.txt",
-            "file".into(),
-            4,
-            vec!["v1".into()],
-            vec![0],
-        ));
+        let note = VaultNode::file("note.txt", "file".into(), 4, vec![version(1)], vec![0]);
+        index.push(note.clone());
         let by_storage = index_logical_hash(&index);
         // Untouched, it is stable.
         assert_eq!(index_logical_hash(&index), by_storage);
 
         // A chunk rewrite with no digest is a change, even if the bytes match.
         let mut rewritten = index.clone();
-        if let index::VaultNodeKind::File { chunk_versions, .. } = &mut rewritten.nodes[0].kind {
-            chunk_versions[0] = "v2".into();
-        }
+        rewritten.put(rewrite_first_chunk(note.clone(), version(2)));
         assert_ne!(index_logical_hash(&rewritten), by_storage);
 
         // A digest left from older storage is ignored, not trusted.
-        let mut stale = digested(index.nodes[0].clone(), "sha256:aaaa");
-        if let index::VaultNodeKind::File { chunk_versions, .. } = &mut stale.kind {
-            chunk_versions[0] = "v2".into();
-        }
+        let stale = rewrite_first_chunk(digested(note.clone(), "sha256:aaaa"), version(2));
         assert!(stale.current_digest().is_none());
-        rewritten.nodes[0] = stale;
+        rewritten.put(stale);
         assert_ne!(index_logical_hash(&rewritten), by_storage);
 
         // The same file once it has a digest is a different id: one more zip.
         let mut digested_index = index.clone();
-        digested_index.nodes[0] = digested(index.nodes[0].clone(), "sha256:aaaa");
+        digested_index.put(digested(note, "sha256:aaaa"));
         assert_ne!(index_logical_hash(&digested_index), by_storage);
     }
 
     #[test]
     fn index_logical_hash_ignores_workspace_layout() {
         let mut with_layout = VaultIndex::empty();
-        with_layout.nodes.push(digested(
-            VaultNode::file("note.txt", "file".into(), 4, vec!["v1".into()], vec![0]),
+        with_layout.push(digested(
+            VaultNode::file("note.txt", "file".into(), 4, vec![version(1)], vec![0]),
             "sha256:aaaa",
         ));
-        with_layout.nodes.push(VaultNode::file(
+        with_layout.push(VaultNode::file(
             INTERNAL_WORKSPACE_FILE,
             "layout".into(),
             2,
-            vec!["w1".into()],
+            vec![version(3)],
             vec![0],
         ));
         let mut other_layout = with_layout.clone();
-        other_layout.nodes[1] = VaultNode::file(
+        other_layout.put(VaultNode::file(
             INTERNAL_WORKSPACE_FILE,
             "layout".into(),
             40,
-            vec!["w2".into()],
+            vec![version(4)],
             vec![80],
-        );
+        ));
         let same = index_logical_hash(&with_layout);
         assert_eq!(index_logical_hash(&other_layout), same);
 
         let mut edited = with_layout;
-        edited.nodes[0] = digested(
-            VaultNode::file("note.txt", "file".into(), 5, vec!["v2".into()], vec![0]),
+        edited.put(digested(
+            VaultNode::file("note.txt", "file".into(), 5, vec![version(2)], vec![0]),
             "sha256:bbbb",
-        );
+        ));
         assert_ne!(index_logical_hash(&edited), same);
     }
 
     #[test]
     fn index_logical_hash_ignores_the_root_plain_policy_only() {
         let mut index = VaultIndex::empty();
-        index.nodes.push(digested(
-            VaultNode::file("note.txt", "file".into(), 4, vec!["v1".into()], vec![0]),
+        index.push(digested(
+            VaultNode::file("note.txt", "file".into(), 4, vec![version(1)], vec![0]),
             "sha256:aaaa",
         ));
         let before = index_logical_hash(&index);
         let mut with_policy = index.clone();
-        with_policy.nodes.push(VaultNode::file(
+        with_policy.push(VaultNode::file(
             PLAIN_POLICY_FILE,
             "policy".into(),
             9,
-            vec!["p1".into()],
+            vec![version(5)],
             vec![0],
         ));
         assert_eq!(index_logical_hash(&with_policy), before);
 
         let mut nested = index;
-        nested.nodes.push(VaultNode::dir("docs"));
-        nested.nodes.push(digested(
+        nested.push(VaultNode::dir("docs"));
+        nested.push(digested(
             VaultNode::file(
                 &format!("docs/{PLAIN_POLICY_FILE}"),
                 "nested".into(),
                 9,
-                vec!["p1".into()],
+                vec![version(5)],
                 vec![0],
             ),
             "sha256:pppp",
@@ -572,7 +608,7 @@ mod tests {
         )
         .expect("seed");
         assert_eq!(got, expected);
-        assert_eq!(opened.index.nodes.len(), 1);
+        assert_eq!(opened.index.nodes().len(), 1);
     }
 
     #[test]
@@ -597,7 +633,7 @@ mod tests {
         )
         .expect("readme");
         assert_eq!(got, b"# Hello\n");
-        assert_eq!(opened.index.nodes.len(), 2);
+        assert_eq!(opened.index.nodes().len(), 2);
     }
 
     #[test]

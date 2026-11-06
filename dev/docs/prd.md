@@ -286,7 +286,7 @@ encrypted_dir / upriv_plain:
 | RF-53 | **Lock = close** for both modes → **`closed`** (`store/` at rest). **`upriv_plain`** also wipes workspace. | P0 |
 | RF-53b | **`persistence.json`:** `persistence: "closed"` only (never `open`). Session is runtime: `"open" \| "closing" \| "recovery"`. UI `vault.status.open` = runtime only | P0 |
 | RF-53c | Lock UI is **`action.lock` / `action.close` only** | P0 |
-| RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; refuse second open in another process/PC | P1 |
+| RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; a second open in another process waits, queued and stoppable, until that process lets go; other work on the vault refuses meanwhile | P1 |
 | RF-55 | Crypto primitives: Argon2id + AEAD (e.g. XChaCha20-Poly1305); protected names/paths | P0 |
 | RF-56 | **Backups** UI per vault: list `backups/<stamp>-<id>.zip`, metadata, export into a chosen folder with visible progress and a stop (one zip, or one zip of several), delete, **create new vault from backup** (does not replace the source vault) | P1 |
 | RF-57 | **Real states:** `open` only with active session; `closed` = `store/` at rest | P0 |
@@ -618,6 +618,11 @@ The password string stays in the app after a successful unlock, until lock or qu
 ### v1.0
 - iOS (App Store; no APK on HD)
 - Polish, documentation, HD bundle installer
+
+### Later (not scheduled)
+- **Backups on another drive:** keep or copy the backup zips outside the vault's own drive, so a dead drive does not take the vault and its backups together.
+- **Check vault:** read and verify every chunk of a vault on request, as a job with progress and Stop, and mark each file whose data is missing or damaged, so damage is found while a backup still holds a good copy.
+- **Store format spec and recovery tool:** document the `store/` format, and ship a small standalone tool that reads a vault with its password, so the data stays readable without Upriv.
 
 ---
 

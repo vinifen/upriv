@@ -39,7 +39,8 @@ pub struct OpenSession {
     pub index: VaultIndex,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
     pub dirty: bool,
-    /// Explorer cache invalidation — bumped on every committed mutation.
+    /// Explorer cache invalidation — bumped on every committed mutation, when
+    /// a file's problem mark changes, and when a held blob is deleted.
     #[zeroize(skip)]
     pub tree_revision: u64,
     /// OS mount (FUSE/WinFsp). Declared before `lock` so drop unmounts before
@@ -63,7 +64,7 @@ pub struct OpenSession {
     pub unsealed_imports: u64,
     /// Blob files named in the session and not yet flushed with the index.
     #[zeroize(skip)]
-    pub staged_blobs: Vec<PathBuf>,
+    pub(crate) staged_blobs: crate::store::StagedBlobs,
     /// Range writes waiting for the next index seal. Every seal clears it.
     #[zeroize(skip)]
     pub deferred: Option<DeferredWrites>,
@@ -115,7 +116,7 @@ impl OpenSession {
             lock: None,
             skip_close_backup: false,
             unsealed_imports: 0,
-            staged_blobs: Vec::new(),
+            staged_blobs: crate::store::StagedBlobs::default(),
             deferred: None,
             pending_layout: None,
         }

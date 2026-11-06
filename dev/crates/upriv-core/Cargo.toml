@@ -14,7 +14,9 @@ crate-type = ["rlib"]
 
 [dependencies]
 aes-siv = "=0.7.0"
-argon2 = "=0.5.3"
+# `zeroize`: the crate wipes its own starting hash and block hashes. Upriv
+# wipes the block buffer it lends (`store/kdf.rs`).
+argon2 = { version = "=0.5.3", features = ["zeroize"] }
 base64 = "=0.22.1"
 chacha20poly1305 = "=0.10.1"
 hkdf = "=0.12.4"

@@ -13,7 +13,7 @@ import {
   rpcVaultImportZip,
   rpcVaultList,
   rpcVaultRename,
-  rpcVaultStoreSize,
+  rpcVaultDiskUsage,
 } from "@/lib/rpc";
 
 /** Desktop → daemon vault list / create / import / config / rename / delete / export. */
@@ -21,7 +21,7 @@ export const desktopVaultService = createLiveVaultService({
   listVaults: () => rpcVaultList(),
   createVault: (input: CreateVaultInput, job) => rpcVaultCreate(input, job),
   getSettings: (vaultId) => rpcVaultConfigGet(vaultId),
-  storeOnDiskBytes: (vaultId) => rpcVaultStoreSize(vaultId),
+  diskUsage: (vaultId) => rpcVaultDiskUsage(vaultId),
   saveSettings: (vaultId, config) => rpcVaultConfigSave(vaultId, config),
   rename: (vaultId, displayName) => rpcVaultRename(vaultId, displayName),
   deleteVault: (vaultId) => rpcVaultDelete(vaultId),

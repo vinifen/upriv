@@ -8,7 +8,7 @@ import {
 import {
   rpcImportContentUri,
   rpcVaultConfigGet,
-  rpcVaultStoreSize,
+  rpcVaultDiskUsage,
   rpcVaultConfigSave,
   rpcVaultCreate,
   rpcVaultDelete,
@@ -85,8 +85,8 @@ export const nativeVaultService = createLiveVaultService({
   async getSettings(vaultId) {
     return rpcVaultConfigGet(vaultId);
   },
-  async storeOnDiskBytes(vaultId) {
-    return rpcVaultStoreSize(vaultId);
+  async diskUsage(vaultId) {
+    return rpcVaultDiskUsage(vaultId);
   },
   async saveSettings(vaultId, config) {
     await rpcVaultConfigSave(vaultId, config);
