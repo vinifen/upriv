@@ -28,12 +28,12 @@ use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::session::{with_open_session, OpenSession};
 use crate::store::{
-    child_logical_path, is_reserved_logical, parent_logical, RetiredFileChunks, VaultIndex,
-    LOGICAL_NAME_MAX,
+    child_logical_path, is_reserved_logical, parent_logical, ChunkVersion, RetiredFileChunks,
+    VaultIndex, LOGICAL_NAME_MAX,
 };
 use crate::vault::fs::{
-    read_store_range, seal_reader, seal_staged_sync, stage_delete, stage_mkdir, stage_move,
-    stage_remove_empty_dir, stage_sealed,
+    read_store_range, read_store_range_keeping, seal_reader, seal_staged_sync, stage_delete,
+    stage_mkdir, stage_move, stage_remove_empty_dir, stage_sealed,
 };
 #[cfg(unix)]
 use crate::vault::wipe::overwrite_contents;
@@ -64,14 +64,13 @@ pub(super) fn is_mass_change(changed: usize, tracked: usize) -> bool {
 pub(super) struct NodeStamp([u8; 32]);
 
 impl NodeStamp {
-    fn of(file_id: &str, size: u64, versions: &[String]) -> Self {
+    fn of(file_id: &str, size: u64, versions: &[ChunkVersion]) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(file_id.as_bytes());
         hasher.update([0]);
         hasher.update(size.to_le_bytes());
         for version in versions {
             hasher.update(version.as_bytes());
-            hasher.update([0]);
         }
         Self(hasher.finalize().into())
     }
@@ -93,8 +92,8 @@ enum Side {
 
 /// Every store path the folder mirrors, folders implied by files included.
 fn store_view(index: &VaultIndex) -> HashMap<String, Side> {
-    let mut view = HashMap::with_capacity(index.nodes.len());
-    for node in &index.nodes {
+    let mut view = HashMap::with_capacity(index.nodes().len());
+    for node in index.nodes() {
         if is_reserved_logical(&node.path) {
             continue;
         }
@@ -349,14 +348,14 @@ fn plan(
         .map(|(path, ..)| path.as_str())
         .collect();
     plan.unhold = session
-        .held
+        .held_deletions
         .iter()
         .filter(|path| !still_gone.contains(path.as_str()))
         .cloned()
         .collect();
     let deletions: Vec<(String, NodeStamp)> = gone_from_folder
         .into_iter()
-        .filter(|(path, ..)| !session.held.contains(path))
+        .filter(|(path, ..)| !session.held_deletions.contains(path))
         .map(|(path, node, _)| (path, node))
         .collect();
     if is_mass_change(deletions.len(), tracked_files(synced)) {
@@ -515,7 +514,7 @@ fn resolve_store_dir_deletes(
     if gone.is_empty() {
         return;
     }
-    let held = &session.held;
+    let held = &session.held_deletions;
     let leaving: HashSet<&str> = plan
         .store_deletes
         .iter()
@@ -763,7 +762,7 @@ fn finish(dir: &Path, mut report: PlainSyncReport, tally: Tally) -> Result<Plain
     with_open_session(dir, |session| {
         let store_files = session
             .index
-            .nodes
+            .nodes()
             .iter()
             .filter(|node| node.as_file().is_some() && !is_reserved_logical(&node.path))
             .count();
@@ -785,7 +784,7 @@ fn finish(dir: &Path, mut report: PlainSyncReport, tally: Tally) -> Result<Plain
         plain
             .pending
             .retain(|path| !plain.synced.contains_key(path) && index.find(path).is_some());
-        report.held_deletions = plain.held.len() as u32;
+        report.held_deletions = plain.held_deletions.len() as u32;
         plain.last = Some(report.clone());
         if plain.listing_changed() {
             session.tree_revision = session.tree_revision.saturating_add(1);
@@ -799,9 +798,9 @@ fn execute(pass: &mut Pass<'_>, mut plan: Plan, closing: bool) -> Result<()> {
     pass.with_plain(|session| {
         let plain = plain_mut(session);
         for path in &plan.unhold {
-            plain.held.remove(path);
+            plain.held_deletions.remove(path);
         }
-        plain.held.extend(plan.hold.iter().cloned());
+        plain.held_deletions.extend(plan.hold.iter().cloned());
         Ok(())
     })?;
     pass.touched.extend(plan.hold.iter().cloned());
@@ -1299,7 +1298,8 @@ fn discard_temp(pass: &Pass<'_>, temp: &Path) {
 }
 
 /// Copy the store version the plan saw into `file`. `Ok(false)` when the
-/// store moved on meanwhile or the pass was cancelled.
+/// store moved on meanwhile or the pass was cancelled. Missing or damaged
+/// parts are written as zeros, so the copy is there to be found.
 fn write_export(pass: &Pass<'_>, export: &Export, file: &mut crate::host_fs::File) -> Result<bool> {
     let mut offset = 0u64;
     while offset < export.size {
@@ -1311,7 +1311,7 @@ fn write_export(pass: &Pass<'_>, export: &Export, file: &mut crate::host_fs::Fil
             if node_stamp_at(&session.index, &export.path) != Some(export.node) {
                 return Ok(None);
             }
-            read_store_range(session, &export.path, offset, len).map(Some)
+            read_store_range_keeping(session, &export.path, offset, len).map(Some)
         })?;
         let Some(mut piece) = piece else {
             return Ok(false);
@@ -1414,7 +1414,7 @@ fn delete_in_store(
         for dir in dirs {
             if session
                 .index
-                .nodes
+                .nodes()
                 .iter()
                 .any(|node| disk::is_under(&node.path, dir))
             {
@@ -1466,15 +1466,16 @@ fn delete_in_folder(
 
 /// Settle the deletions a mass change left waiting. With `apply`, a file
 /// leaves the store while its folder copy is still gone and its store copy is
-/// the one last synced. Every other held file that is still missing is
-/// written back by the next pass. Returns how many files left the store.
-pub(super) fn settle_held(session: &mut OpenSession, apply: bool) -> Result<u32> {
+/// the one last synced. Every other file whose deletion was held and that is
+/// still missing is written back by the next pass. Returns how many files left
+/// the store.
+pub(super) fn settle_held_deletions(session: &mut OpenSession, apply: bool) -> Result<u32> {
     let plain = session
         .plain
         .as_mut()
         .ok_or_else(|| UprivError::VaultNotOpen(session.vault_id.clone()))?;
     let mut doomed = Vec::new();
-    for path in std::mem::take(&mut plain.held) {
+    for path in std::mem::take(&mut plain.held_deletions) {
         let gone = matches!(
             disk::stamp_at(&disk::os_path(&plain.folder, &path)),
             Ok(None)
@@ -1737,7 +1738,7 @@ mod tests {
     fn a_held_deletion_is_released_when_the_file_comes_back() {
         let disk = stamp(1, 10, 1);
         let mut plain = session(&[("a.txt", synced_file("a", disk))]);
-        plain.held.insert("a.txt".into());
+        plain.held_deletions.insert("a.txt".into());
         let back = plan(
             &view(&[("a.txt", file("a"))]),
             &plain,

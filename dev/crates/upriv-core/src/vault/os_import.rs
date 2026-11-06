@@ -263,7 +263,8 @@ pub fn ingest_import_directory(root: &VaultRoot, vault_id: &str, logical_path: &
 /// Stream one document into the open vault (a file manager import, or an
 /// import session), staged for the next index seal like every file import,
 /// as the job `job_id`. A stop leaves no file: the document enters the index
-/// only once its blob is written, and an orphan blob goes at the next open.
+/// only once its blob is written, and a stop deletes that blob. A crash leaves
+/// it for the next open to set aside.
 ///
 /// Its folder must already be in the vault: the file manager creates it
 /// first, and an import session adds every folder before the files. A folder

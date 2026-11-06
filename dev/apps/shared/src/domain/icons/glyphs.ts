@@ -254,6 +254,11 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     p("M9.5 10.5L11 14M14.5 10.5L13 14", { strokeWidth: 1.5, strokeLinecap: "round" }),
   ],
   trash: [p(PATH_TRASH, roundJoin)],
+  warning: [
+    p("M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z", roundJoin),
+    p("M12 9v4.5", round),
+    c(12, 17, 0.85, { fill: "current" }),
+  ],
   "wrap-text": [
     p("M3 6h18", round),
     p("M3 12h15a3 3 0 1 1 0 6h-4", roundJoin),

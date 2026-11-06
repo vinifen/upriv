@@ -1,4 +1,9 @@
-import type { FileTreeNode, VaultFileContent, VaultFileLanguage } from "../../domain/file-tree";
+import type {
+  FileTreeNode,
+  HeldItem,
+  VaultFileContent,
+  VaultFileLanguage,
+} from "../../domain/file-tree";
 
 /** Slice-only byte source so large files never sit in RAM as one buffer. */
 export interface VaultBinaryByteSource {
@@ -68,5 +73,15 @@ export interface VaultFileSystemService {
   sendToFolder(vaultId: string, paths: string[]): Promise<number>;
   /** Take these paths out of a plain-text vault's folder. The vault keeps them. */
   removeFromFolder(vaultId: string, paths: string[]): Promise<FolderRemoval>;
+  /** Data the vault set aside because no file of its tree names it. */
+  getHeld(vaultId: string): Promise<HeldItem[]>;
+  /**
+   * Put these set-aside files back into the tree. Resolves to where each one
+   * is now (its own path, or a free name beside it when that path is taken)
+   * and the tree revision.
+   */
+  restoreHeld(vaultId: string, names: string[]): Promise<{ paths: string[]; revision: number }>;
+  /** Delete these set-aside items for good. Resolves to the tree revision. */
+  deleteHeld(vaultId: string, names: string[]): Promise<number>;
   languageFromPath(path: string): VaultFileLanguage;
 }

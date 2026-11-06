@@ -81,8 +81,9 @@ pub(crate) struct PlainSession {
     pending: BTreeSet<String>,
     /// Paths of `synced` the file manager was last told about.
     listed: HashSet<String>,
-    /// Folder deletions waiting for the user after a mass change.
-    held: BTreeSet<String>,
+    /// Folder deletions waiting for the user after a mass change. Not the
+    /// vault's set-aside blobs (`store::held`).
+    held_deletions: BTreeSet<String>,
     /// Paths other apps changed or removed this session.
     touched: HashSet<String>,
     /// Most files the vault's folder held at once this session; with chosen
@@ -115,7 +116,7 @@ impl PlainSession {
             synced: HashMap::new(),
             pending: BTreeSet::new(),
             listed: HashSet::new(),
-            held: BTreeSet::new(),
+            held_deletions: BTreeSet::new(),
             touched: HashSet::new(),
             tracked: 0,
             dropped: 0,
@@ -421,7 +422,7 @@ fn abandon(root: &VaultRoot, vault_id: &str, vault_dir: &Path, wipe: &WipeOption
 
 fn store_bytes(index: &VaultIndex) -> u64 {
     index
-        .nodes
+        .nodes()
         .iter()
         .filter(|node| !is_reserved_logical(&node.path))
         .filter_map(|node| node.as_file().map(|(_, size, _)| size))
@@ -480,7 +481,7 @@ pub fn plain_send(root: &VaultRoot, vault_id: &str, ui_paths: &[String]) -> Resu
             .as_mut()
             .ok_or_else(|| UprivError::VaultNotOpen(vault_id.to_string()))?;
         let new: Vec<_> = index
-            .nodes
+            .nodes()
             .iter()
             .filter(|node| {
                 !is_reserved_logical(&node.path)
@@ -717,7 +718,7 @@ pub(crate) fn after_close(
     let summary = PlainCloseSummary {
         saved: closing.saved,
         conflicts: closing.conflicts,
-        held_deletions: plain.held.len() as u32,
+        held_deletions: plain.held_deletions.len() as u32,
         removed: plain.dropped + cleared.removed,
         kept: cleared.kept,
         leftover: cleared.kept > 0 && leftover::holds_leftover(root, vault_id),
@@ -842,19 +843,26 @@ pub fn plain_status(root: &VaultRoot, vault_id: &str) -> Result<PlainStatus> {
             folder: plain.folder.display().to_string(),
             since: plain.since.clone(),
             last: plain.last.clone(),
-            held_deletions: plain.held.iter().take(MAX_HELD_LISTED).cloned().collect(),
-            held_count: plain.held.len() as u32,
+            held_deletions: plain
+                .held_deletions
+                .iter()
+                .take(MAX_HELD_LISTED)
+                .cloned()
+                .collect(),
+            held_count: plain.held_deletions.len() as u32,
             totals: plain.totals,
         })
     })
 }
 
-/// `vault_plain_deletions`: remove the held files from the store (`apply`),
-/// or write them back to the folder.
+/// `vault_plain_deletions`: remove the files whose deletion is held from the
+/// store (`apply`), or write them back to the folder.
 pub fn plain_deletions(root: &VaultRoot, vault_id: &str, apply: bool) -> Result<PlainStatus> {
     let vault_dir = plain_vault_dir(root, vault_id)?;
     let removed = worker::exclusive(&vault_dir, vault_id, || {
-        with_open_session(&vault_dir, |session| sync::settle_held(session, apply))
+        with_open_session(&vault_dir, |session| {
+            sync::settle_held_deletions(session, apply)
+        })
     })?;
     log_event(
         LogLevel::Info,

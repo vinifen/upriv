@@ -206,6 +206,25 @@ impl Job {
         })
     }
 
+    /// True when the job `id`, not started yet, will be refused once it
+    /// starts: its id is malformed, a stop for it is kept, or Upriv is
+    /// quitting. Work that waits before its job starts, such as an open behind
+    /// the core of an app that went away, ends the wait on this; the job then
+    /// refuses to start.
+    pub(crate) fn refused_before_start(id: &str) -> bool {
+        Self::refused_before_start_in(&JOBS, id)
+    }
+
+    fn refused_before_start_in(registry: Registry, id: &str) -> bool {
+        if !is_valid_job_id(id) {
+            return true;
+        }
+        // A poisoned registry ends the wait too: starting the job reports it.
+        lock(registry).map_or(true, |jobs| {
+            jobs.quitting || jobs.stopped_early.iter().any(|early| early == id)
+        })
+    }
+
     /// Work nobody watches or stops: the wipe a vault delete runs.
     pub(crate) fn untracked() -> Self {
         Self {
@@ -629,6 +648,32 @@ mod tests {
         });
         assert!(matches!(out, Err(UprivError::JobCancelled)));
         assert!(!ran);
+    }
+
+    /// A wait before the job starts ends on its stop, on a quit, or at once
+    /// for an id the start refuses, and the stop is still there for the job
+    /// to refuse on.
+    #[test]
+    fn a_job_not_started_is_refused_after_its_stop_or_a_quit() {
+        let registry = registry();
+        assert!(!Job::refused_before_start_in(registry, "waiting"));
+        assert!(Job::refused_before_start_in(registry, "../waiting"));
+        assert!(matches!(
+            Job::start_in(registry, "../waiting"),
+            Err(UprivError::JobIdInvalid)
+        ));
+        cancel_in(registry, "other").unwrap();
+        assert!(!Job::refused_before_start_in(registry, "waiting"));
+        cancel_in(registry, "waiting").unwrap();
+        assert!(Job::refused_before_start_in(registry, "waiting"));
+        assert!(matches!(
+            Job::start_in(registry, "waiting"),
+            Err(UprivError::JobCancelled)
+        ));
+
+        let quitting = self::registry();
+        stop_all_in(quitting);
+        assert!(Job::refused_before_start_in(quitting, "waiting"));
     }
 
     #[test]

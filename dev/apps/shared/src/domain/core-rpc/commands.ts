@@ -66,8 +66,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CLOSE_PHASE: "vault_close_phase",
   VAULT_CLOSE_HURRY: "vault_close_hurry",
   VAULT_CONFIG_GET: "vault_config_get",
-  /** Sum of regular-file lengths under `store/`. Metadata only; not the vault list. */
-  VAULT_STORE_SIZE: "vault_store_size",
+  /** Regular-file bytes under `store/` and `held/`. Metadata only; not the vault list. */
+  VAULT_DISK_USAGE: "vault_disk_usage",
   VAULT_CONFIG_SAVE: "vault_config_save",
   /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
   VAULT_RENAME: "vault_rename",
@@ -83,6 +83,10 @@ export const CORE_RPC_COMMANDS = {
   VAULT_IMPORT_OS_PATH: "vault_import_os_path",
   VAULT_IMPORT_PROBE: "vault_import_probe",
   VAULT_FS_LIST: "vault_fs_list",
+  /** Blobs the open vault set aside in `held/`: files to put back, and pieces. */
+  VAULT_FS_HELD: "vault_fs_held",
+  VAULT_FS_HELD_RESTORE: "vault_fs_held_restore",
+  VAULT_FS_HELD_DELETE: "vault_fs_held_delete",
   VAULT_FS_REVISION: "vault_fs_revision",
   VAULT_FS_PREVIEW_FITS: "vault_fs_preview_fits",
   VAULT_FS_READ: "vault_fs_read",

@@ -9,13 +9,15 @@ use crate::config::{load_app_settings_at, load_vault_config, VaultStorageMode};
 use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use crate::lockfile::{acquire_vault_lock, wait_for_lock_holder, LOCK_HOLDER_WAIT};
+use crate::lockfile::{acquire_vault_lock, wait_for_lock_holder};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{
     encrypted_shortcut_active, resolve_vault_mount_point, resolved_workspace_parent, VaultRoot,
     WorkspaceSystem,
 };
-use crate::runtime_state::{mark_session_closed, mark_session_open, release_recorded_mount};
+use crate::runtime_state::{
+    mark_session_closed, mark_session_open, release_recorded_mount, vault_held_elsewhere,
+};
 use crate::session::{
     any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
     is_vault_closing_at, is_vault_open_at, open_session_ids_under, record_unlock_failure,
@@ -23,13 +25,14 @@ use crate::session::{
     with_vault_dir_lock, ClosePhase, ClosingGuard, Job, JobKind, OpenSession, PreparingGuard,
 };
 use crate::store::{
-    content_hash_with_index, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
-    BlobPackMode, ChunkBlobMutation,
+    content_hash_hex, content_hash_with_index, flush_index_parts, index_logical_hash, open_store,
+    pack_blob_waste, settle_held, BlobPackMode, ChunkBlobMutation, HeldSources, OpenedStore,
+    Sealed,
 };
 
 use super::backup::{
-    backup_on_close, backup_stamp_present, discard_unfinished_backups, list_backups,
-    promote_backup_save,
+    backup_on_close, backup_stamp_present, backup_zips_newest_first, discard_unfinished_backups,
+    list_backups, promote_backup_save,
 };
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
 use crate::failure::classify_write_failure;
@@ -48,6 +51,33 @@ fn discard_mount(mount: Option<crate::mount::MountedVault>) {
     if let Some(path) = path {
         crate::mount::purge_folder_thumbnails(&path);
     }
+}
+
+/// Match `data/` and `held/` of the vault at `vault_dir` with the tree just
+/// unlocked: blobs no file names are set aside in `held/`, and each is matched
+/// with the other index file and the vault's backups. When the held records
+/// changed, or the index copy held another tree, the index is sealed at once:
+/// the records survive a crash, and both index files match again, as a backup
+/// zip requires. An error is that seal's, and leaves the previous index.
+pub(crate) fn settle_opened(vault_dir: &Path, opened: &mut OpenedStore) -> Result<()> {
+    let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
+    let backup_zips = || backup_zips_newest_first(vault_dir);
+    let changed = settle_held(
+        &store,
+        &opened.header,
+        &opened.content_key,
+        &opened.index_key,
+        &mut opened.index,
+        HeldSources {
+            other_copy: opened.other_copy.as_ref(),
+            backup_zips: &backup_zips,
+        },
+    );
+    if changed || opened.other_copy.is_some() {
+        flush_index_parts(&store, &opened.header, &opened.index_key, &opened.index)?;
+        opened.other_copy = None;
+    }
+    Ok(())
 }
 
 fn vault_dir_or_not_found(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> {
@@ -143,9 +173,10 @@ pub enum OpenVaultOutcome {
 
 /// Unlock into a RAM session. An encrypted vault attaches its file-manager
 /// mount when that is on; a plaintext vault fills its folder. Password bytes
-/// are used exactly as given.
+/// are used exactly as given. Refused with [`UprivError::VaultLocked`] while
+/// the core of an app that went away still holds the vault: only a job, which
+/// can be stopped, waits for it ([`open_vault_as_job`]).
 pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<OpenVaultOutcome> {
-    wait_for_previous_app(root, vault_id)?;
     open_unlocked_session(
         root,
         vault_id,
@@ -156,17 +187,17 @@ pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<O
 }
 
 /// [`open_vault`] as the job `job_id`. The wait for an app that is still
-/// closing this vault comes first, so the job starts only when the unlock
-/// does. A stop during Argon2id lets the hash finish, then drops the keys; a
-/// stop while a plaintext folder fills wipes what was written. The vault stays
-/// closed either way.
+/// closing this vault comes first ([`wait_for_previous_app`]), so the job
+/// starts only when the unlock does. A stop during Argon2id lets the hash
+/// finish, then drops the keys; a stop while a plaintext folder fills wipes
+/// what was written. The vault stays closed either way.
 pub fn open_vault_as_job(
     root: &VaultRoot,
     vault_id: &str,
     password: &[u8],
     job_id: &str,
 ) -> Result<OpenVaultOutcome> {
-    wait_for_previous_app(root, vault_id)?;
+    wait_for_previous_app(root, vault_id, job_id)?;
     Job::run(job_id, JobKind::VaultOpen, Some(vault_id), |job| {
         open_unlocked_session(
             root,
@@ -178,12 +209,20 @@ pub fn open_vault_as_job(
     })
 }
 
-/// The core of an app that went away may still be closing this vault: wait
-/// for it to let go of the vault's lock.
-fn wait_for_previous_app(root: &VaultRoot, vault_id: &str) -> Result<()> {
-    let vault_dir = vault_dir_or_not_found(root, vault_id)?;
-    if !is_vault_open_at(&vault_dir) && !is_vault_closing_at(&vault_dir) {
-        wait_for_lock_holder(&root.runtime_lock_path(vault_id)?, LOCK_HOLDER_WAIT);
+/// The core of an app that went away may still be closing this vault, backup
+/// zip included: wait for it to let go of the vault's lock, with no time
+/// limit. The job `job_id` is not started meanwhile, so the open shows as
+/// queued. A stop of that job, or a quit, ends the wait, and the job then
+/// refuses to start. Returns at once when nothing else holds the vault, so
+/// the desktop core runs it first on a thread of its own, off the lane every
+/// unlock shares, and the open then finds nothing to wait for.
+pub fn wait_for_previous_app(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result<()> {
+    vault_dir_or_not_found(root, vault_id)?;
+    if vault_held_elsewhere(root, vault_id) && !Job::refused_before_start(job_id) {
+        log_event(LogLevel::Info, "vault_open_waiting", &[("id", vault_id)]);
+        wait_for_lock_holder(&root.runtime_lock_path(vault_id)?, || {
+            Job::refused_before_start(job_id)
+        });
     }
     Ok(())
 }
@@ -238,7 +277,7 @@ pub fn open_vault_confirmed(
         confirm_plain_destination(root, vault_id, plain_path, job_id)?;
         return Ok(OpenVaultOutcome::Opened);
     }
-    wait_for_previous_app(root, vault_id)?;
+    wait_for_previous_app(root, vault_id, job_id)?;
     Job::run(job_id, JobKind::VaultOpen, Some(vault_id), |job| {
         open_unlocked_session(
             root,
@@ -323,7 +362,7 @@ fn open_unlocked_session(
             release_recorded_mount(root, vault_id);
             discard_unfinished_backups(&vault_dir);
             let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-            let opened = match open_store(&store, password) {
+            let mut opened = match open_store(&store, password) {
                 Ok(opened) => opened,
                 Err(UprivError::WrongPassword) => {
                     let _ = record_unlock_failure(&vault_dir);
@@ -339,6 +378,15 @@ fn open_unlocked_session(
                 job.ensure_running()?;
             } else {
                 job.final_step()?;
+            }
+            // Reading needs no seal: a vault on a disk that refuses writes
+            // still opens, and the session's next seal carries the records.
+            if settle_opened(&vault_dir, &mut opened).is_err() {
+                log_event(
+                    LogLevel::Warn,
+                    "vault_held_seal_failed",
+                    &[("id", vault_id)],
+                );
             }
             let mut session = OpenSession::from_opened(
                 vault_id.to_string(),
@@ -528,6 +576,8 @@ fn close_vault_inner(
         // Only blobs this session left dead bytes in. Every other blob was
         // already measured by the close after its last write. A hurried close
         // leaves them: dead bytes cost space, and the next write packs them.
+        // A file whose data is missing or damaged is marked and left as it
+        // is; the mark is sealed below.
         let rewritten: Vec<String> = session
             .index
             .writes
@@ -546,7 +596,7 @@ fn close_vault_inner(
                 BlobPackMode::Close,
                 Some(&rewritten),
             ) {
-                Ok(mutation) => mutation,
+                Ok(packed) => packed.mutation,
                 Err(_error) => {
                     log_event(
                         LogLevel::Warn,
@@ -573,34 +623,51 @@ fn close_vault_inner(
         };
         // The layout held since the last seal is sealed by this close.
         let layout = super::fs::stage_pending_layout(&mut session);
-        if !session.staged_blobs.is_empty() {
-            if let Err(error) = super::fs::sync_staged_blobs(&session.staged_blobs) {
-                super::fs::settle_staged_layout(&mut session, layout, false);
+        // An error leaves the previous index in place, so the pack is undone.
+        // Once the new index is in place, its blobs stay whatever happens next.
+        let undo_pack = |session: &mut OpenSession| {
+            if packed_ok {
+                packed.restore_packed_nodes(&mut session.index);
+                packed.discard_created();
+            }
+        };
+        let copied = match super::fs::sync_staged(&mut session) {
+            Ok(copied) => copied,
+            Err(error) => {
+                super::fs::settle_staged_layout(&mut session, layout, None);
+                undo_pack(&mut session);
                 return Err(error);
             }
-            session.staged_blobs.clear();
-        }
+        };
         // Before the seal, so the digests of files written in order are stored.
         session.index.settle_digest_streams();
-        let sealed_index =
+        let (sealed_index, sealed) =
             match flush_index_parts(&store, &session.header, &session.index_key, &session.index) {
                 Ok(sealed) => sealed,
                 Err(error) => {
-                    super::fs::settle_staged_layout(&mut session, layout, false);
-                    if packed_ok {
-                        packed.restore_packed_nodes(&mut session.index);
-                        packed.discard_created();
-                    }
+                    super::fs::undo_copy(&mut session, copied);
+                    super::fs::settle_staged_layout(&mut session, layout, None);
+                    undo_pack(&mut session);
                     return Err(error);
                 }
             };
-        super::fs::settle_staged_layout(&mut session, layout, true);
-        session.index.clear_unsealed_holes();
+        super::fs::settle_staged_layout(&mut session, layout, Some(sealed));
+        super::fs::release_copied(&mut session, sealed, copied);
+        session.staged_blobs.clear();
         if packed_ok {
-            packed.delete_superseded();
+            super::fs::release_blobs(&mut session, sealed, packed.superseded_ids());
         }
-        // The index just written is still in hand; only the header is read.
-        let hash = content_hash_with_index(&store, &sealed_index)?;
+        // Not flushed: what the previous index names stays on disk with the
+        // session's other kept blobs, since a power cut may bring it back.
+        // The index then lists them, written again after this seal.
+        let hash = if sealed == Sealed::Flushed {
+            session.index.clear_unsealed_holes();
+            super::fs::delete_released(&mut session);
+            // The index just written is still in hand; only the header is read.
+            content_hash_with_index(&store, &sealed_index)?
+        } else {
+            content_hash_hex(&store)?
+        };
         drop(sealed_index);
         let config = load_vault_config(&vault_dir).ok();
         // An unreadable config is not the default "skip": the backup attempt
@@ -883,6 +950,122 @@ mode = "encrypted_dir"
 "#
         ))
         .expect("config")
+    }
+
+    /// The core of an app that went away still holds the vault. The open job
+    /// waits for it, not started, with no time limit: a stop ends the wait
+    /// and the job refuses, and once the lock is let go an open goes through.
+    #[test]
+    fn an_open_waits_queued_for_the_previous_core_until_a_stop_or_its_release() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let previous = acquire_vault_lock(root.runtime_lock_path("notes").unwrap()).unwrap();
+        let open_as = |job_id: String| {
+            let root = root.clone();
+            std::thread::spawn(move || open_vault_as_job(&root, "notes", b"pass-word-ok", &job_id))
+        };
+
+        let stopped = crate::test_support::test_job_id();
+        let waiting = open_as(stopped.clone());
+        std::thread::sleep(Duration::from_millis(300));
+        // An unlock would be running by now; the job has not even started.
+        assert!(crate::session::job_status(&stopped).is_none());
+        assert_eq!(
+            crate::session::cancel_job(&stopped).unwrap(),
+            crate::session::JobStop::Kept
+        );
+        assert!(matches!(
+            waiting.join().unwrap(),
+            Err(UprivError::JobCancelled)
+        ));
+        let vault_dir = root.vault_dir("notes").unwrap();
+        assert!(!is_vault_open_at(&vault_dir));
+
+        let opens = open_as(crate::test_support::test_job_id());
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!opens.is_finished());
+        drop(previous);
+        assert_eq!(opens.join().unwrap().unwrap(), OpenVaultOutcome::Opened);
+        assert!(is_vault_open_at(&vault_dir));
+        // This session's own lock is no other process's.
+        assert!(!vault_held_elsewhere(&root, "notes"));
+        close_vault(&root, "notes").unwrap();
+    }
+
+    /// Work on a closed vault refuses while the core of an app that went away
+    /// still holds it, and goes through once it lets go.
+    #[test]
+    fn closed_vault_work_refuses_while_the_previous_core_holds_the_vault() {
+        fn locked<T>(result: Result<T>) -> bool {
+            matches!(result, Err(UprivError::VaultLocked(_)))
+        }
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let job = crate::test_support::test_job_id;
+        let saved = crate::vault::save_backup_now(&root, "notes", &job())
+            .unwrap()
+            .stamp;
+        let previous = acquire_vault_lock(root.runtime_lock_path("notes").unwrap()).unwrap();
+
+        // Its close writes and prunes this vault's backups.
+        let stamps = std::slice::from_ref(&saved);
+        assert!(locked(crate::vault::delete_backups(&root, "notes", stamps)));
+        assert!(locked(crate::vault::promote_backup_save(
+            &root, "notes", &saved
+        )));
+        assert!(locked(crate::vault::export_backups(
+            &root,
+            "notes",
+            stamps,
+            out.path(),
+            &job()
+        )));
+
+        assert!(locked(crate::vault::change_vault_password(
+            &root,
+            "notes",
+            b"pass-word-ok",
+            b"pass-word-new",
+            &job()
+        )));
+        assert!(locked(crate::vault::rename_vault(
+            &root, "notes", "Renamed"
+        )));
+        assert!(locked(crate::vault::export_store_zip(
+            &root,
+            "notes",
+            out.path(),
+            &job()
+        )));
+        assert!(locked(crate::vault::save_backup_now(
+            &root,
+            "notes",
+            &job()
+        )));
+        assert!(locked(crate::vault::delete_vault(&root, "notes")));
+        assert!(matches!(
+            crate::vault::export_data_folder(&root, out.path(), "copy", &job()),
+            Err(UprivError::DataFolderBusy)
+        ));
+        assert_eq!(crate::host_fs::read_dir(out.path()).unwrap().count(), 0);
+        assert!(root.vault_dir("notes").unwrap().host_is_dir());
+
+        drop(previous);
+        crate::vault::export_store_zip(&root, "notes", out.path(), &job()).unwrap();
+        crate::vault::rename_vault(&root, "notes", "Renamed").unwrap();
     }
 
     #[test]

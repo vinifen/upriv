@@ -40,6 +40,7 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
       lastOpenedAt: "2026-05-29T09:00:00.000Z",
       sessionRamBytes: 1024,
       storeBytes: 2048,
+      heldBytes: 0,
       logicalFileCount: 4,
     },
     passwordInSession: true,
@@ -234,6 +235,7 @@ describe("buildVaultInfoSections", () => {
           lastOpenedAt: null,
           sessionRamBytes: null,
           storeBytes: null,
+          heldBytes: null,
           logicalFileCount: null,
         },
       }),
@@ -256,5 +258,15 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "backup_count")).toBe("modal.info.loading");
     expect(field(sections, "backup_latest")).toBe("modal.info.loading");
     expect(field(sections, "backup_total_size")).toBe("modal.info.loading");
+  });
+
+  it("shows set-aside data only for a vault that holds some", () => {
+    const base = snapshot();
+    expect(field(buildVaultInfoSections(base, t), "held_size")).toBeUndefined();
+    const sections = buildVaultInfoSections(
+      { ...base, runtime: { ...base.runtime, heldBytes: 2048 } },
+      t,
+    );
+    expect(field(sections, "held_size")).toBe("2.0 KB");
   });
 });

@@ -201,6 +201,16 @@ export function buildVaultInfoSections(
           ? t("modal.info.loading")
           : formatBytes(runtime.storeBytes ?? undefined),
     },
+    // Only a vault that set data aside shows the row.
+    ...(typeof runtime.heldBytes === "number" && runtime.heldBytes > 0
+      ? [
+          {
+            id: "held_size",
+            label: t("modal.info.field.held_size"),
+            value: formatBytes(runtime.heldBytes),
+          },
+        ]
+      : []),
   ];
 
   const cryptoFields = [

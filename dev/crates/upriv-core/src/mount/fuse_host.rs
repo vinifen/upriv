@@ -209,6 +209,7 @@ fn io_errno(error: &UprivError) -> i32 {
         UprivError::VaultPathNotFound(_) | UprivError::VaultNotOpen(_) => libc::ENOENT,
         UprivError::VaultPathExists(_) => libc::EEXIST,
         UprivError::VaultFileTooLarge { .. } => libc::EFBIG,
+        UprivError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull => libc::ENOSPC,
         UprivError::VaultStoreInvalid { detail, .. } if detail.contains("not empty") => {
             libc::ENOTEMPTY
         }
@@ -313,7 +314,7 @@ unsafe extern "C" fn host_list(
     };
     let children = match with_open_session(&dir, |session| {
         let mut out = Vec::new();
-        for node in &session.index.nodes {
+        for node in session.index.nodes() {
             if is_reserved_logical(&node.path) {
                 continue;
             }
@@ -625,5 +626,17 @@ mod tests {
             }),
             libc::EIO
         );
+    }
+
+    /// The drive's own refusal and the check before a growth both read as a
+    /// full drive, not as a failed read or write.
+    #[test]
+    fn a_full_drive_is_no_space() {
+        let drive = std::io::Error::from_raw_os_error(libc::ENOSPC);
+        assert_eq!(io_errno(&UprivError::Io(drive)), libc::ENOSPC);
+        let refused = std::io::Error::new(std::io::ErrorKind::StorageFull, "no room");
+        assert_eq!(io_errno(&UprivError::Io(refused)), libc::ENOSPC);
+        let other = std::io::Error::from_raw_os_error(libc::EIO);
+        assert_eq!(io_errno(&UprivError::Io(other)), libc::EIO);
     }
 }

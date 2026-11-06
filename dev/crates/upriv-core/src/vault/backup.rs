@@ -17,7 +17,7 @@ use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::runtime_state::UnfinishedWork;
+use crate::runtime_state::{refuse_if_held_elsewhere, UnfinishedWork};
 use crate::session::{
     ensure_backups_not_exporting, ensure_data_folder_export_idle, remove_backup_unless_exporting,
     with_vault_dir_lock, BackupExportGuard, Job, JobKind,
@@ -49,6 +49,26 @@ pub fn list_backups(root: &VaultRoot, vault_id: &str) -> Result<Vec<BackupEntry>
             .then_with(|| a.file_name.cmp(&b.file_name))
     });
     Ok(entries)
+}
+
+/// The backup zips of the vault at `vault_dir`, pins included, newest first,
+/// by name alone: nothing is opened.
+pub(crate) fn backup_zips_newest_first(vault_dir: &Path) -> Vec<PathBuf> {
+    let backups = vault_dir.join("backups");
+    let mut zips: Vec<(String, PathBuf)> = Vec::new();
+    for dir in [backups.join("saves"), backups] {
+        let Ok(entries) = crate::host_fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if let Some(stamp) = name.to_str().and_then(stamp_from_zip_name) {
+                zips.push((stamp, entry.path()));
+            }
+        }
+    }
+    zips.sort_by(|a, b| b.0.cmp(&a.0));
+    zips.into_iter().map(|(_, path)| path).collect()
 }
 
 fn collect_backup_dir(dir: &Path, saved: bool, out: &mut Vec<BackupEntry>) -> Result<()> {
@@ -496,22 +516,26 @@ fn finish_backup_prune(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) 
 /// data folder is being exported. The export copies each vault under the same
 /// lock, so its zip holds every backup once, before or after the change. A
 /// backup export takes its zips under that lock too, and each refuses a zip it
-/// holds.
+/// holds. They also refuse while the core of an app that went away still
+/// holds the vault, since its close writes and prunes these zips. That check
+/// runs under the directory lock, which an open of this process holds until
+/// its session is in: the open's own vault lock is never taken for another's.
 fn with_backups_settled<T>(
     root: &VaultRoot,
-    vault_dir: &Path,
-    f: impl FnOnce() -> Result<T>,
+    vault_id: &str,
+    f: impl FnOnce(&Path) -> Result<T>,
 ) -> Result<T> {
+    let vault_dir = root.vault_dir(vault_id)?;
     ensure_data_folder_export_idle(root.root())?;
-    with_vault_dir_lock(vault_dir, || {
+    with_vault_dir_lock(&vault_dir, || {
         ensure_data_folder_export_idle(root.root())?;
-        f()
+        refuse_if_held_elsewhere(root, vault_id)?;
+        f(&vault_dir)
     })
 }
 
 pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Result<()> {
-    let vault_dir = root.vault_dir(vault_id)?;
-    with_backups_settled(root, &vault_dir, || {
+    with_backups_settled(root, vault_id, |vault_dir| {
         let backups = vault_dir.join("backups");
         let mut paths = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
@@ -524,7 +548,7 @@ pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Re
                 paths.push(path);
             }
         }
-        ensure_backups_not_exporting(&vault_dir, &paths)?;
+        ensure_backups_not_exporting(vault_dir, &paths)?;
         for path in paths {
             crate::host_fs::remove_file(path)?;
         }
@@ -533,9 +557,8 @@ pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Re
 }
 
 pub fn promote_backup_save(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<()> {
-    let vault_dir = root.vault_dir(vault_id)?;
-    with_backups_settled(root, &vault_dir, || {
-        promote_backup_save_in(&vault_dir, stamp)
+    with_backups_settled(root, vault_id, |vault_dir| {
+        promote_backup_save_in(vault_dir, stamp)
     })
 }
 
@@ -617,11 +640,14 @@ fn write_backup_export(
 ) -> Result<ExportedFile> {
     let vault_dir = root.vault_dir(vault_id)?;
     check_export_folder(root, dest_dir)?;
-    // Under the lock delete, pin, and rename hold, so none is halfway through.
+    // Under the lock delete, pin, and rename hold, so none is halfway through,
+    // and an open of this process has its session in.
     let (_reading, sources) = with_vault_dir_lock(&vault_dir, || {
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
+        // The close of the core of an app that went away writes and prunes these zips.
+        refuse_if_held_elsewhere(root, vault_id)?;
         let sources = backup_export_sources(root, vault_id, stamps)?;
         let zips = sources.iter().map(|(_, path)| path.clone()).collect();
         Ok((BackupExportGuard::enter(&vault_dir, zips)?, sources))
@@ -1129,6 +1155,64 @@ mode = "encrypted_dir"
         create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         let saved = save_backup_now(&root, "notes", &test_job_id()).unwrap();
         assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved]);
+    }
+
+    #[test]
+    fn a_save_holds_the_primary_index_twice_when_a_seal_stopped_between_them() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.enabled = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let index = root
+            .vault_store_dir("notes")
+            .unwrap()
+            .join(crate::store::INDEX_DIR_NAME);
+        let primary = crate::host_fs::read(index.join(crate::store::INDEX_FILE_NAME)).unwrap();
+        // A seal that wrote its copy and stopped before the primary.
+        let copy = index.join(crate::store::INDEX_COPY_FILE_NAME);
+        crate::host_fs::write(&copy, b"newer copy").unwrap();
+
+        let saved = save_backup_now(&root, "notes", &test_job_id()).unwrap();
+        let zip = backup_zip_file(&root, "notes", &saved.stamp).unwrap();
+        let mut archive = zip::ZipArchive::new(crate::host_fs::File::open(zip).unwrap()).unwrap();
+        for name in ["store/index/root.idx.enc", "store/index/root.idx.enc.copy"] {
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(&mut archive.by_name(name).unwrap(), &mut body).unwrap();
+            assert_eq!(body, primary, "{name}");
+        }
+        // The vault keeps its own copy for its next unlock.
+        assert_eq!(crate::host_fs::read(&copy).unwrap(), b"newer copy");
+    }
+
+    /// An open of this process holds the vault's lock while it unlocks, under
+    /// the directory lock. A backup action asked meanwhile waits for that lock
+    /// and then sees no other holder, rather than taking the open's lock for
+    /// the previous session's.
+    #[test]
+    fn a_backup_action_during_an_open_here_waits_for_it_and_is_not_refused() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.enabled = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let saved = save_backup_now(&root, "notes", &test_job_id()).unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let lock_path = root.runtime_lock_path("notes").unwrap();
+
+        let (unlocking, started) = std::sync::mpsc::channel();
+        let open = std::thread::spawn(move || {
+            with_vault_dir_lock(&vault_dir, || {
+                let _lock = crate::lockfile::acquire_vault_lock(lock_path)?;
+                unlocking.send(()).unwrap();
+                // Argon2 runs; this unlock then fails and lets go.
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                Ok(())
+            })
+        });
+        started.recv().unwrap();
+
+        delete_backups(&root, "notes", std::slice::from_ref(&saved.stamp)).unwrap();
+        open.join().unwrap().unwrap();
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
     }
 
     #[test]

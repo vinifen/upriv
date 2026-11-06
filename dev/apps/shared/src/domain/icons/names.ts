@@ -47,6 +47,7 @@ export const ICON_NAMES = [
   "sort",
   "terminal",
   "trash",
+  "warning",
   "wrap-text",
 ] as const;
 

@@ -12,10 +12,9 @@ import {
   isRpcError,
   isVaultCredentialChallengeI18nKey,
   isVaultPipelineDisplayBusy,
-  vaultExportFilename,
+  vaultExportToast,
   vaultRowJobWork,
   type VaultRowWork,
-  vaultExportSavedAs,
   normalizeVaultSettingsConfig,
   plainFolderClassI18nKey,
   storageModeIsPlaintext,
@@ -196,17 +195,8 @@ export function useVaultLifecycleActions({
   exportWindowVaultIdRef.current = exportVaultId;
   const vaultExport = useVaultExportJob(vaultService, jobs, {
     onExported: (written, target) => {
-      // A file already used the name: core saved this one with a number.
-      const savedAs = vaultExportSavedAs(target.displayName, target.format, written.path);
-      showToast(
-        savedAs
-          ? t("vault.export.success_numbered", {
-              filename: vaultExportFilename(target.displayName, target.format),
-              name: target.displayName,
-              saved: savedAs,
-            })
-          : t("vault.export.success", { name: target.displayName }),
-      );
+      const toast = vaultExportToast(target, written, t);
+      showToast(toast.message, toast.durationMs ?? undefined);
       setExportVaultId(null);
     },
     onFailed: (error, target) => {

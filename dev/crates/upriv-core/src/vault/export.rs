@@ -19,7 +19,7 @@ use crate::error::{Result, UprivError};
 use crate::host_fs::HostFsQuery;
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{seven_zip_outer_folder, vault_export_file_stem, VaultRoot};
-use crate::runtime_state::UnfinishedWork;
+use crate::runtime_state::{refuse_if_held_elsewhere, UnfinishedWork};
 use crate::session::{
     check_unlock_allowed, ensure_vault_session_closed, is_vault_closing_at, is_vault_open_at,
     record_unlock_failure, record_unlock_success, with_unlock_lock, with_vault_dir_lock, Job,
@@ -37,7 +37,8 @@ use super::export_folder::{
 use super::partial::{wipe_partial, PartialWork};
 use super::plain_zip::write_plain_zip;
 use super::seven_zip_pack::{
-    pack_logical_seven_zip_to_writer, plan_seven_zip_pack, ArchiveLayout, LogicalSource, PackLimits,
+    pack_logical_seven_zip_to_writer, plan_seven_zip_pack, ArchiveLayout, LogicalSource,
+    PackLimits, ReadableExport,
 };
 use super::wipe::WipeOptions;
 use super::zip_io::zip_store_with_config_to_path;
@@ -49,6 +50,7 @@ fn closed_vault_paths(root: &VaultRoot, vault_id: &str) -> Result<(PathBuf, Path
     }
     let _ = load_vault_config(&vault_dir)?;
     ensure_vault_session_closed(&vault_dir)?;
+    refuse_if_held_elsewhere(root, vault_id)?;
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     Ok((vault_dir, store))
 }
@@ -192,7 +194,7 @@ fn pack_logical_seven_zip_to_path(
     layout: ArchiveLayout<'_>,
     dest: &Path,
     job: &Job,
-) -> Result<u64> {
+) -> Result<ReadableExport> {
     job.ensure_running()?;
     let plan = plan_seven_zip_pack(
         index,
@@ -202,9 +204,27 @@ fn pack_logical_seven_zip_to_path(
         PackLimits::current(),
     )?;
     let file = crate::host_fs::File::create(dest)?;
-    let file =
+    let (file, unreadable) =
         pack_logical_seven_zip_to_writer(file, source, archive_password, opts, layout, &plan, job)?;
-    Ok(file.metadata()?.len())
+    Ok(ReadableExport {
+        size: file.metadata()?.len(),
+        unreadable,
+    })
+}
+
+/// Name in the log how many files a readable export kept with zeros. The
+/// names go to the person only.
+fn log_export_unreadable(vault_id: &str, written: &Result<ExportedFile>) {
+    let Ok(file) = written else {
+        return;
+    };
+    if file.unreadable.is_empty() {
+        return;
+    }
+    let count = file.unreadable.len().to_string();
+    let mut fields = vec![("count", count.as_str())];
+    fields.extend(vault_id_log_field(vault_id));
+    log_event(LogLevel::Warn, "vault_export_kept_unreadable", &fields);
 }
 
 /// Run `f` on the closed vault, unlocked with `password`: its folder, where its
@@ -236,7 +256,9 @@ fn with_logical_store<T>(
 /// as `{display_name}.7z` by the job `job_id`, with `.upriv-config/` carrying
 /// what `include` asks for. Plaintext stays in RAM; the file is 7-Zip AES
 /// ciphertext. This vault must be closed; the password unlocks `store/` for
-/// the read.
+/// the read. Every file goes in: one whose data is missing or damaged keeps
+/// its readable parts, with zeros for the rest, and is named in
+/// [`ExportedFile::unreadable`].
 pub fn export_logical_seven_zip(
     root: &VaultRoot,
     vault_id: &str,
@@ -246,6 +268,7 @@ pub fn export_logical_seven_zip(
     dest_dir: &Path,
     job_id: &str,
 ) -> Result<ExportedFile> {
+    let mut unreadable = Vec::new();
     let written = Job::run(job_id, JobKind::VaultExport, Some(vault_id), |job| {
         let (config, target) = export_target(root, vault_id, dest_dir, "7z")?;
         let opts = options.cloned().unwrap_or(config.seven_zip);
@@ -266,7 +289,7 @@ pub fn export_logical_seven_zip(
                             outer: &outer,
                             config_files: &config_files,
                         };
-                        pack_logical_seven_zip_to_path(
+                        let packed = pack_logical_seven_zip_to_path(
                             source,
                             index,
                             archive_password,
@@ -274,13 +297,17 @@ pub fn export_logical_seven_zip(
                             layout,
                             partial,
                             job,
-                        )
+                        )?;
+                        unreadable = packed.unreadable;
+                        Ok(packed.size)
                     },
                 )
             },
         )
     });
+    let written = written.map(|file| ExportedFile { unreadable, ..file });
     log_export_numbered(vault_id, "7z", &written);
+    log_export_unreadable(vault_id, &written);
     written
 }
 
@@ -289,6 +316,9 @@ pub fn export_logical_seven_zip(
 /// carrying what `include` asks for. **Not encrypted:** anyone who gets the
 /// file reads the vault. This vault must be closed; the password unlocks
 /// `store/` for the read. A stop or a failure overwrites the unfinished file.
+/// Every file goes in: one whose data is missing or damaged keeps its
+/// readable parts, with zeros for the rest, and is named in
+/// [`ExportedFile::unreadable`].
 pub fn export_plain_zip(
     root: &VaultRoot,
     vault_id: &str,
@@ -297,6 +327,7 @@ pub fn export_plain_zip(
     dest_dir: &Path,
     job_id: &str,
 ) -> Result<ExportedFile> {
+    let mut unreadable = Vec::new();
     let written = Job::run(job_id, JobKind::VaultExport, Some(vault_id), |job| {
         let (config, target) = export_target(root, vault_id, dest_dir, "zip")?;
         let wipe = WipeOptions::from_vault_config(&config);
@@ -308,13 +339,17 @@ pub fn export_plain_zip(
             |partial| {
                 with_logical_store(root, vault_id, password, |vault_dir, source, index| {
                     let config_files = config_folder_files(vault_dir, source, index, include)?;
-                    write_plain_zip(source, index, &config_files, partial, job)
+                    let written = write_plain_zip(source, index, &config_files, partial, job)?;
+                    unreadable = written.unreadable;
+                    Ok(written.size)
                 })
             },
             |partial| wipe_partial(partial, PartialWork::VaultExport, &wipe),
         )
     });
+    let written = written.map(|file| ExportedFile { unreadable, ..file });
     log_export_numbered(vault_id, "plain_zip", &written);
+    log_export_unreadable(vault_id, &written);
     if written.is_ok() {
         let fields: Vec<_> = vault_id_log_field(vault_id).into_iter().collect();
         log_event(LogLevel::Info, "vault_exported_plain_text", &fields);
@@ -1030,12 +1065,12 @@ mode = "encrypted_dir"
         crate::session::clear_throttle_key_for_tests(&notes);
     }
 
-    #[test]
-    fn a_plain_text_export_that_fails_leaves_no_file_and_no_record() {
-        let (_tmp, root) = notes_root();
-        open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        fs_write_file(&root, "notes", "/a.txt", b"written first").unwrap();
-        fs_write_file(&root, "notes", "/b.txt", b"fails to decrypt").unwrap();
+    /// Write `/a.txt` and `/b.txt` into the closed vault `notes`, and return
+    /// the blob of `b.txt`.
+    fn two_files(root: &VaultRoot) -> PathBuf {
+        open_vault(root, "notes", b"pass-word-ok").unwrap();
+        fs_write_file(root, "notes", "/a.txt", b"written first").unwrap();
+        fs_write_file(root, "notes", "/b.txt", b"second file").unwrap();
         let blob =
             crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
                 let (file_id, _, _) = session
@@ -1043,18 +1078,69 @@ mode = "encrypted_dir"
                     .find("b.txt")
                     .and_then(|node| node.as_file())
                     .expect("b.txt");
-                Ok(crate::store::blob_path(
-                    root.vault_store_dir("notes").unwrap(),
-                    file_id,
-                ))
+                crate::store::blob_path(root.vault_store_dir("notes").unwrap(), file_id)
             })
-            .unwrap()
             .unwrap();
-        close_vault(&root, "notes").unwrap();
+        close_vault(root, "notes").unwrap();
+        blob
+    }
+
+    #[test]
+    fn a_plain_text_export_keeps_a_damaged_file_with_zeros_and_names_it() {
+        let (_tmp, root) = notes_root();
+        let blob = two_files(&root);
         let mut bytes = crate::host_fs::read(&blob).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0x01;
         crate::host_fs::write(&blob, &bytes).unwrap();
+
+        let out = tempfile::tempdir().unwrap();
+        let file = export_plain_zip(
+            &root,
+            "notes",
+            b"pass-word-ok",
+            VAULT_FILES_ONLY,
+            out.path(),
+            &test_job_id(),
+        )
+        .unwrap();
+        assert_eq!(file.unreadable, ["b.txt"]);
+        let bodies = zip_bodies(&crate::host_fs::read(&file.path).unwrap());
+        let body = |name: &str| {
+            bodies
+                .iter()
+                .find(|(entry, _)| entry == name)
+                .map(|(_, body)| body.clone())
+                .unwrap()
+        };
+        assert_eq!(body("a.txt"), b"written first");
+        assert_eq!(body("b.txt"), vec![0u8; b"second file".len()]);
+    }
+
+    #[test]
+    fn a_plain_text_export_that_fails_leaves_no_file_and_no_record() {
+        let (_tmp, root) = notes_root();
+        two_files(&root);
+        // An index entry whose blob id is not a UUID cannot be served at all,
+        // so the export fails after it has started writing.
+        let store = root.vault_store_dir("notes").unwrap();
+        let opened = crate::store::open_store(&store, b"pass-word-ok").unwrap();
+        let mut index = opened.index.clone();
+        let node = index.find("b.txt").unwrap().clone();
+        let (_, size, versions) = node.as_file().unwrap();
+        let broken = crate::store::VaultNode::file(
+            "b.txt",
+            "not-a-uuid".into(),
+            size,
+            versions.to_vec(),
+            node.chunk_offsets().unwrap().to_vec(),
+        );
+        index.put(broken);
+        let sealed =
+            crate::store::sealed_index_bytes(&opened.header, &opened.index_key, &index).unwrap();
+        let index_dir = store.join(crate::store::INDEX_DIR_NAME);
+        crate::host_fs::write(index_dir.join(crate::store::INDEX_FILE_NAME), &sealed).unwrap();
+        crate::host_fs::write(index_dir.join(crate::store::INDEX_COPY_FILE_NAME), &sealed).unwrap();
 
         let out = tempfile::tempdir().unwrap();
         assert!(export_plain_zip(

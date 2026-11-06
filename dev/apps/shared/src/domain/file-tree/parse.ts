@@ -1,4 +1,4 @@
-import type { FileTreeNode } from "./types";
+import { isFileProblem, type FileTreeNode } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -13,7 +13,9 @@ export function parseFileTreeNode(raw: unknown): FileTreeNode {
   const type = raw.type === "file" ? "file" : "folder";
   const marks = typeof raw.inFolder === "boolean" ? { inFolder: raw.inFolder } : {};
   if (type === "file") {
-    return { name, type, ...marks };
+    return isFileProblem(raw.problem)
+      ? { name, type, ...marks, problem: raw.problem }
+      : { name, type, ...marks };
   }
   const children = Array.isArray(raw.children) ? raw.children.map(parseFileTreeNode) : [];
   return { name, type, children, ...marks };

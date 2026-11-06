@@ -3,6 +3,7 @@ import {
   imageDataUrlFromBase64,
   isInternalVaultPath,
   parseFileTreeNode,
+  parseHeldItems,
   vaultFileLanguageFromPath,
   VAULT_ERROR_CODES,
   type VaultFileContent,
@@ -71,6 +72,10 @@ export interface LiveVaultFileSystemRpc {
   osPath(id: string, path: string): Promise<{ osPath: string | null }>;
   plainSend(id: string, paths: string[]): Promise<{ files: number }>;
   plainUnsend(id: string, paths: string[]): Promise<FolderRemoval>;
+  /** The raw `vault_fs_held` answer. */
+  held(id: string): Promise<unknown>;
+  heldRestore(id: string, names: string[]): Promise<{ paths: string[]; revision: number }>;
+  heldDelete(id: string, names: string[]): Promise<number>;
 }
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -380,6 +385,14 @@ export function createLiveVaultFileSystemService(
     },
 
     removeFromFolder: (vaultId, paths) => rpc.plainUnsend(vaultId, paths),
+
+    async getHeld(vaultId) {
+      return parseHeldItems(await rpc.held(vaultId));
+    },
+
+    restoreHeld: (vaultId, names) => rpc.heldRestore(vaultId, names),
+
+    deleteHeld: (vaultId, names) => rpc.heldDelete(vaultId, names),
 
     languageFromPath(path): VaultFileLanguage {
       return vaultFileLanguageFromPath(path);

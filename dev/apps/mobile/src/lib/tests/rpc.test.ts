@@ -119,7 +119,10 @@ describe("job rpc", () => {
   it("sends the folder and the job with a vault export, and the job with a save", async () => {
     native.invoke
       .mockResolvedValueOnce(
-        JSON.stringify({ ok: true, result: { path: "/upriv-saf-export/Notes.zip", size: 10 } }),
+        JSON.stringify({
+          ok: true,
+          result: { path: "/upriv-saf-export/Notes.zip", size: 10, unreadable: [] },
+        }),
       )
       .mockResolvedValueOnce(
         JSON.stringify({
@@ -138,7 +141,7 @@ describe("job rpc", () => {
     const { rpcBackupSave, rpcVaultExportToFolder } = await import("../rpc");
     await expect(
       rpcVaultExportToFolder("notes", { format: "store_zip" }, "/upriv-saf-export", "job-2"),
-    ).resolves.toEqual({ path: "/upriv-saf-export/Notes.zip", size: 10 });
+    ).resolves.toEqual({ path: "/upriv-saf-export/Notes.zip", size: 10, unreadable: [] });
     await rpcBackupSave("notes", "job-3");
     expect(JSON.parse(native.invoke.mock.calls[0][1] as string)).toMatchObject({
       id: "notes",

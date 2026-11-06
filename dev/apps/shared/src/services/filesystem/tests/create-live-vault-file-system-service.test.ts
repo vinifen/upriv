@@ -37,6 +37,9 @@ function rpcStub(overrides: Partial<LiveVaultFileSystemRpc> = {}): LiveVaultFile
     osPath: async () => ({ osPath: "/tmp/mount" }),
     plainSend: async () => ({ files: 0 }),
     plainUnsend: async () => ({ removed: 0, kept: 0 }),
+    held: async () => ({ items: [] }),
+    heldRestore: async () => ({ paths: [], revision: 1 }),
+    heldDelete: async () => 1,
     ...overrides,
   };
 }
@@ -256,6 +259,41 @@ describe("createLiveVaultFileSystemService", () => {
     const fs = createLiveVaultFileSystemService(rpcStub({ plainUnsend }));
     await expect(fs.removeFromFolder("v", ["/docs"])).resolves.toEqual({ removed: 2, kept: 1 });
     expect(plainUnsend).toHaveBeenCalledWith("v", ["/docs"]);
+  });
+
+  it("lists set-aside data and puts files back or deletes them by name", async () => {
+    const held = vi.fn(async () => ({
+      items: [
+        {
+          name: "a.blob",
+          size: 300,
+          heldAt: 5,
+          file: { path: "/docs/b.txt", size: 6, modifiedAt: 4, currentModifiedAt: null },
+        },
+        { name: "b.blob", size: 64, heldAt: 5, file: null },
+        { name: 7 },
+      ],
+    }));
+    const heldRestore = vi.fn(async () => ({ paths: ["/docs/b.txt"], revision: 3 }));
+    const heldDelete = vi.fn(async () => 4);
+    const fs = createLiveVaultFileSystemService(rpcStub({ held, heldRestore, heldDelete }));
+
+    await expect(fs.getHeld("v")).resolves.toEqual([
+      {
+        name: "a.blob",
+        size: 300,
+        heldAt: 5,
+        file: { path: "/docs/b.txt", size: 6, modifiedAt: 4, currentModifiedAt: null },
+      },
+      { name: "b.blob", size: 64, heldAt: 5, file: null },
+    ]);
+    await expect(fs.restoreHeld("v", ["a.blob"])).resolves.toEqual({
+      paths: ["/docs/b.txt"],
+      revision: 3,
+    });
+    expect(heldRestore).toHaveBeenCalledWith("v", ["a.blob"]);
+    await expect(fs.deleteHeld("v", ["b.blob"])).resolves.toBe(4);
+    expect(heldDelete).toHaveBeenCalledWith("v", ["b.blob"]);
   });
 
   it("asks core whether a preview fits in free RAM", async () => {

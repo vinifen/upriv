@@ -58,10 +58,11 @@ pub fn clear_logging_session() {
 /// Uses on-disk `[logging]` settings. If no vault-root is available yet (or the
 /// marker vanished), clears any stale session logger and returns `Ok(None)`.
 pub fn ensure_logging_session() -> io::Result<Option<Arc<Logger>>> {
-    // `cargo test` runs inside `dev/`, where discovery would reach the developer's
-    // own data folder. Tests resolve one only after setting an app home.
-    #[cfg(test)]
-    if crate::paths::env_default_root_anchor().is_none() {
+    // Tests never find a data folder to log into: `cargo test` runs inside
+    // `dev/`, where discovery would reach the developer's own, and the app home
+    // a test sets is process-wide, so a line any other test logs meanwhile
+    // would land in that test's folder. A test that needs a logger installs it.
+    if cfg!(test) {
         return Ok(session_logger());
     }
     let loaded = match load_app_settings() {

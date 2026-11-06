@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::chunk::{validate_logical_path, RetiredFileChunks, SEED_LOGICAL_PATH};
-use super::index::{VaultIndex, VaultNode};
+use super::index::{FileProblem, VaultIndex, VaultNode};
 use crate::error::{Result, UprivError};
 
 /// Hidden from the explorer; still a real logical file in `store/`.
@@ -69,6 +69,9 @@ pub struct FileTreeNode {
     /// In the plaintext folder right now. Only a vault of chosen files sets it.
     #[serde(rename = "inFolder", skip_serializing_if = "Option::is_none")]
     pub in_folder: Option<bool>,
+    /// What keeps this file from being read in full. Files only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<FileProblem>,
 }
 
 /// UI paths are `/notes/a.txt`. Core index paths are `notes/a.txt`. Root is `""` / `"/"`.
@@ -114,7 +117,7 @@ pub(crate) fn require_parent_dir(index: &VaultIndex, path: &str) -> Result<()> {
 
 fn sibling_names(index: &VaultIndex, parent: &str) -> Vec<String> {
     index
-        .nodes
+        .nodes()
         .iter()
         .filter(|node| parent_logical(&node.path).unwrap_or("") == parent)
         .map(|node| file_name(&node.path).to_string())
@@ -222,7 +225,7 @@ pub fn mkdir_logical(index: &mut VaultIndex, logical_path: &str) -> Result<()> {
     if index.find(logical_path).is_some() {
         return Err(UprivError::VaultPathExists(logical_path.into()));
     }
-    index.nodes.push(VaultNode::dir(logical_path));
+    index.push(VaultNode::dir(logical_path));
     Ok(())
 }
 
@@ -248,7 +251,7 @@ pub fn ensure_folder(index: &mut VaultIndex, parent: &str, name: &str) -> Result
 fn has_descendant(index: &VaultIndex, path: &str) -> bool {
     let prefix = format!("{path}/");
     index
-        .nodes
+        .nodes()
         .iter()
         .any(|node| node.path.starts_with(&prefix))
 }
@@ -267,28 +270,14 @@ pub fn delete_logical_path(
     if index.find(logical_path).is_none() {
         return Err(UprivError::VaultPathNotFound(logical_path.into()));
     }
-    let prefix = format!("{logical_path}/");
-    let mut to_remove: Vec<String> = index
-        .nodes
+    let retired = index
+        .remove_tree(logical_path)
         .iter()
-        .filter(|node| node.path == logical_path || node.path.starts_with(&prefix))
-        .map(|node| node.path.clone())
+        .filter_map(|node| node.as_file())
+        .map(|(file_id, _, _)| RetiredFileChunks {
+            file_id: file_id.to_string(),
+        })
         .collect();
-    to_remove.sort_by_key(|p| std::cmp::Reverse(p.len()));
-    let mut retired = Vec::new();
-    for path in &to_remove {
-        if let Some(node) = index.find(path) {
-            if let Some((file_id, _, versions)) = node.as_file() {
-                retired.push(RetiredFileChunks {
-                    file_id: file_id.to_string(),
-                    chunk_count: versions.len() as u32,
-                });
-            }
-        }
-    }
-    for path in &to_remove {
-        index.remove(path);
-    }
     Ok(retired)
 }
 
@@ -319,17 +308,7 @@ fn remap_prefix(index: &mut VaultIndex, from: &str, to: &str) -> Result<()> {
     if path_occupied(index, to) {
         return Err(UprivError::VaultPathExists(to.into()));
     }
-    let prefix = format!("{from}/");
-    let now = crate::time::unix_millis();
-    for node in &mut index.nodes {
-        if node.path == from {
-            node.path = to.to_string();
-            node.modified_at = now;
-        } else if let Some(rest) = node.path.strip_prefix(&prefix) {
-            node.path = format!("{to}/{rest}");
-            node.modified_at = now;
-        }
-    }
+    index.move_tree(from, to, crate::time::unix_millis());
     Ok(())
 }
 
@@ -430,12 +409,9 @@ pub fn relocate_replacing(
                 detail: "destination is a file".into(),
             });
         }
-        let chunks = node
-            .as_file()
-            .map(|(file_id, _, versions)| RetiredFileChunks {
-                file_id: file_id.to_string(),
-                chunk_count: versions.len() as u32,
-            });
+        let chunks = node.as_file().map(|(file_id, _, _)| RetiredFileChunks {
+            file_id: file_id.to_string(),
+        });
         Some(chunks)
     } else {
         None
@@ -454,11 +430,11 @@ pub fn relocate_replacing(
 pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
     #[derive(Default)]
     struct Acc {
-        files: BTreeMap<String, ()>,
+        files: BTreeMap<String, Option<FileProblem>>,
         dirs: BTreeMap<String, Acc>,
     }
     let mut root = Acc::default();
-    let mut paths: Vec<&VaultNode> = index.nodes.iter().collect();
+    let mut paths: Vec<&VaultNode> = index.nodes().iter().collect();
     paths.sort_by(|a, b| a.path.cmp(&b.path));
     for node in paths {
         if is_reserved_logical(&node.path) {
@@ -469,7 +445,7 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
         for (i, part) in parts.iter().enumerate() {
             let last = i + 1 == parts.len();
             if last && !node.is_dir() {
-                cur.files.insert((*part).to_string(), ());
+                cur.files.insert((*part).to_string(), node.problem);
             } else {
                 cur = cur.dirs.entry((*part).to_string()).or_default();
             }
@@ -481,12 +457,13 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
             .into_iter()
             .map(|(name, child)| into_node(name, child))
             .collect();
-        for (name, _) in acc.files {
+        for (name, problem) in acc.files {
             children.push(FileTreeNode {
                 name,
                 node_type: "file",
                 children: None,
                 in_folder: None,
+                problem,
             });
         }
         children.sort_by(|a, b| match (a.node_type, b.node_type) {
@@ -499,6 +476,7 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
             node_type: "folder",
             children: Some(children),
             in_folder: None,
+            problem: None,
         }
     }
     into_node(root_name.to_string(), root)

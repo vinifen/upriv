@@ -30,15 +30,20 @@ import {
   isImportWalkPlaceholderPath,
   liveFileNameError,
   fileNameErrorI18nKey,
+  fileProblemMark,
+  fileProblemRows,
+  formatBytes,
   LOGICAL_FILE_NAME_MAX_LENGTH,
   renameBasenameSelection,
   searchTreeRows,
   sessionPathKind,
   FILE_MANAGER_LONG_PRESS_MS,
   FILE_MANAGER_LONG_PRESS_MOVE_PX,
+  FILE_PROBLEM_MARK_I18N_KEYS,
   pointInHitRect,
   smallestContainingKey,
   visibleTreeRows,
+  type FileProblemMark,
   type FolderPresence,
   type VisibleTreeRow,
 } from "@upriv/shared";
@@ -184,7 +189,10 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   const { explorerSearchOpen: searchOpen, explorerSearchQuery: search } = workspace;
   // A large vault filters behind the typing, not in its way.
   const deferredSearch = useDeferredValue(search);
-  const searching = deferredSearch.trim().length > 0;
+  const problems = fm.explorerProblems.problems;
+  // Showing only the files that cannot be read takes the place of a search.
+  const problemsOnly = fm.explorerProblems.only && problems !== null;
+  const searching = !problemsOnly && deferredSearch.trim().length > 0;
   // Folders collapse for this search only; the saved ones stay as they are.
   const { collapsed: searchCollapsed, toggle: toggleSearchFolder } = useSearchCollapsedFolders(
     fm.vaultId,
@@ -204,15 +212,19 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
 
   const entries = useMemo(
     () =>
-      searching
-        ? searchTreeRows(fm.displayTree, deferredSearch, {
-            renamingPath: workspace.renamingPath,
-            collapsed: searchCollapsed,
-          })
-        : visibleTreeRows(fm.displayTree, workspace.expandedPaths),
+      problemsOnly && problems
+        ? fileProblemRows(fm.displayTree, problems, workspace.expandedPaths)
+        : searching
+          ? searchTreeRows(fm.displayTree, deferredSearch, {
+              renamingPath: workspace.renamingPath,
+              collapsed: searchCollapsed,
+            })
+          : visibleTreeRows(fm.displayTree, workspace.expandedPaths),
     [
       deferredSearch,
       fm.displayTree,
+      problems,
+      problemsOnly,
       searchCollapsed,
       searching,
       workspace.expandedPaths,
@@ -447,6 +459,7 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
           isProcessing={processingImportPaths.has(item.path) || isWalkPlaceholder || isQueueSlot}
           osFolderAvailable={osFolderAvailable}
           folderMark={folderPresence?.get(item.path) ?? null}
+          problemMark={fileProblemMark(problems, item.path)}
           depth={item.depth}
           actions={rowActions}
           registerDropTarget={registerDropTarget}
@@ -471,6 +484,7 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
       onDragStart,
       osFolderAvailable,
       pendingImportPaths,
+      problems,
       processingImportPaths,
       registerDropTarget,
       remeasureDropTarget,
@@ -523,6 +537,8 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
           {t("modal.file_manager.explorer.folder_empty")}
         </Text>
       ) : null}
+      <FileProblemsBar fm={fm} />
+      <HeldFilesBar fm={fm} />
       {/*
         A long press on a row starts the drag; from then on this view owns the
         gesture, so a row drawing again or leaving the list cannot strand it.
@@ -587,6 +603,65 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   );
 }
 
+/**
+ * Says how many files cannot be read, and shows only them in the explorer or
+ * every file again.
+ */
+function FileProblemsBar({ fm }: { fm: FileManagerApi }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const { problems, only, show } = fm.explorerProblems;
+  if (!problems) return null;
+  const count = problems.files.size;
+  return (
+    <View accessibilityLiveRegion="polite" style={styles.problemsBar}>
+      <Icon name="warning" size={11} color={colors.vaultStatusRecovery} />
+      <Text style={[styles.problemsText, { color: colors.onSurfaceVariant }]}>
+        {t(
+          only
+            ? "modal.file_manager.explorer.problems_shown"
+            : "modal.file_manager.explorer.problems_found",
+          { count },
+        )}
+      </Text>
+      <Button
+        label={t(
+          only
+            ? "modal.file_manager.explorer.problems_show_all"
+            : "modal.file_manager.explorer.problems_show",
+        )}
+        variant="ghost"
+        size="sm"
+        onPress={() => show(!only)}
+      />
+    </View>
+  );
+}
+
+/** Data the vault set aside, and the way to the window that reviews it. */
+function HeldFilesBar({ fm }: { fm: FileManagerApi }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const { summary, show } = fm.held;
+  if (!summary) return null;
+  return (
+    <View accessibilityLiveRegion="polite" style={styles.problemsBar}>
+      <Icon name="archive" size={11} color={colors.onSurfaceVariant} />
+      <Text style={[styles.problemsText, { color: colors.onSurfaceVariant }]}>
+        {summary.files.length > 0
+          ? t("modal.file_manager.held.bar_files", { count: summary.files.length })
+          : t("modal.file_manager.held.bar_pieces", { size: formatBytes(summary.pieceBytes) })}
+      </Text>
+      <Button
+        label={t("modal.file_manager.held.review")}
+        variant="ghost"
+        size="sm"
+        onPress={() => show(true)}
+      />
+    </View>
+  );
+}
+
 const TREE_SKELETON_ROWS = [
   { depth: 0, width: 96 },
   { depth: 0, width: 128 },
@@ -639,6 +714,8 @@ interface FileTreeRowProps {
   osFolderAvailable: boolean;
   /** How much of this entry is in a chosen-files vault's folder. */
   folderMark: FolderPresence | null;
+  /** A file that cannot be read in full, or a folder above one. */
+  problemMark: FileProblemMark | null;
   depth: number;
   actions: FileTreeRowActions;
   registerDropTarget: (path: string, node: View | null) => void;
@@ -668,6 +745,7 @@ const FileTreeRow = memo(function FileTreeRow({
   isProcessing,
   osFolderAvailable,
   folderMark,
+  problemMark,
   depth,
   actions,
   registerDropTarget,
@@ -948,6 +1026,15 @@ const FileTreeRow = memo(function FileTreeRow({
               </Text>
             )}
             {isDirty ? <View style={styles.dirtyDot} /> : null}
+            {problemMark ? (
+              <View
+                accessibilityRole="image"
+                accessibilityLabel={t(FILE_PROBLEM_MARK_I18N_KEYS[problemMark])}
+                style={problemMark === "inside" ? styles.problemMarkInside : null}
+              >
+                <Icon name="warning" size={11} color={colors.vaultStatusRecovery} />
+              </View>
+            ) : null}
             {folderMark === "all" || folderMark === "some" ? (
               <View
                 accessibilityRole="image"
@@ -1150,6 +1237,16 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   folderMarkPartial: { opacity: 0.5 },
+  problemMarkInside: { opacity: 0.6 },
+  problemsBar: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingBottom: 4,
+  },
+  problemsText: { flex: 1, minWidth: 0, fontSize: 11, lineHeight: 14 },
   folderEmpty: {
     flexShrink: 0,
     paddingHorizontal: 8,

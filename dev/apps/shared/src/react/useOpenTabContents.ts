@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FilePreviewTooLargeError,
+  fileProblemOfError,
   isImportQueueSlotPath,
   isImportWalkPlaceholderPath,
   markTabRecent,
@@ -10,6 +11,7 @@ import {
   trimTabContents,
   withSavedDrafts,
   withTabContent,
+  type FileProblem,
   type TabContent,
   type TabContents,
   type VaultFileSystemService,
@@ -22,8 +24,11 @@ interface UseOpenTabContentsOptions {
   workspace: VaultWorkspaceState;
   /** Imports still writing. Their tabs are read once the file lands. */
   unresolvedImportPaths: ReadonlySet<string>;
-  /** A read failed (the editor shows that tab's error). */
-  onReadFailed: () => void;
+  /**
+   * A read failed (the editor shows that tab's error). `problem` when core
+   * found the file's data missing or damaged; core has marked the file.
+   */
+  onReadFailed: (path: string, problem: FileProblem | null) => void;
 }
 
 async function readTabContent(
@@ -43,7 +48,8 @@ async function readTabContent(
     return { state: "loaded", text: file?.content ?? "", revision };
   } catch (error) {
     if (error instanceof FilePreviewTooLargeError) return { state: "too_large", revision };
-    return { state: "failed", revision };
+    const problem = fileProblemOfError(error);
+    return problem ? { state: "failed", revision, problem } : { state: "failed", revision };
   }
 }
 
@@ -131,7 +137,7 @@ export function useOpenTabContents({
         if (inFlightRef.current.get(path) === read) inFlightRef.current.delete(path);
         if (disposedRef.current || !openTabsRef.current.includes(path)) return;
         setContents((current) => withTabContent(current, path, content));
-        if (content.state === "failed") onReadFailedRef.current();
+        if (content.state === "failed") onReadFailedRef.current(path, content.problem ?? null);
       });
     }
   }, [contents, fs, neededKey, treeRevision, unresolvedImportPaths, vaultId]);

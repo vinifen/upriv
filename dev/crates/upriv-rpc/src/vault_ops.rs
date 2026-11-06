@@ -7,16 +7,17 @@ use serde_json::{json, Value};
 use upriv_core::{
     abort_import_vault, close_all_vaults, close_all_vaults_now, delete_backups, delete_vault,
     export_backups, export_logical_seven_zip, export_plain_zip, export_store_zip, fs_create_file,
-    fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_move,
-    fs_os_path, fs_preview_fits, fs_read_file, fs_read_range, fs_rename, fs_tree_revision,
-    fs_truncate, fs_write_file, import_logical_files_zip, import_logical_files_zip_path,
-    import_logical_os_path, import_logical_seven_zip, import_logical_seven_zip_path,
-    import_store_from_archive_path, import_store_zip, ingest_import_directory, list_backups,
-    parse_backup_import_path, parse_embedded_settings, probe_import_zip_bytes,
-    probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
-    promote_backup_save, read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
-    save_backup_now, seven_zip_export_available, sweep_unfinished, vault_list_item, BackupEntry,
-    ExportInclude, ImportExtras, ImportZipProbe, KdfUnlockPreset, VaultConfig, ZipImportClass,
+    fs_create_folder, fs_delete, fs_ensure_folder, fs_held_delete, fs_held_list, fs_held_restore,
+    fs_import_from_os_path, fs_list_tree, fs_move, fs_os_path, fs_preview_fits, fs_read_file,
+    fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
+    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
+    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
+    import_store_zip, ingest_import_directory, list_backups, parse_backup_import_path,
+    parse_embedded_settings, probe_import_zip_bytes, probe_import_zip_path,
+    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, promote_backup_save,
+    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml, save_backup_now,
+    seven_zip_export_available, sweep_unfinished, vault_list_item, BackupEntry, ExportInclude,
+    ImportExtras, ImportZipProbe, KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -118,6 +119,14 @@ struct VaultFsMoveParams {
     id: String,
     from_path: String,
     to_folder_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultHeldParams {
+    id: String,
+    /// Held blob names, as `vault_fs_held` lists them.
+    names: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -352,6 +361,80 @@ pub(super) fn vault_fs_list(params: Value) -> RpcResponse {
             },
             Err(error) => err("invalid_request", error.to_string()),
         },
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// The blobs the open vault keeps in `held/`: files it can put back, and
+/// pieces no index names.
+pub(super) fn vault_fs_held(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match fs_held_list(&root, parsed.id.trim()) {
+        Ok(items) => {
+            let items: Vec<Value> = items
+                .into_iter()
+                .map(|item| {
+                    let file = item.file.map(|file| {
+                        json!({
+                            "path": file.path,
+                            "size": file.size,
+                            "modifiedAt": file.modified_at,
+                            "currentModifiedAt": file.current_modified_at,
+                        })
+                    });
+                    json!({
+                        "name": item.name,
+                        "size": item.size,
+                        "heldAt": item.held_at,
+                        "file": file,
+                    })
+                })
+                .collect();
+            ok(json!({ "items": items }))
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_fs_held_restore(params: Value) -> RpcResponse {
+    let parsed: VaultHeldParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    if parsed.names.is_empty() {
+        return err("invalid_request", "names is required".into());
+    }
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match fs_held_restore(&root, parsed.id.trim(), &parsed.names) {
+        Ok((paths, revision)) => ok(json!({ "paths": paths, "revision": revision })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_fs_held_delete(params: Value) -> RpcResponse {
+    let parsed: VaultHeldParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    if parsed.names.is_empty() {
+        return err("invalid_request", "names is required".into());
+    }
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match fs_held_delete(&root, parsed.id.trim(), &parsed.names) {
+        Ok(revision) => ok(json!({ "revision": revision })),
         Err(error) => map_core_err(error),
     }
 }
@@ -743,7 +826,16 @@ pub(super) fn vault_export(params: Value) -> RpcResponse {
     };
     match exported {
         Ok(file) => match path_utf8(&file.path) {
-            Ok(path) => ok(json!({ "path": path, "size": file.size })),
+            Ok(path) => {
+                // Files kept with zeros where their data was missing or
+                // damaged, as the file manager names them.
+                let unreadable: Vec<String> = file
+                    .unreadable
+                    .iter()
+                    .map(|logical| upriv_core::store::to_ui_path(logical))
+                    .collect();
+                ok(json!({ "path": path, "size": file.size, "unreadable": unreadable }))
+            }
             Err(response) => response,
         },
         Err(error) => map_core_err(error),

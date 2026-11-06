@@ -5,7 +5,7 @@ use crate::host_fs::HostFsQuery;
 use crate::host_fs::{self as fs, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -106,21 +106,46 @@ struct FileIdentity {
     ino: u64,
 }
 
+/// Tries an acquire makes while the flock reads as held, [`BUSY_PAUSE`] apart.
+const BUSY_TRIES: u32 = 10;
+/// Tries an acquire makes while the lock file is replaced under it.
+const REPLACED_TRIES: u32 = 8;
+/// Far longer than a probe ([`probe_lock`]) keeps the flock to test it.
+const BUSY_PAUSE: Duration = Duration::from_millis(5);
+
 /// Acquire `runtime/<id>.lock`. The holder keeps an exclusive flock. A lock is
-/// taken over only when that flock is free (the previous process is gone).
+/// taken over only when that flock is free (the previous process is gone). A
+/// flock that reads as held is tried again for a moment first: a probe of
+/// this process takes it for a few microseconds to test it, and a live holder
+/// keeps it far longer.
 pub fn acquire_vault_lock(path: PathBuf) -> Result<VaultLock> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    for _ in 0..8 {
+    let mut busy = 0;
+    let mut replaced = 0;
+    loop {
         let mut file = open_lock_file(&path, true)?;
         if !try_exclusive_lock(&file)? {
-            return Err(UprivError::VaultLocked(path));
+            busy += 1;
+            if busy == BUSY_TRIES {
+                return Err(UprivError::VaultLocked(path));
+            }
+            drop(file);
+            std::thread::sleep(BUSY_PAUSE);
+            continue;
         }
         let identity = identity_of_file(&file)?;
         match identity_of_path(&path) {
             Ok(on_disk) if on_disk == identity => {}
-            Ok(_) | Err(_) => continue,
+            // The holder unlinked the file after we opened it: open it anew.
+            Ok(_) | Err(_) => {
+                replaced += 1;
+                if replaced == REPLACED_TRIES {
+                    return Err(UprivError::VaultLocked(path));
+                }
+                continue;
+            }
         }
         // The exclusive flock is ours, so the previous holder is gone. Rewrite
         // the body even when it names another host (copied vault root, renamed
@@ -132,7 +157,6 @@ pub fn acquire_vault_lock(path: PathBuf) -> Result<VaultLock> {
             identity,
         });
     }
-    Err(UprivError::VaultLocked(path))
 }
 
 fn write_lock_body(file: &mut File) -> Result<()> {
@@ -309,41 +333,58 @@ fn identity_of_path(path: &Path) -> std::io::Result<FileIdentity> {
     }
 }
 
-/// How long an open waits for another process to let go of a vault.
-///
-/// An app that went away leaves its core running until it has closed its
-/// vaults, backup zips included. Short of the open's own 10 minute budget, so
-/// a large vault still opens. A second running copy of Upriv holds on for
-/// longer, and the open then refuses with [`UprivError::VaultLocked`].
-pub const LOCK_HOLDER_WAIT: Duration = if cfg!(test) {
-    Duration::from_millis(50)
-} else {
-    Duration::from_secs(8 * 60)
-};
 const LOCK_HOLDER_POLL: Duration = Duration::from_millis(100);
 
-/// Wait up to `limit` for another process to release this lock.
-pub fn wait_for_lock_holder(path: &Path, limit: Duration) {
-    let deadline = Instant::now() + limit;
-    while lock_held_by_live_process(path) {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return;
-        }
-        std::thread::sleep(left.min(LOCK_HOLDER_POLL));
+/// Wait for another process to let go of the lock at `path`, with no time
+/// limit: an app that went away leaves its core running until it has closed
+/// its vaults, backup zips included, however long that takes. The wait ends
+/// early once `give_up` says so, such as on a stop of the work that waits.
+pub(crate) fn wait_for_lock_holder(path: &Path, give_up: impl Fn() -> bool) {
+    while lock_held_elsewhere(path) && !give_up() {
+        std::thread::sleep(LOCK_HOLDER_POLL);
     }
 }
 
-/// True when another process holds the exclusive flock on `path`.
-/// A free flock is not live, including when the body names another host.
-pub fn lock_held_by_live_process(path: &Path) -> bool {
+/// Test the exclusive lock at `path` without keeping it: `Ok(true)` while
+/// another handle holds it (a lock this process holds reads as held too),
+/// `Ok(false)` when it is free or there is no lock file to test, `Err` when
+/// the system cannot say, such as a network share with no lock service.
+fn probe_lock(path: &Path) -> Result<bool> {
     let Ok(file) = open_lock_file(path, false) else {
-        return false;
+        return Ok(false);
     };
-    match try_exclusive_lock(&file) {
-        Ok(true) => false,
-        Ok(false) | Err(_) => true,
+    #[cfg(test)]
+    if FAILED_PROBES.with(|left| left.replace(left.get().saturating_sub(1)) > 0) {
+        return Err(std::io::Error::other("test: the lock cannot be tested").into());
     }
+    try_exclusive_lock(&file).map(|free| !free)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lock tests left to fail on this thread, as on a share with no lock service.
+    static FAILED_PROBES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Make the next `count` lock tests on this thread fail.
+#[cfg(test)]
+pub(crate) fn fail_lock_probes(count: u32) {
+    FAILED_PROBES.with(|left| left.set(count));
+}
+
+/// True when another process holds the exclusive flock on `path`.
+/// A free flock is not live, including when the body names another host. A
+/// lock the system cannot test counts as live: recovery must not take over
+/// what a running session may still use.
+pub fn lock_held_by_live_process(path: &Path) -> bool {
+    probe_lock(path).unwrap_or(true)
+}
+
+/// True while another handle holds the lock at `path`. A lock the system
+/// cannot test counts as free: taking it fails the same way, so no session
+/// can hold it, and work that only waits or refuses for a holder goes on.
+pub(crate) fn lock_held_elsewhere(path: &Path) -> bool {
+    probe_lock(path).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -362,22 +403,25 @@ mod tests {
             drop(held);
         });
 
-        wait_for_lock_holder(&path, Duration::from_secs(30));
+        wait_for_lock_holder(&path, || false);
 
         holder.join().unwrap();
         assert!(acquire_vault_lock(path).is_ok());
     }
 
     #[test]
-    fn wait_gives_up_on_a_holder_that_stays() {
+    fn wait_ends_when_it_gives_up_on_a_holder_that_stays() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("notes.lock");
         let _held = acquire_vault_lock(path.clone()).unwrap();
+        let asked = std::cell::Cell::new(0);
 
-        let started = Instant::now();
-        wait_for_lock_holder(&path, Duration::from_millis(50));
+        wait_for_lock_holder(&path, || {
+            asked.set(asked.get() + 1);
+            asked.get() == 3
+        });
 
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(asked.get(), 3, "asked between polls until it gave up");
         assert!(matches!(
             acquire_vault_lock(path),
             Err(UprivError::VaultLocked(_))
@@ -387,9 +431,64 @@ mod tests {
     #[test]
     fn wait_returns_at_once_without_a_lock_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let started = Instant::now();
-        wait_for_lock_holder(&tmp.path().join("notes.lock"), Duration::from_secs(30));
+        let started = std::time::Instant::now();
+        wait_for_lock_holder(&tmp.path().join("notes.lock"), || false);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_held_lock_reads_as_held_and_a_free_or_missing_one_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notes.lock");
+        assert!(!lock_held_elsewhere(&path));
+        assert!(!lock_held_by_live_process(&path));
+
+        let held = acquire_vault_lock(path.clone()).unwrap();
+        assert!(lock_held_elsewhere(&path));
+        assert!(lock_held_by_live_process(&path));
+
+        drop(held);
+        assert!(!lock_held_elsewhere(&path));
+        assert!(!lock_held_by_live_process(&path));
+    }
+
+    /// A lock the system cannot test: the open's wait and the refusals go on,
+    /// as no session can take it either, and recovery treats it as live.
+    #[test]
+    fn a_lock_that_cannot_be_tested_is_free_to_wait_on_and_live_for_recovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notes.lock");
+        drop(open_lock_file(&path, true).unwrap());
+
+        fail_lock_probes(3);
+        assert!(!lock_held_elsewhere(&path));
+        assert!(lock_held_by_live_process(&path));
+        let started = std::time::Instant::now();
+        wait_for_lock_holder(&path, || false);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        fail_lock_probes(0);
+        assert!(!lock_held_by_live_process(&path));
+    }
+
+    /// A probe takes the flock for a moment to test it; an acquire that meets
+    /// it then waits it out rather than report a holder.
+    #[test]
+    fn an_acquire_rides_out_a_probe_that_holds_the_flock_for_a_moment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notes.lock");
+        let probe = open_lock_file(&path, true).unwrap();
+        assert!(try_exclusive_lock(&probe).unwrap());
+        let (probing, started) = std::sync::mpsc::channel();
+        let releases = std::thread::spawn(move || {
+            probing.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(15));
+            drop(probe);
+        });
+        started.recv().unwrap();
+
+        let _lock = acquire_vault_lock(path.clone()).expect("taken once the probe lets go");
+        releases.join().unwrap();
+        assert!(lock_held_elsewhere(&path));
     }
 
     #[test]

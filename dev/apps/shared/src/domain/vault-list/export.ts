@@ -1,3 +1,4 @@
+import type { I18nKey } from "../../i18n/catalog";
 import type { VaultSettingsConfig } from "../vault-settings/types";
 import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
 import { fileNameOfPath } from "../format/fileName";
@@ -35,6 +36,42 @@ export const DEFAULT_VAULT_EXPORT_INCLUDE: VaultExportInclude = {
   workspace: true,
   settings: true,
 };
+
+/** What a vault export wrote. */
+export interface VaultExportResult {
+  path: string;
+  size: number;
+  /**
+   * Files a `.7z` or plain-text `.zip` holds with zeros where their data was
+   * missing or damaged, as the file manager names them (`/docs/a.txt`). Every
+   * file goes in, so each one is still found where it was. Empty for a zip of
+   * the encrypted vault, which copies it as it is.
+   */
+  unreadable: string[];
+}
+
+/** Wire answer of `vault_export`; null when it is not one. */
+export function parseVaultExportResult(raw: unknown): VaultExportResult | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const record = raw as { path?: unknown; size?: unknown; unreadable?: unknown };
+  if (typeof record.path !== "string" || typeof record.size !== "number") return null;
+  const unreadable = Array.isArray(record.unreadable)
+    ? record.unreadable.filter((path): path is string => typeof path === "string")
+    : [];
+  return { path: record.path, size: record.size, unreadable };
+}
+
+/** Names an export toast lists before it stops counting. */
+const UNREADABLE_NAMES_SHOWN = 3;
+
+/**
+ * The names of the files an export kept with zeros, for its toast: the first
+ * few by file name, then an ellipsis.
+ */
+export function vaultExportUnreadableNames(unreadable: readonly string[]): string {
+  const names = unreadable.slice(0, UNREADABLE_NAMES_SHOWN).map(fileNameOfPath);
+  return unreadable.length > UNREADABLE_NAMES_SHOWN ? `${names.join(", ")}, …` : names.join(", ");
+}
 
 /** Format + options for `exportToFolder`. A store zip uses none of them. */
 export interface VaultExportRequest {
@@ -121,6 +158,36 @@ export function vaultExportSavedAs(
 ): string | null {
   const saved = fileNameOfPath(writtenPath);
   return saved === vaultExportFilename(displayName, format) ? null : saved;
+}
+
+/** How long the export toast stays when it also names files kept with zeros. */
+export const VAULT_EXPORT_UNREADABLE_TOAST_MS = 12_000;
+
+/**
+ * The toast after a vault export: the name it saved the file under and, when
+ * some files could not be read in full, which ones the export holds with
+ * zeros. `durationMs` is null for the usual toast length.
+ */
+export function vaultExportToast(
+  target: { displayName: string; format: VaultExportFormat },
+  written: VaultExportResult,
+  tr: (key: I18nKey, params?: Record<string, string>) => string,
+): { message: string; durationMs: number | null } {
+  // A file already used the name: core saved this one with a number.
+  const savedAs = vaultExportSavedAs(target.displayName, target.format, written.path);
+  const saved = savedAs
+    ? tr("vault.export.success_numbered", {
+        filename: vaultExportFilename(target.displayName, target.format),
+        name: target.displayName,
+        saved: savedAs,
+      })
+    : tr("vault.export.success", { name: target.displayName });
+  if (written.unreadable.length === 0) return { message: saved, durationMs: null };
+  const kept = tr("vault.export.kept_unreadable", {
+    count: String(written.unreadable.length),
+    names: vaultExportUnreadableNames(written.unreadable),
+  });
+  return { message: `${saved} ${kept}`, durationMs: VAULT_EXPORT_UNREADABLE_TOAST_MS };
 }
 
 export type ExportFilenameSanitizeKind = "unchanged" | "adjusted" | "fallback";

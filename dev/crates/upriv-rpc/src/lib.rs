@@ -30,12 +30,12 @@ use upriv_core::{
     read_vault_root_alias, relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
     reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
-    update_vault_group, vault_list_item, vault_store_on_disk_bytes,
-    write_vault_root_alias_for_root, write_vault_root_alias_for_root_with_custom, AppSettings,
-    CloseState, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
-    ResolveVaultRootOptions, UpdateVaultGroupParams, UprivDirRelocate, VaultConfig, VaultGroup,
-    VaultListItem, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource,
-    VaultStorageMode, VaultWelcome, VAULT_ROOT_ALIAS_FILE,
+    update_vault_group, vault_disk_usage, vault_list_item, write_vault_root_alias_for_root,
+    write_vault_root_alias_for_root_with_custom, AppSettings, CloseState, IncompleteReplacePolicy,
+    KdfUnlockPreset, ResolveVaultRoot, ResolveVaultRootOptions, UpdateVaultGroupParams,
+    UprivDirRelocate, VaultConfig, VaultGroup, VaultListItem, VaultRootBootstrapPrefs,
+    VaultRootDirStatus, VaultRootMode, VaultRootSource, VaultStorageMode, VaultWelcome,
+    VAULT_ROOT_ALIAS_FILE,
 };
 
 mod data_folder_ops;
@@ -44,6 +44,7 @@ mod plain_ops;
 mod secret;
 mod vault_ops;
 
+pub use plain_ops::{vault_open_must_wait, vault_open_wait};
 use secret::SecretString;
 pub use vault_ops::{hurry_shutdown, ingest_content_fd, shutdown_is_now};
 
@@ -184,7 +185,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_close_hurry" => vault_close_hurry(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
-        "vault_store_size" => vault_store_size(req.params),
+        "vault_disk_usage" => vault_disk_usage_rpc(req.params),
         "vault_config_save" => vault_config_save(req.params),
         "vault_rename" => vault_rename(req.params),
         "vault_delete" => vault_ops::vault_delete(req.params),
@@ -199,6 +200,9 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_discard_import" => vault_ops::vault_discard_import(req.params),
         "vault_import_probe" => vault_ops::vault_import_probe(req.params),
         "vault_fs_list" => vault_ops::vault_fs_list(req.params),
+        "vault_fs_held" => vault_ops::vault_fs_held(req.params),
+        "vault_fs_held_restore" => vault_ops::vault_fs_held_restore(req.params),
+        "vault_fs_held_delete" => vault_ops::vault_fs_held_delete(req.params),
         "vault_fs_revision" => vault_ops::vault_fs_revision(req.params),
         "vault_fs_preview_fits" => vault_ops::vault_fs_preview_fits(req.params),
         "vault_fs_read" => vault_ops::vault_fs_read(req.params),
@@ -1609,7 +1613,7 @@ fn vault_close_hurry(params: Value) -> RpcResponse {
     }
 }
 
-fn vault_store_size(params: Value) -> RpcResponse {
+fn vault_disk_usage_rpc(params: Value) -> RpcResponse {
     let parsed: VaultIdParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
@@ -1618,8 +1622,11 @@ fn vault_store_size(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match vault_store_on_disk_bytes(&root, parsed.id.trim()) {
-        Ok(store_bytes) => ok(json!({ "storeBytes": store_bytes })),
+    match vault_disk_usage(&root, parsed.id.trim()) {
+        Ok(usage) => ok(json!({
+            "storeBytes": usage.store_bytes,
+            "heldBytes": usage.held_bytes,
+        })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1984,9 +1991,11 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         }
         upriv_core::UprivError::VaultPathNotFound(_) => ("vault_path_not_found", None),
         upriv_core::UprivError::VaultPathExists(_) => ("vault_path_exists", None),
+        upriv_core::UprivError::VaultHeldNotFound(_) => ("vault_held_not_found", None),
         upriv_core::UprivError::VaultFileTooLarge { path, .. } => {
             ("vault_file_too_large", Some(path.as_path()))
         }
+        upriv_core::UprivError::VaultFileUnreadable { .. } => ("vault_file_unreadable", None),
         upriv_core::UprivError::VaultLocked(p) => ("vault_locked", Some(p.as_path())),
         upriv_core::UprivError::VaultMountFailed(_) => ("vault_mount_failed", None),
         upriv_core::UprivError::ImportArchiveNotFound(p) => {
@@ -2052,6 +2061,9 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultConfigBusy { target } => Some(json!({ "target": target })),
         upriv_core::UprivError::VaultFileTooLarge { size, max, .. } => {
             Some(json!({ "size": size, "max": max }))
+        }
+        upriv_core::UprivError::VaultFileUnreadable { problem, .. } => {
+            Some(json!({ "problem": problem.as_str() }))
         }
         upriv_core::UprivError::PlainDestinationUnconfirmed { class, .. } => {
             let path = path.and_then(|p| p.to_str()).unwrap_or("");
@@ -2189,6 +2201,52 @@ mod log_redaction_tests {
     }
 }
 
+#[cfg(test)]
+mod error_mapping_tests {
+    use serde_json::json;
+    use upriv_core::store::FileProblem;
+
+    #[test]
+    fn an_unreadable_file_carries_its_problem_and_no_path_in_details() {
+        for (problem, wire) in [
+            (FileProblem::Missing, "missing"),
+            (FileProblem::Damaged, "damaged"),
+        ] {
+            let response = super::map_core_err_response(
+                upriv_core::UprivError::VaultFileUnreadable {
+                    path: "docs/a.txt".into(),
+                    problem,
+                },
+                false,
+            );
+            let error = response.error.unwrap();
+            assert_eq!(error.code, "vault_file_unreadable");
+            assert_eq!(error.details, Some(json!({ "problem": wire })));
+        }
+    }
+
+    #[test]
+    fn a_held_file_that_cannot_be_put_back_has_its_own_code() {
+        let response = super::map_core_err_response(
+            upriv_core::UprivError::VaultHeldNotFound("x.blob".into()),
+            false,
+        );
+        assert_eq!(response.error.unwrap().code, "vault_held_not_found");
+    }
+
+    #[test]
+    fn held_calls_need_names() {
+        crate::isolate_app_home();
+        for method in ["vault_fs_held_restore", "vault_fs_held_delete"] {
+            let response = super::handle_rpc(super::RpcRequest {
+                method: method.into(),
+                params: json!({ "id": "notes", "names": [] }),
+            });
+            assert_eq!(response.error.unwrap().code, "invalid_request", "{method}");
+        }
+    }
+}
+
 /// Registered methods match `rpc-methods.json` (`core`, `mobileOnly`, `desktopOnly`).
 #[cfg(test)]
 mod contract_tests {
@@ -2258,7 +2316,7 @@ mod contract_tests {
         "vault_close_hurry",
         "vault_export_capabilities",
         "vault_config_get",
-        "vault_store_size",
+        "vault_disk_usage",
         "vault_config_save",
         "vault_rename",
         "vault_delete",
@@ -2273,6 +2331,9 @@ mod contract_tests {
         "vault_discard_import",
         "vault_import_probe",
         "vault_fs_list",
+        "vault_fs_held",
+        "vault_fs_held_restore",
+        "vault_fs_held_delete",
         "vault_fs_revision",
         "vault_fs_preview_fits",
         "vault_fs_read",

@@ -2,13 +2,78 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_VAULT_EXPORT_FORMAT,
   exportFilenameSanitizeKind,
+  parseVaultExportResult,
   vaultCanExport,
   vaultExportFilename,
   vaultExportMenuShown,
   vaultExportPending,
-  vaultExportSavedAs,
+  vaultExportToast,
 } from "..";
+import {
+  vaultExportSavedAs,
+  vaultExportUnreadableNames,
+  VAULT_EXPORT_UNREADABLE_TOAST_MS,
+} from "../export";
 import { vaultListItemFixture } from "./fixtures";
+
+/** Key and params, so a test reads what the toast would say without a catalog. */
+const tr = (key: string, params?: Record<string, string>) =>
+  params
+    ? `${key}(${Object.entries(params)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(",")})`
+    : key;
+
+describe("parseVaultExportResult", () => {
+  it("reads the file and the files kept with zeros", () => {
+    expect(
+      parseVaultExportResult({ path: "/out/Notes.7z", size: 9, unreadable: ["/a.txt", 3] }),
+    ).toEqual({ path: "/out/Notes.7z", size: 9, unreadable: ["/a.txt"] });
+  });
+
+  it("treats a missing list as none, and refuses an answer without its file", () => {
+    expect(parseVaultExportResult({ path: "/out/Notes.zip", size: 9 })).toEqual({
+      path: "/out/Notes.zip",
+      size: 9,
+      unreadable: [],
+    });
+    expect(parseVaultExportResult({ size: 9 })).toBeNull();
+    expect(parseVaultExportResult(null)).toBeNull();
+  });
+});
+
+describe("vaultExportUnreadableNames", () => {
+  it("lists file names, then an ellipsis past three", () => {
+    expect(vaultExportUnreadableNames(["/docs/a.txt", "/b.pdf"])).toBe("a.txt, b.pdf");
+    expect(vaultExportUnreadableNames(["/a", "/b", "/c", "/d/e"])).toBe("a, b, c, …");
+  });
+});
+
+describe("vaultExportToast", () => {
+  const target = { displayName: "My notes", format: "seven_zip" as const };
+
+  it("names the saved file at the usual length when every file read", () => {
+    const toast = vaultExportToast(
+      target,
+      { path: "/out/My notes.7z", size: 1, unreadable: [] },
+      tr,
+    );
+    expect(toast).toEqual({ message: "vault.export.success(name=My notes)", durationMs: null });
+  });
+
+  it("adds the files kept with zeros and stays longer", () => {
+    const toast = vaultExportToast(
+      target,
+      { path: "/out/My notes 2.7z", size: 1, unreadable: ["/docs/gone.pdf"] },
+      tr,
+    );
+    expect(toast.message).toBe(
+      "vault.export.success_numbered(filename=My notes.7z,name=My notes,saved=My notes 2.7z) " +
+        "vault.export.kept_unreadable(count=1,names=gone.pdf)",
+    );
+    expect(toast.durationMs).toBe(VAULT_EXPORT_UNREADABLE_TOAST_MS);
+  });
+});
 
 describe("vaultExportPending", () => {
   it("asks for the folder the file goes into", () => {

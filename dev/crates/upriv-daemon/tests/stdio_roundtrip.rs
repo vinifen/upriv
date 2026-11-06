@@ -692,3 +692,92 @@ fn stdio_log_list_mid_session_incomplete_root_is_incomplete() {
     child.kill().expect("kill daemon");
     child.wait().expect("wait on daemon");
 }
+
+/// Another process (here, this test) still holds vault `held`, as the core
+/// of an app that went away does while it closes it. The open of `held`
+/// waits on a thread of its own, so the open of `free` that comes after it
+/// still runs on the unlock lane, and a stop ends the wait.
+#[test]
+fn stdio_an_open_waiting_for_another_process_leaves_other_vaults_free() {
+    let root = tempfile::tempdir().expect("tempdir");
+    upriv_core::initialize_vault_root(root.path()).expect("initialize vault root");
+    let mut child = spawn_daemon_with_env(&[
+        (
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            root.path().to_str().expect("utf8 path"),
+        ),
+        ("UPRIV_DISTRIBUTION", "portable"),
+    ]);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut stdin = child.stdin.take().expect("stdin");
+    let _ready = read_line(&mut stdout);
+    let _event = read_line(&mut stdout);
+    let mut send = |request: serde_json::Value| {
+        writeln!(stdin, "{request}").expect("write request");
+        stdin.flush().expect("flush stdin");
+    };
+
+    for (id, vault) in [(1, "held"), (2, "free")] {
+        send(serde_json::json!({
+            "type": "request",
+            "id": id,
+            "method": "vault_create",
+            "params": {
+                "password": "pass-word-ok",
+                "unlockPreset": "32mib",
+                "settings": {
+                    "vault": { "id": vault, "display_name": vault, "order": id },
+                    "storage": { "mode": "encrypted_dir" }
+                },
+                "job": format!("stdio-create-{vault}")
+            }
+        }));
+        let created: serde_json::Value =
+            serde_json::from_str(&read_line(&mut stdout)).expect("parse create");
+        assert_eq!(created["ok"], true, "{created}");
+    }
+    let lock = root.path().join(".upriv/runtime/held.lock");
+    let previous = std::sync::Arc::new(std::sync::Mutex::new(Some(
+        upriv_core::lockfile::acquire_vault_lock(lock).expect("hold vault `held`"),
+    )));
+    // Were the wait to hold the lane again, the lock goes after a while, so
+    // the order below fails the test instead of hanging it.
+    let watchdog = std::sync::Arc::clone(&previous);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        watchdog.lock().expect("lock").take();
+    });
+
+    for (id, vault) in [(3, "held"), (4, "free")] {
+        send(serde_json::json!({
+            "type": "request",
+            "id": id,
+            "method": "vault_open",
+            "params": { "id": vault, "password": "pass-word-ok", "job": format!("stdio-open-{vault}") }
+        }));
+    }
+    let opened: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse open");
+    assert_eq!(opened["id"], 4, "`free` opens while `held` waits: {opened}");
+    assert_eq!(opened["ok"], true, "{opened}");
+
+    send(serde_json::json!({
+        "type": "request",
+        "id": 5,
+        "method": "job_cancel",
+        "params": { "job": "stdio-open-held", "by": "user" }
+    }));
+    let mut answers = std::collections::HashMap::new();
+    while answers.len() < 2 {
+        let answer: serde_json::Value =
+            serde_json::from_str(&read_line(&mut stdout)).expect("parse answer");
+        answers.insert(answer["id"].as_u64().expect("id"), answer);
+    }
+    assert_eq!(answers[&5]["result"]["stopping"], false, "not started yet");
+    assert_eq!(answers[&3]["ok"], false);
+    assert_eq!(answers[&3]["error"]["code"], "job_cancelled");
+
+    previous.lock().expect("lock").take();
+    child.kill().expect("kill daemon");
+    child.wait().expect("wait on daemon");
+}

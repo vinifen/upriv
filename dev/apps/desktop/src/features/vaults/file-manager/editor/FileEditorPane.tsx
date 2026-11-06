@@ -23,6 +23,7 @@ import {
   fileMarkdownView,
   fileSearchQuery,
   findTextMatches,
+  FILE_PROBLEM_BODY_I18N_KEYS,
   lineStartOffsets,
   MARKDOWN_OUTLINE_SETTLE_MS,
   OUTLINE_WIDTH_MAX_PX,
@@ -831,6 +832,23 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
         {processing ? <ElapsedTime startedAt={editorImportStartedAt} /> : null}
         <Button variant="ghost" size="sm" onClick={stopImports}>
           {t("action.stop")}
+        </Button>
+      </div>,
+    );
+  }
+
+  // Before any read lands: the tree already knows this file cannot be read.
+  const problem = fm.fileProblem(activeTabPath);
+  if (problem) {
+    return fileNotice(
+      t("modal.file_manager.viewer.problem_kicker"),
+      t(FILE_PROBLEM_BODY_I18N_KEYS[problem], { name: fileName }),
+      <div className="flex flex-col items-center gap-3">
+        <p className="max-w-sm text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.file_manager.viewer.problem_backup_hint")}
+        </p>
+        <Button variant="ghost" size="sm" onClick={() => fm.requestDelete(activeTabPath)}>
+          {t("modal.file_manager.context.delete")}
         </Button>
       </div>,
     );

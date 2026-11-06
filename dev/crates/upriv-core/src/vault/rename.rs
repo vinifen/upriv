@@ -16,6 +16,7 @@ use crate::paths::{
     display_name_to_vault_id, resolve_vault_mount_point, resolved_workspace_parent, VaultRoot,
     WorkspaceSystem,
 };
+use crate::runtime_state::refuse_if_held_elsewhere;
 use crate::session::{
     is_vault_backup_export_at, is_vault_closing_at, is_vault_open_at, is_vault_preparing_at,
     with_vault_dir_lock, with_vault_dir_locks, with_vault_registry_lock,
@@ -286,6 +287,9 @@ pub fn rename_vault(
 
     with_vault_registry_lock(|| {
         refuse_if_busy(&old_dir)?;
+        // The core of an app that went away may still be closing it, in the
+        // folder a rename would move.
+        refuse_if_held_elsewhere(root, old_id)?;
         let new_id = allocate_id(root, old_id, &display_name)?;
         if new_id == old_id {
             return rename_display_name_only(root, &old_dir, old_id, &display_name, new_id);

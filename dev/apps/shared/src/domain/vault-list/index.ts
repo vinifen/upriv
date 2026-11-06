@@ -50,6 +50,7 @@ export type {
   VaultExportPipelineStatus,
   VaultExportPending,
   VaultExportRun,
+  VaultExportResult,
   ExportFilenameSanitizeKind,
 } from "./export";
 export {
@@ -57,12 +58,13 @@ export {
   DEFAULT_VAULT_EXPORT_INCLUDE,
   VAULT_EXPORT_PROGRESS_COPY,
   exportFilenameSanitizeKind,
+  parseVaultExportResult,
   sanitizeExportFilenameBase,
   vaultCanExport,
   vaultExportFilename,
   vaultExportMenuShown,
   vaultExportPending,
-  vaultExportSavedAs,
+  vaultExportToast,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
 export { touchVaultLastAccessed, vaultLastAccessedLabel } from "./lastAccessed";

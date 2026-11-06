@@ -143,6 +143,10 @@ pub struct ExportedFile {
     /// `1` for the export's own name; higher when that name was taken and the
     /// file got this number (`Notes 2.zip`).
     pub number: u32,
+    /// Logical paths of the files a `.7z` or plain-text `.zip` kept with zeros
+    /// where their data was missing or damaged. Empty for a zip of `store/`
+    /// and a backup export, which copy ciphertext as it is.
+    pub unreadable: Vec<String>,
 }
 
 /// Where a numbered export goes: the first free name in the chosen folder,
@@ -201,7 +205,12 @@ impl NumberedExportTarget {
             let size = job.settle(write(&self.partial))?;
             job.ensure_running()?;
             let (path, number) = self.name.install(&self.dir, &self.partial, self.number)?;
-            Ok(ExportedFile { path, size, number })
+            Ok(ExportedFile {
+                path,
+                size,
+                number,
+                unreadable: Vec::new(),
+            })
         })();
         let partial_gone = installed.is_ok() || clear(&self.partial);
         if partial_gone {

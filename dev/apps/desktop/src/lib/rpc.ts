@@ -11,7 +11,9 @@ import type {
   IncompleteReplacePolicy,
   VaultBackupEntry,
   VaultCloseReason,
+  VaultDiskUsage,
   VaultExportRequest,
+  VaultExportResult,
   VaultGroup,
   VaultGroupCreateInput,
   VaultGroupListResult,
@@ -48,12 +50,14 @@ import {
   parseVaultRootResolve,
   vaultImportProbeTimeoutMs,
   parsePathWriteResult,
+  parseVaultExportResult,
   parsePlainCloseSummary,
   parsePlainDestination,
   parsePlainHeldStatus,
   parsePlainLeftover,
   parseBackupFailure,
   parseJobStatus,
+  parseVaultDiskUsage,
   type CloseVaultOutcome,
   type JobProgress,
   type JobStopBy,
@@ -631,24 +635,17 @@ export async function rpcVaultClosePhase(id: string): Promise<VaultCloseState | 
   return parseVaultCloseState(await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }));
 }
 
-export async function rpcVaultStoreSize(id: string): Promise<number> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_STORE_SIZE, { id });
-  if (typeof raw !== "object" || raw === null) {
+export async function rpcVaultDiskUsage(id: string): Promise<VaultDiskUsage> {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_DISK_USAGE, { id });
+  const usage = parseVaultDiskUsage(raw);
+  if (!usage) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_store_size: expected object",
+      "vault_disk_usage: expected storeBytes and heldBytes",
       raw,
     );
   }
-  const storeBytes = (raw as { storeBytes?: unknown }).storeBytes;
-  if (typeof storeBytes !== "number" || !Number.isFinite(storeBytes) || storeBytes < 0) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_store_size: expected storeBytes",
-      raw,
-    );
-  }
-  return storeBytes;
+  return usage;
 }
 
 export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
@@ -742,7 +739,7 @@ export async function rpcVaultExportToFolder(
   request: VaultExportRequest,
   destDir: string,
   job: string,
-): Promise<{ path: string; size: number }> {
+): Promise<VaultExportResult> {
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
     id,
     format: request.format,
@@ -753,7 +750,7 @@ export async function rpcVaultExportToFolder(
     destDir,
     job,
   });
-  const written = parsePathWriteResult(raw);
+  const written = parseVaultExportResult(raw);
   if (!written) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -881,6 +878,37 @@ export async function rpcVaultFsRevision(id: string): Promise<number> {
   return requireRevision(
     await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_REVISION, { id }),
     "vault_fs_revision",
+  );
+}
+
+/** Raw `vault_fs_held` answer; `parseHeldItems` reads it. */
+export async function rpcVaultFsHeld(id: string): Promise<unknown> {
+  return requireRecord(
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_HELD, { id }),
+    "vault_fs_held",
+  );
+}
+
+export async function rpcVaultFsHeldRestore(
+  id: string,
+  names: string[],
+): Promise<{ paths: string[]; revision: number }> {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_HELD_RESTORE, { id, names });
+  const paths = requireRecord(raw, "vault_fs_held_restore").paths;
+  if (!Array.isArray(paths) || !paths.every((path) => typeof path === "string")) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_fs_held_restore: expected paths",
+      raw,
+    );
+  }
+  return { paths, revision: requireRevision(raw, "vault_fs_held_restore") };
+}
+
+export async function rpcVaultFsHeldDelete(id: string, names: string[]): Promise<number> {
+  return requireRevision(
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_HELD_DELETE, { id, names }),
+    "vault_fs_held_delete",
   );
 }
 

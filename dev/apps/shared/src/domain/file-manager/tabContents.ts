@@ -1,3 +1,4 @@
+import type { FileProblem } from "../file-tree/types";
 import type { VaultWorkspaceState } from "./workspaceTypes";
 
 /**
@@ -6,7 +7,8 @@ import type { VaultWorkspaceState } from "./workspaceTypes";
  */
 export type TabContent =
   | { state: "loaded"; text: string; revision: number }
-  | { state: "failed"; revision: number }
+  /** `problem` when core found the file's data missing or damaged. */
+  | { state: "failed"; revision: number; problem?: FileProblem }
   /** Over the preview cap or free RAM. Kept until the tab closes, so it is not read again. */
   | { state: "too_large"; revision: number };
 

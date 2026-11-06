@@ -51,10 +51,11 @@ interface SlowVaultInfo {
   /** `null` while the list is read. */
   backups: VaultBackupEntry[] | null;
   storeBytes: VaultRuntimeStats["storeBytes"];
+  heldBytes: VaultRuntimeStats["heldBytes"];
 }
 
 /** Core does not report these session counters — Info shows an em dash, not a guess. */
-const UNAVAILABLE_RUNTIME_STATS: Omit<VaultRuntimeStats, "storeBytes"> = {
+const UNAVAILABLE_RUNTIME_STATS: Omit<VaultRuntimeStats, "storeBytes" | "heldBytes"> = {
   openCount: null,
   lastOpenedAt: null,
   sessionRamBytes: null,
@@ -76,7 +77,7 @@ export function useVaultInfoData({
   host,
 }: UseVaultInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<VaultInfoSnapshot | null>(null);
-  /** Backups and store size: slow on a big vault, so Info shows without them first. */
+  /** Backups and disk usage: slow on a big vault, so Info shows without them first. */
   const [slow, setSlow] = useState<SlowVaultInfo | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [loadFailure, setLoadFailure] = useState<unknown>(null);
@@ -107,7 +108,7 @@ export function useVaultInfoData({
     setSlow((prev) =>
       prev?.vaultId === current.id
         ? prev
-        : { vaultId: current.id, backups: null, storeBytes: "measuring" },
+        : { vaultId: current.id, backups: null, storeBytes: "measuring", heldBytes: "measuring" },
     );
 
     const fail = (error: unknown) => {
@@ -124,9 +125,11 @@ export function useVaultInfoData({
     };
     void backupService.listBackups(current.id).then((backups) => patchSlow({ backups }), fail);
     void vaultService
-      .storeOnDiskBytes(current.id)
+      .diskUsage(current.id)
       .catch(() => null)
-      .then((storeBytes) => patchSlow({ storeBytes }));
+      .then((usage) =>
+        patchSlow({ storeBytes: usage?.storeBytes ?? null, heldBytes: usage?.heldBytes ?? null }),
+      );
 
     void (async () => {
       try {
@@ -141,7 +144,11 @@ export function useVaultInfoData({
 
         const isOpen = current.session === "open";
         const passwordInSession = lifecycleService.hasPasswordInSession(current.id);
-        const runtime = { ...UNAVAILABLE_RUNTIME_STATS, storeBytes: "measuring" as const };
+        const runtime = {
+          ...UNAVAILABLE_RUNTIME_STATS,
+          storeBytes: "measuring" as const,
+          heldBytes: "measuring" as const,
+        };
         const vaultRootBase = vaultRootContentorPath(root, fallbackVaultRootBase);
         const storePaths = vaultStoreDisplayPaths(vaultRootBase, current.id);
         const system = currentWorkspaceSystem(host);
@@ -215,7 +222,11 @@ export function useVaultInfoData({
     return {
       ...snapshot,
       backups: landed ? landed.backups : null,
-      runtime: { ...snapshot.runtime, storeBytes: landed ? landed.storeBytes : "measuring" },
+      runtime: {
+        ...snapshot.runtime,
+        storeBytes: landed ? landed.storeBytes : "measuring",
+        heldBytes: landed ? landed.heldBytes : "measuring",
+      },
     } satisfies VaultInfoSnapshot;
   }, [slow, snapshot]);
 

@@ -43,6 +43,7 @@ const STATUS_OBJECT_NAME_INVALID: u32 = 0xC000_0033;
 const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
 const STATUS_OBJECT_NAME_COLLISION: u32 = 0xC000_0035;
 const STATUS_OBJECT_PATH_NOT_FOUND: u32 = 0xC000_003A;
+const STATUS_DISK_FULL: u32 = 0xC000_007F;
 const STATUS_FILE_IS_A_DIRECTORY: u32 = 0xC000_00BA;
 const STATUS_UNEXPECTED_IO_ERROR: u32 = 0xC000_00E9;
 const STATUS_DIRECTORY_NOT_EMPTY: u32 = 0xC000_0101;
@@ -561,7 +562,7 @@ impl EncryptedFs {
         }
         let dir = self.vault_dir()?;
         let found = with_open_session(&dir, |session| {
-            let stored = session.index.nodes.iter().map(|node| node.path.as_str());
+            let stored = session.index.nodes().iter().map(|node| node.path.as_str());
             let Some(canon) = resolve_stored_case(stored, requested) else {
                 return Err(UprivError::VaultPathNotFound(requested.to_string()));
             };
@@ -639,7 +640,7 @@ impl EncryptedFs {
             let parent = parent_logical(logical).unwrap_or("");
             let parent_snap = snap_in(session, parent)?;
             let mut children = Vec::new();
-            for node in &session.index.nodes {
+            for node in session.index.nodes() {
                 if is_reserved_logical(&node.path) {
                     continue;
                 }
@@ -669,7 +670,7 @@ impl EncryptedFs {
     fn has_user_child(&self, logical: &str) -> std::result::Result<bool, i32> {
         let dir = self.vault_dir()?;
         with_open_session(&dir, |session| {
-            Ok(session.index.nodes.iter().any(|node| {
+            Ok(session.index.nodes().iter().any(|node| {
                 !is_reserved_logical(&node.path)
                     && parent_logical(&node.path).unwrap_or("") == logical
             }))
@@ -853,7 +854,7 @@ fn snap_in(
     if logical.is_empty() {
         return Ok(NodeSnap::root());
     }
-    let stored = session.index.nodes.iter().map(|node| node.path.as_str());
+    let stored = session.index.nodes().iter().map(|node| node.path.as_str());
     let Some(canon) = resolve_stored_case(stored, logical) else {
         return Err(UprivError::VaultPathNotFound(logical.to_string()));
     };
@@ -903,6 +904,9 @@ fn map_err(error: UprivError) -> i32 {
         }
         UprivError::VaultPathExists(_) => STATUS_OBJECT_NAME_COLLISION,
         UprivError::VaultFileTooLarge { .. } => STATUS_FILE_TOO_LARGE,
+        UprivError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull => {
+            STATUS_DISK_FULL
+        }
         UprivError::VaultStoreInvalid { detail, .. } if detail.contains("not empty") => {
             STATUS_DIRECTORY_NOT_EMPTY
         }
