@@ -793,7 +793,7 @@ Configuration **is not immutable** after vault creation. User can change `[seven
 | Path | Use |
 |------|-----|
 | `vaults/<id>/store/` | Vault body at rest |
-| `vaults/<id>/held/` | Ciphertext no file of the tree names, set aside by an unlock (§7.1) |
+| `vaults/<id>/held/` | Ciphertext no file of the tree names, set aside by an unlock (§7.1). Removed once empty: after the last put back or delete, or by the unlock. A folder that still holds anything, such as a file another app left, stays |
 | `vaults/<id>/backups/<stamp>-<id>.zip` | Stored zip of `store/` (`[backup]`) |
 
 **Open workspaces:** the file manager folder exists only while open; `.upriv/state.json` lists open vaults (several at once).

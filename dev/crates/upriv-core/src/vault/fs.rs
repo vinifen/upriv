@@ -2109,6 +2109,8 @@ pub fn fs_held_restore(
             session.index = before;
             return Err(error);
         }
+        // Only once the seal stands: an undo moves the blobs back into it.
+        crate::store::remove_empty_held(&store_dir(session));
         let paths = restored.iter().map(|one| to_ui_path(&one.path)).collect();
         Ok((paths, session.tree_revision))
     })
@@ -3899,6 +3901,14 @@ mode = "encrypted_dir"
         assert!(after > revision);
         assert_eq!(fs_read_file(&root, "notes", "/b.txt").unwrap(), b"second");
         assert!(fs_held_list(&root, "notes").unwrap().is_empty());
+        let held_dir = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::HELD_DIR_NAME);
+        assert!(
+            !held_dir.host_exists(),
+            "the last put back leaves no folder"
+        );
         close_vault(&root, "notes").unwrap();
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -3923,6 +3933,10 @@ mode = "encrypted_dir"
         let revision = fs_tree_revision(&root, "notes").unwrap();
         assert!(fs_held_delete(&root, "notes", std::slice::from_ref(&name)).unwrap() > revision);
         assert!(!held.host_exists());
+        assert!(
+            !held.parent().unwrap().host_exists(),
+            "the last delete leaves no folder"
+        );
         let err = fs_held_restore(&root, "notes", &[name]).unwrap_err();
         assert!(matches!(err, UprivError::VaultHeldNotFound(_)), "{err:?}");
         close_vault(&root, "notes").unwrap();

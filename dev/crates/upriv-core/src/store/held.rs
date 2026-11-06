@@ -23,7 +23,8 @@
 //! file it holds. A blob that holds an internal file of the app is deleted.
 //! Chunk AAD binds a version only an index records, so a blob no index names
 //! cannot be read: it stays an unnamed piece until the person deletes it.
-//! Backups and store zips copy `store/` only, so they leave `held/` out.
+//! Backups and store zips copy `store/` only, so they leave `held/` out. The
+//! folder is removed once nothing is in it ([`remove_empty_held`]).
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -111,33 +112,45 @@ pub(crate) fn settle_held(
         .iter()
         .filter(|name| !index.held.iter().any(|entry| &entry.name == *name))
         .collect();
-    if unknown.is_empty() {
-        return dropped;
-    }
-    unknown.sort();
-    let unknown: Vec<String> = unknown.into_iter().cloned().collect();
-    let (added, named) = name_held(
-        &held,
-        header,
-        content_key,
-        index_key,
-        index,
-        unknown,
-        sources,
-    );
-    let id = vault_id_of(store_dir);
-    let moved = moved.to_string();
-    let named = named.to_string();
-    log_event(
-        LogLevel::Warn,
-        "vault_blobs_held",
-        &[
-            ("id", id.as_str()),
-            ("moved", moved.as_str()),
-            ("named", named.as_str()),
-        ],
-    );
-    dropped || added > 0
+    let changed = if unknown.is_empty() {
+        dropped
+    } else {
+        unknown.sort();
+        let unknown: Vec<String> = unknown.into_iter().cloned().collect();
+        let (added, named) = name_held(
+            &held,
+            header,
+            content_key,
+            index_key,
+            index,
+            unknown,
+            sources,
+        );
+        let id = vault_id_of(store_dir);
+        let moved = moved.to_string();
+        let named = named.to_string();
+        log_event(
+            LogLevel::Warn,
+            "vault_blobs_held",
+            &[
+                ("id", id.as_str()),
+                ("moved", moved.as_str()),
+                ("named", named.as_str()),
+            ],
+        );
+        dropped || added > 0
+    };
+    // Every blob may have gone back to `data/`, or been an app file deleted.
+    remove_empty_held(store_dir);
+    changed
+}
+
+/// Remove the `held/` folder of the store at `store_dir` once nothing is in
+/// it: the last item went back or was deleted. A folder that still holds
+/// anything, a blob or a file another app left, stays: removing a folder
+/// refuses one that is not empty, on every system.
+pub(crate) fn remove_empty_held(store_dir: &Path) {
+    let _ = crate::host_fs::remove_dir(held_dir(store_dir));
 }
 
 /// The held blob names in `held/` ([`held_blob_id`]). Anything else there,
@@ -724,6 +737,7 @@ pub(crate) fn delete_held(
         }
         index.held.remove(at);
     }
+    remove_empty_held(store_dir);
     match failed {
         Some(error) => Err(error.into()),
         None => Ok(()),
@@ -1012,6 +1026,24 @@ mod tests {
         assert!(opened.index.held.is_empty());
         assert_eq!(opened.index.find("a.txt").unwrap().problem, None);
         assert_eq!(store.read(&opened, "a.txt"), b"first");
+        assert!(!store.held().host_exists(), "an emptied folder goes");
+    }
+
+    /// The unlock removes an empty `held/`, and leaves one that holds a file
+    /// another app put there.
+    #[test]
+    fn an_unlock_removes_an_empty_held_folder_and_keeps_one_with_a_stray_file() {
+        let store = Store::new();
+        crate::host_fs::create_dir_all(store.held()).unwrap();
+        store.settle(Vec::new());
+        assert!(!store.held().host_exists());
+
+        crate::host_fs::create_dir_all(store.held()).unwrap();
+        let stray = store.held().join(".DS_Store");
+        crate::host_fs::write(&stray, b"finder").unwrap();
+        let opened = store.settle(Vec::new());
+        assert!(opened.index.held.is_empty());
+        assert!(stray.host_exists());
     }
 
     /// A blob the index lists as released is an old version a seal let go of:

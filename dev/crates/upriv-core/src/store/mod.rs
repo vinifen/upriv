@@ -36,7 +36,9 @@ pub use header::{
     ensure_danger_notice, header_bytes, load_header, rewrap_header, unlock_header, VaultHeader,
     CHUNK_SIZE, FORMAT_VERSION, HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
 };
-pub(crate) use held::{delete_held, held_disk_bytes, restore_held, settle_held, HeldSources};
+pub(crate) use held::{
+    delete_held, held_disk_bytes, remove_empty_held, restore_held, settle_held, HeldSources,
+};
 pub(crate) use index::sha256_hex;
 pub use index::{
     sealed_index_bytes, ChunkVersion, ContentDigest, FileProblem, HeldBlob, Sealed, VaultIndex,
