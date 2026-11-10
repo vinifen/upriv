@@ -24,7 +24,7 @@ export const desktopVaultService = createLiveVaultService({
   diskUsage: (vaultId) => rpcVaultDiskUsage(vaultId),
   saveSettings: (vaultId, config) => rpcVaultConfigSave(vaultId, config),
   rename: (vaultId, displayName) => rpcVaultRename(vaultId, displayName),
-  deleteVault: (vaultId) => rpcVaultDelete(vaultId),
+  deleteVault: (vaultId, outsideBackups) => rpcVaultDelete(vaultId, outsideBackups),
   exportVaultToFolder: (vaultId, request, destDir, job) =>
     rpcVaultExportToFolder(vaultId, request, destDir, job),
   exportCapabilities: () => rpcVaultExportCapabilities(),

@@ -16,7 +16,6 @@ export {
   importExtractEnabled,
   importKeepSettingsApplies,
   importKeepWorkspaceApplies,
-  importSetsVaultPassword,
   importUsesCarriedSettings,
   importZipWrapsDocuments,
   createVaultImportPackageKind,
@@ -28,6 +27,7 @@ export {
   createVaultImportNeedsRename,
 } from "./createDraftFromImportPackage";
 export { createEmptyCreateVaultDraft, createVaultDraftEqual, defaultOrderAtEnd } from "./defaults";
+export { createVaultSetsPassword } from "./password";
 export {
   importZipClassificationFromProbe,
   type ImportZipClassification,
@@ -37,7 +37,6 @@ export {
   getCreateVaultStepStatus,
   validateAllCreateVaultSteps,
   validateCreateVaultStep,
-  CREATE_VAULT_PASSWORD_MIN_LENGTH,
   isLifecyclePasswordPresent,
   isMockLifecyclePasswordValid,
   type CreateVaultValidationCode,

@@ -1,18 +1,25 @@
 import { useId, type ReactNode } from "react";
 import { PathField } from "@/components/PathField";
-import { Button, ElapsedTime, JobStopButton, PasswordInput, SwitchRow } from "@/components/ui";
+import {
+  Button,
+  ElapsedTime,
+  JobStopButton,
+  PasswordInput,
+  PasswordWeaknessNotice,
+  SwitchRow,
+} from "@/components/ui";
 import {
   createVaultChoosesKdf,
   createVaultErrorsForField,
   createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
   createVaultImportSelectionPatch,
+  createVaultSetsPassword,
   createVaultSettingsLocked,
   importExtractApplies,
   importExtractEnabled,
   importKeepSettingsApplies,
   importKeepWorkspaceApplies,
-  importSetsVaultPassword,
   importZipWrapsDocuments,
   isHiddenGroup,
   validateCreateVaultStep,
@@ -23,7 +30,9 @@ import {
   type CreateVaultDraft,
   type CreateVaultStepId,
   type CreateVaultValidationCode,
+  type PasswordWeakness,
   type VaultGroup,
+  type BackupFolderTable,
   type WorkspaceTable,
 } from "@upriv/shared";
 import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
@@ -58,8 +67,12 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   vaultRootPath?: string | null;
   /** App workspace, so a new vault can follow that file manager folder. */
   appWorkspace?: WorkspaceTable;
+  /** App default, so a new vault can say where Follow the app default goes. */
+  appBackups?: BackupFolderTable;
   /** Selected file-manager choice still needs the WinFsp driver. */
   onDriverAttentionChange?: (active: boolean) => void;
+  /** A typed backup folder is still being checked or does not work. */
+  onBackupFolderBlockingChange?: (blocking: boolean) => void;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
 }
@@ -396,12 +409,14 @@ function CreateVaultIdentityStep({
   );
 }
 
-/** The `.7z` password test: it has no time limit, and its Stop ends it. */
+/** The password step: the `.7z` test (no time limit, its Stop ends it) and the weakness line. */
 interface PasswordTestProps {
   onTestImportPassword?: () => void;
   onStopTestImportPassword?: () => void;
   testingPassword?: boolean;
   passwordTestStartedAt?: number | null;
+  /** What is wrong with the new password; `null` when nothing is. */
+  passwordWeakness?: PasswordWeakness | null;
 }
 
 function CreateVaultPasswordStep({
@@ -412,17 +427,19 @@ function CreateVaultPasswordStep({
   onStopTestImportPassword,
   testingPassword = false,
   passwordTestStartedAt = null,
+  passwordWeakness = null,
   bindFieldRef,
   onFieldFocus,
   onFieldSubmit,
 }: StepProps & PasswordTestProps) {
   const { t } = useTranslation();
   const passwordId = useId();
+  const weaknessId = useId();
   const confirmId = useId();
   const hintId = useId();
   const isImport = draft.source === "import";
   const wrapsDocuments = importZipWrapsDocuments(draft);
-  const setsVaultPassword = !isImport || importSetsVaultPassword(draft);
+  const setsVaultPassword = createVaultSetsPassword(draft);
   const needsArchivePassword = createVaultImportNeedsArchivePassword(draft);
   const showPassword = setsVaultPassword || needsArchivePassword;
   const hintLocked = createVaultSettingsLocked(draft);
@@ -447,6 +464,7 @@ function CreateVaultPasswordStep({
             ref={bindFieldRef?.("password")}
             value={draft.password}
             autoComplete="new-password"
+            aria-describedby={setsVaultPassword ? weaknessId : undefined}
             onFocus={() => onFieldFocus?.("password")}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -464,6 +482,9 @@ function CreateVaultPasswordStep({
             }
             inputClassName={settingsControlClass}
           />
+          {setsVaultPassword ? (
+            <PasswordWeaknessNotice id={weaknessId} weakness={passwordWeakness} />
+          ) : null}
           <FieldErrors errors={createVaultErrorsForField(errors, "password")} />
         </SettingsField>
       ) : (
@@ -562,6 +583,9 @@ function CreateVaultGeneralStep({
   onChange,
   groups = NO_VAULT_GROUPS,
   includeHidden = false,
+  vaultRootPath = null,
+  appBackups,
+  onBackupFolderBlockingChange,
 }: StepProps) {
   const { t } = useTranslation();
   return (
@@ -584,7 +608,11 @@ function CreateVaultGeneralStep({
         <SettingsLockedFields draft={draft}>
           <VaultSettingsBackupSection
             config={draft.backup}
+            appBackups={appBackups}
+            vaultRootPath={vaultRootPath}
+            saved={draft.carriedBackupFolders}
             onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
+            onFolderBlockingChange={onBackupFolderBlockingChange}
           />
         </SettingsLockedFields>
       </VaultSettingsSection>

@@ -181,6 +181,38 @@ pub fn chunk_aad(
     })
 }
 
+/// Recovery record AAD ([`super::record`]). Same serialization freeze: field
+/// order is the byte order.
+///
+/// `cid` keeps a record in its vault, `file_id` in its blob, and `seq` in its
+/// place in that blob's chain of records, so a record copied anywhere else
+/// does not open. Like [`ChunkAad`] it leaves out the KDF material, so a
+/// password change leaves every record valid.
+#[derive(Serialize)]
+struct RecordAad<'a> {
+    v: u32,
+    cid: String,
+    aead: &'a str,
+    kind: &'static str,
+    file_id: &'a str,
+    seq: u32,
+}
+
+pub fn record_aad(header: &VaultHeader, file_id: &str, seq: u32) -> Result<Vec<u8>> {
+    serde_json::to_vec(&RecordAad {
+        v: header.format_version,
+        cid: header.content_identity.to_string(),
+        aead: &header.aead,
+        kind: "record",
+        file_id,
+        seq,
+    })
+    .map_err(|error| UprivError::VaultStoreInvalid {
+        path: PathBuf::from("data"),
+        detail: format!("AAD serialize: {error}"),
+    })
+}
+
 fn header_dir(store_dir: impl AsRef<Path>) -> PathBuf {
     store_dir.as_ref().join(HEADER_DIR_NAME)
 }
@@ -665,6 +697,11 @@ mod aad_golden_tests {
         assert_eq!(
             chunk,
             br#"{"v":1,"cid":"00000000-0000-4000-8000-000000000001","aead":"xchacha20poly1305","chunk":262144,"kind":"chunk","file_id":"11111111-1111-4111-8111-111111111111","chunk_index":2,"chunk_len":37756,"version":"a1b2c3d4e5f60718"}"#
+        );
+        let record = record_aad(&header, "11111111-1111-4111-8111-111111111111", 3).unwrap();
+        assert_eq!(
+            record,
+            br#"{"v":1,"cid":"00000000-0000-4000-8000-000000000001","aead":"xchacha20poly1305","kind":"record","file_id":"11111111-1111-4111-8111-111111111111","seq":3}"#
         );
     }
 

@@ -15,7 +15,6 @@ const FIELD_CODES: Record<CreateVaultErrorField, readonly CreateVaultValidationC
   displayName: ["empty", "invalid_chars", "trailing", "reserved", "too_long", "duplicate"],
   password: [
     "password_empty",
-    "password_too_short",
     "password_not_validated",
     "password_wrong",
     "import_probe_unavailable",

@@ -59,7 +59,6 @@ export {
   VAULT_EXPORT_PROGRESS_COPY,
   exportFilenameSanitizeKind,
   parseVaultExportResult,
-  sanitizeExportFilenameBase,
   vaultCanExport,
   vaultExportFilename,
   vaultExportMenuShown,

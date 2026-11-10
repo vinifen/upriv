@@ -2,15 +2,18 @@ import {
   createVaultErrorI18nKey,
   requireVaultConfigEditLockedI18nKey,
   type ChangePasswordFieldsState,
+  type PasswordWeakness,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { View } from "react-native";
+import { PasswordWeaknessNotice } from "@/components/ui";
 import { spacing } from "@/theme/tokens";
 import { FieldHint, FieldLabel, PasswordInput, Warning } from "./settingsFields";
 
 export function VaultChangePasswordFields({
   fields,
   onChange,
+  weakness,
   passwordFieldError,
   error,
   rewrapBlocked = false,
@@ -18,6 +21,8 @@ export function VaultChangePasswordFields({
 }: {
   fields: ChangePasswordFieldsState;
   onChange: (patch: Partial<ChangePasswordFieldsState>) => void;
+  /** What is wrong with the new password; `null` when nothing is. */
+  weakness: PasswordWeakness | null;
   passwordFieldError?: string | null;
   error?: string | null;
   rewrapBlocked?: boolean;
@@ -51,6 +56,7 @@ export function VaultChangePasswordFields({
         autoCapitalize="none"
         autoCorrect={false}
       />
+      <PasswordWeaknessNotice weakness={weakness} />
       <FieldLabel disabled={locked}>{t("vault.change_password.confirm")}</FieldLabel>
       <PasswordInput
         value={fields.confirmPassword}

@@ -1,5 +1,6 @@
-//! `.upriv-config/`: the folder a `.7z` or a plain-text `.zip` keeps at the vault
-//! root, beside the vault's files.
+//! `.upriv-config/`: the folder a `.7z` or a plain-text `.zip` keeps in its
+//! package folder, beside the vault folder, so the vault folder holds the
+//! vault's own files and nothing else (`super::package`).
 //!
 //! An export writes it only when a toggle asks for what it carries: `config.toml`
 //! (the same bytes a store zip carries) and `workspace.json` (the file-manager
@@ -36,7 +37,7 @@ const README_TEXT: &str = include_str!("CONFIG-FOLDER-README.md");
 /// Far above any real `config.toml`. Only this much of a carried one is read.
 const SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
 
-/// What an export puts in `.upriv-config/` beside the vault's files.
+/// What an export puts in `.upriv-config/` beside the vault folder.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExportInclude {
     pub workspace: bool,
@@ -50,7 +51,7 @@ pub(crate) struct ConfigFile {
 }
 
 impl ConfigFile {
-    /// Its path from the vault root.
+    /// Its path from the package folder (`Package::beside`).
     pub(crate) fn path(&self) -> String {
         format!("{EXPORT_CONFIG_DIR}/{}", self.name)
     }
@@ -99,7 +100,7 @@ pub(crate) fn config_folder_files(
     Ok(files)
 }
 
-/// A path inside `.upriv-config/` at the vault root, as an import reads it.
+/// A file of `.upriv-config/`, as an import reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfigMember {
     Settings,
@@ -108,17 +109,13 @@ pub(crate) enum ConfigMember {
     Other,
 }
 
-/// What `logical` is, when it sits inside `.upriv-config/` at the vault root.
-pub(crate) fn config_member(logical: &str) -> Option<ConfigMember> {
-    let name = logical
-        .strip_prefix(EXPORT_CONFIG_DIR)?
-        .strip_prefix('/')
-        .filter(|name| !name.is_empty())?;
-    Some(match name {
+/// What `name`, a path under `.upriv-config/` (`Package::config`), is.
+pub(crate) fn config_member(name: &str) -> ConfigMember {
+    match name {
         SETTINGS_FILE => ConfigMember::Settings,
         WORKSPACE_FILE => ConfigMember::Workspace,
         _ => ConfigMember::Other,
-    })
+    }
 }
 
 /// Up to `cap` bytes of `reader`, read to its end so a checksum behind it is
@@ -200,16 +197,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_paths_inside_the_root_folder_are_its_members() {
-        let member = |name: &str| config_member(&format!(".upriv-config/{name}"));
-        assert_eq!(member("config.toml"), Some(ConfigMember::Settings));
-        assert_eq!(member("workspace.json"), Some(ConfigMember::Workspace));
-        assert_eq!(member("README.md"), Some(ConfigMember::Other));
-        assert_eq!(member("extra/config.toml"), Some(ConfigMember::Other));
-        assert_eq!(config_member(".upriv-config"), None);
-        assert_eq!(config_member(".upriv-config/"), None);
-        assert_eq!(config_member("docs/.upriv-config/config.toml"), None);
-        assert_eq!(config_member(".upriv-config-notes/config.toml"), None);
+    fn only_the_two_files_at_its_top_are_read() {
+        assert_eq!(config_member("config.toml"), ConfigMember::Settings);
+        assert_eq!(config_member("workspace.json"), ConfigMember::Workspace);
+        assert_eq!(config_member("README.md"), ConfigMember::Other);
+        assert_eq!(config_member("extra/config.toml"), ConfigMember::Other);
     }
 
     #[test]

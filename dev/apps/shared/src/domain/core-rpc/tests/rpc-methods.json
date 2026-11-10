@@ -38,6 +38,7 @@
     "vault_close",
     "vault_change_password",
     "vault_change_kdf",
+    "vault_rebuild",
     "vault_close_phase",
     "vault_close_hurry",
     "vault_config_get",
@@ -77,6 +78,8 @@
     "backup_promote",
     "backup_save",
     "backup_export",
+    "backup_folder_check",
+    "backup_folder_reuse",
     "data_folder_export",
     "job_status",
     "job_cancel"

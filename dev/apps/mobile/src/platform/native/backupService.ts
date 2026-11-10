@@ -2,6 +2,8 @@ import { createLiveBackupService } from "@upriv/shared";
 import {
   rpcBackupDelete,
   rpcBackupExport,
+  rpcBackupFolderCheck,
+  rpcBackupFolderReuse,
   rpcBackupList,
   rpcBackupPromote,
   rpcBackupSave,
@@ -27,5 +29,11 @@ export const nativeBackupService = createLiveBackupService({
     return nativeSafExportMount.withExportFolder(destDir, job, (dir) =>
       rpcBackupExport(vaultId, keys, dir, job),
     );
+  },
+  async checkFolder(path, vaultId) {
+    return rpcBackupFolderCheck(path, vaultId);
+  },
+  async reuseFolder(vaultId) {
+    return rpcBackupFolderReuse(vaultId);
   },
 });

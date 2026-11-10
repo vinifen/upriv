@@ -12,6 +12,7 @@ import {
   isRpcError,
   isVaultCredentialChallengeI18nKey,
   isVaultPipelineDisplayBusy,
+  offersVaultRebuild,
   vaultExportToast,
   vaultRowJobWork,
   type VaultRowWork,
@@ -20,7 +21,11 @@ import {
   storageModeIsPlaintext,
   BACKUP_CLOSE_TOAST_MS,
   backupCloseFailureToastKey,
+  backupFellBackToastKey,
+  closeAllFellBackToast,
   type BackupFailureReason,
+  type BackupFellBack,
+  type BackupFolderStatus,
   type PlainCloseSummary,
   type PlainFolderClass,
   type PlainLeftover,
@@ -151,6 +156,11 @@ export function useVaultLifecycleActions({
   const unlockRetainPasswordsRef = useRef(new Map<string, string>());
   /** Drops a stale close-all loop when the user starts another. */
   const closeAllGenRef = useRef(0);
+  /** A Close all reports its backups that fell back in one toast. */
+  const closeAllBackupsRef = useRef<{ waiting: Set<string>; fellBack: BackupFellBack[] } | null>(
+    null,
+  );
+  const backupFallbackRef = useRef<BackupFolderStatus | null>(null);
   const [closePrompt, setClosePrompt] = useState<VaultClosePrompt | null>(null);
   const closePromptRef = useRef(closePrompt);
   closePromptRef.current = closePrompt;
@@ -554,6 +564,10 @@ export function useVaultLifecycleActions({
           }
           unlockRetainPasswordsRef.current.delete(vaultId);
           lifecycleService.clearPasswordInSession(vaultId);
+          // A lost index keeps the row in recovery until a rebuild.
+          if (offersVaultRebuild(errorI18nKey)) {
+            setVaultRuntimeState(vaultId, { session: "recovery" });
+          }
           if (isVaultCredentialChallengeI18nKey(errorI18nKey)) {
             if (lifecycleRequestRef.current?.vaultId === vaultId) {
               setCredentialErrorKey(errorI18nKey);
@@ -603,11 +617,27 @@ export function useVaultLifecycleActions({
       openFromVault,
       pipeline,
       setLifecycleRequest,
+      setVaultRuntimeState,
       settingsPersistVaultIdsRef,
       showToast,
       t,
       vaultOpenHeld,
     ],
+  );
+
+  /**
+   * Open `vaultId` with `password` with no unlock window, as the rebuild of
+   * its lost index does once it ends. False when the open cannot start: the
+   * vault is busy, or held by other work.
+   */
+  const openWithPassword = useCallback(
+    (vaultId: string, password: string): boolean => {
+      lifecycleService.setPasswordInSession(vaultId, password);
+      if (startOpenPipeline(vaultId)) return true;
+      lifecycleService.clearPasswordInSession(vaultId);
+      return false;
+    },
+    [lifecycleService, startOpenPipeline],
   );
 
   /**
@@ -680,6 +710,25 @@ export function useVaultLifecycleActions({
     now?: boolean;
   };
 
+  /**
+   * A close in a Close all ended. True when it belongs to that batch, whose
+   * backups that fell back are reported once, by the last close to end.
+   */
+  const settleCloseAllBackup = useCallback(
+    (vaultId: string, name: string, fallback: BackupFolderStatus | null): boolean => {
+      const batch = closeAllBackupsRef.current;
+      if (!batch?.waiting.has(vaultId)) return false;
+      batch.waiting.delete(vaultId);
+      if (fallback) batch.fellBack.push({ name, status: fallback });
+      if (batch.waiting.size > 0) return true;
+      closeAllBackupsRef.current = null;
+      const toast = closeAllFellBackToast(batch.fellBack);
+      if (toast) showToast(t(toast.key, toast.params), BACKUP_CLOSE_TOAST_MS);
+      return true;
+    },
+    [showToast, t],
+  );
+
   const startClosePipeline = useCallback(
     (
       vault: VaultListItem,
@@ -725,6 +774,7 @@ export function useVaultLifecycleActions({
           backupFailureRef.current = outcome.backupFailed
             ? (outcome.backupFailure ?? "other")
             : null;
+          backupFallbackRef.current = outcome.backupFallback;
         },
         onComplete: () => {
           const immediate = forgetCloseNow(vault.id) || opts?.now === true;
@@ -742,6 +792,13 @@ export function useVaultLifecycleActions({
           plainCloseRef.current = null;
           const backupFailure = backupFailureRef.current;
           backupFailureRef.current = null;
+          const backupFallback = backupFallbackRef.current;
+          backupFallbackRef.current = null;
+          const reportedWithCloseAll = settleCloseAllBackup(
+            vault.id,
+            vault.displayName,
+            backupFallback,
+          );
           closingHold.settle(
             vault.id,
             () => {
@@ -758,6 +815,13 @@ export function useVaultLifecycleActions({
               if (backupFailure) {
                 showToast(
                   t(backupCloseFailureToastKey(backupFailure), { name: vault.displayName }),
+                  BACKUP_CLOSE_TOAST_MS,
+                );
+                return;
+              }
+              if (backupFallback && !reportedWithCloseAll) {
+                showToast(
+                  t(backupFellBackToastKey(backupFallback), { name: vault.displayName }),
                   BACKUP_CLOSE_TOAST_MS,
                 );
                 return;
@@ -779,6 +843,7 @@ export function useVaultLifecycleActions({
         },
         onError: (errorI18nKey) => {
           forgetCloseNow(vault.id);
+          settleCloseAllBackup(vault.id, vault.displayName, null);
           if (isCredentialVerifying(vault.id)) {
             clearCredentialVerify(vault.id);
             if (lifecycleRequestRef.current?.vaultId === vault.id) {
@@ -833,6 +898,7 @@ export function useVaultLifecycleActions({
       getEntry,
       setLifecycleRequest,
       setVaultRuntimeState,
+      settleCloseAllBackup,
       showToast,
       t,
     ],
@@ -988,6 +1054,7 @@ export function useVaultLifecycleActions({
       }
       const alreadyRunning = pipeline.isRunningNow();
       const importing: string[] = [];
+      const startedIds = new Set<string>();
       let started = 0;
       let queuedName = "";
       for (const vault of open) {
@@ -1000,10 +1067,12 @@ export function useVaultLifecycleActions({
         }
         if (startClosePipeline(vault, "close", { quietQueue: true, unsavedResolved })) {
           started += 1;
+          startedIds.add(vault.id);
           queuedName = vault.displayName;
         }
       }
       if (generation !== closeAllGenRef.current) return;
+      if (started > 1) closeAllBackupsRef.current = { waiting: startedIds, fellBack: [] };
       if (importing.length > 0) {
         setClosePrompt({ blocker: "import", vaultIds: importing, all: importing.length > 1 });
       }
@@ -1516,6 +1585,7 @@ export function useVaultLifecycleActions({
     confirmClosePromptCancelImport,
     timeoutClosePromptSave,
     handleUnlockVault,
+    openWithPassword,
     handleExportVault,
     handleConfirmExportVault,
     /** The vault export in flight; it keeps running whether its window is open or not. */

@@ -45,7 +45,7 @@ const ENCODER_SLACK: u64 = 32 * 1024 * 1024;
 /// file pays for each write.
 const ARCHIVE_WRITE_BUFFER: usize = 1024 * 1024;
 /// Decrypted chunks the worker may hold ahead of the encoder.
-const DECRYPT_QUEUE_CHUNKS: usize = 8;
+pub(super) const DECRYPT_QUEUE_CHUNKS: usize = 8;
 /// A 7z block closes before the file that would take it past this much
 /// plaintext. A larger file gets a block of its own.
 const SEVEN_ZIP_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
@@ -335,9 +335,9 @@ fn decrypt_stream_bytes() -> u64 {
 }
 
 /// The archive's record of its members, from the length of each logical path.
-fn archive_header_bytes(outer_folder: &str, paths: impl Iterator<Item = usize>) -> u64 {
+fn archive_header_bytes(vault_folder: &str, paths: impl Iterator<Item = usize>) -> u64 {
     let member = |path: usize| {
-        let name = (outer_folder.len() + 1 + path) as u64;
+        let name = (vault_folder.len() + 1 + path) as u64;
         ARCHIVE_ENTRY_BYTES.saturating_add(name.saturating_mul(ARCHIVE_NAME_COPIES))
     };
     paths
@@ -426,11 +426,11 @@ pub(crate) struct SevenZipPackPlan<'a> {
 pub(crate) fn plan_seven_zip_pack<'a>(
     index: &'a VaultIndex,
     opts: &VaultSevenZipSection,
-    outer_folder: &str,
+    vault_folder: &str,
     skip: impl Fn(&str) -> bool,
     limits: PackLimits,
 ) -> Result<SevenZipPackPlan<'a>> {
-    let (plan, ram) = layout_seven_zip_pack(index, opts, outer_folder, skip, limits);
+    let (plan, ram) = layout_seven_zip_pack(index, opts, vault_folder, skip, limits);
     ensure_available_ram(limits.available, ram)?;
     Ok(plan)
 }
@@ -440,7 +440,7 @@ pub(crate) fn plan_seven_zip_pack<'a>(
 fn layout_seven_zip_pack<'a>(
     index: &'a VaultIndex,
     opts: &VaultSevenZipSection,
-    outer_folder: &str,
+    vault_folder: &str,
     skip: impl Fn(&str) -> bool,
     limits: PackLimits,
 ) -> (SevenZipPackPlan<'a>, u64) {
@@ -454,7 +454,7 @@ fn layout_seven_zip_pack<'a>(
     let fixed = ENCODER_SLACK
         .saturating_add(ARCHIVE_WRITE_BUFFER as u64)
         .saturating_add(decrypt_stream_bytes())
-        .saturating_add(archive_header_bytes(outer_folder, paths));
+        .saturating_add(archive_header_bytes(vault_folder, paths));
     let layout = |threads: u32| {
         let blocks = plan_blocks(&files, block_limit(opts, threads, limits.block_bytes));
         let coder = coder_bytes(opts, threads, largest_block(&files, &blocks));
@@ -578,10 +578,11 @@ pub(super) fn export_dir_nodes<'a>(
     dirs
 }
 
-/// A vault path as its archive member: one outer folder holds the vault.
-pub(super) fn logical_member(outer: &str, logical: &str) -> String {
+/// A vault path as its archive member, under `vault_folder`: the package's
+/// vault folder (`Notes-sevenzip/Notes`).
+pub(super) fn logical_member(vault_folder: &str, logical: &str) -> String {
     let logical = logical.trim_start_matches('/');
-    format!("{outer}/{logical}")
+    format!("{vault_folder}/{logical}")
 }
 
 fn push_directory<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str) -> Result<()> {
@@ -604,17 +605,18 @@ pub(crate) struct LogicalSource<'a> {
     pub content_key: &'a [u8; 32],
 }
 
-/// The shape of a `.7z`: one outer folder, and the files of `.upriv-config/`
-/// beside the vault's own.
+/// The shape of a `.7z`: the package folder, which holds the vault folder
+/// with the vault's files and, beside it, the files of `.upriv-config/`.
 #[derive(Clone, Copy)]
 pub(crate) struct ArchiveLayout<'a> {
-    pub outer: &'a str,
+    pub package_folder: &'a str,
+    pub vault_folder: &'a str,
     pub config_files: &'a [ConfigFile],
 }
 
 /// One file's plaintext, taken chunk by chunk from the decrypt queue. A
 /// chunk counts toward the job's progress when the encoder takes it.
-struct QueuedFile<'q> {
+pub(super) struct QueuedFile<'q> {
     queue: &'q Receiver<Zeroizing<Vec<u8>>>,
     job: &'q Job,
     /// Bytes of this file not yet taken from the queue.
@@ -624,7 +626,7 @@ struct QueuedFile<'q> {
 }
 
 impl<'q> QueuedFile<'q> {
-    fn new(queue: &'q Receiver<Zeroizing<Vec<u8>>>, job: &'q Job, size: u64) -> Self {
+    pub(super) fn new(queue: &'q Receiver<Zeroizing<Vec<u8>>>, job: &'q Job, size: u64) -> Self {
         Self {
             queue,
             job,
@@ -681,7 +683,7 @@ pub(crate) struct ReadableExport {
 /// damaged goes in with zeros in those parts, so it keeps its place and size;
 /// its path is returned. Returns without an error once the encoder stops
 /// reading: the encoder reports why.
-fn decrypt_in_order(
+pub(super) fn decrypt_in_order(
     source: LogicalSource<'_>,
     files: &[&VaultNode],
     queue: SyncSender<Zeroizing<Vec<u8>>>,
@@ -721,7 +723,7 @@ fn push_blocks<W: Write + Seek>(
     queue: &Receiver<Zeroizing<Vec<u8>>>,
     opts: &VaultSevenZipSection,
     password: &Password,
-    outer_folder: &str,
+    vault_folder: &str,
     plan: &SevenZipPackPlan<'_>,
     job: &Job,
 ) -> Result<()> {
@@ -731,7 +733,7 @@ fn push_blocks<W: Write + Seek>(
         let mut entries = Vec::with_capacity(files.len());
         let mut readers = Vec::with_capacity(files.len());
         for node in files {
-            let name = archive_member_name(&logical_member(outer_folder, &node.path))?;
+            let name = archive_member_name(&logical_member(vault_folder, &node.path))?;
             entries.push(ArchiveEntry::new_file(&name));
             readers.push(SourceReader::new(QueuedFile::new(
                 queue,
@@ -763,7 +765,7 @@ fn push_config_block<W: Write + Seek>(
     let mut entries = Vec::with_capacity(layout.config_files.len());
     let mut readers = Vec::with_capacity(layout.config_files.len());
     for file in layout.config_files {
-        let name = archive_member_name(&logical_member(layout.outer, &file.path()))?;
+        let name = archive_member_name(&logical_member(layout.package_folder, &file.path()))?;
         entries.push(ArchiveEntry::new_file(&name));
         readers.push(SourceReader::new(Cursor::new(file.bytes.as_slice())));
     }
@@ -782,7 +784,7 @@ fn push_file_blocks<W: Write + Seek>(
     source: LogicalSource<'_>,
     opts: &VaultSevenZipSection,
     password: &Password,
-    outer_folder: &str,
+    vault_folder: &str,
     plan: &SevenZipPackPlan<'_>,
     job: &Job,
 ) -> Result<Vec<String>> {
@@ -794,7 +796,7 @@ fn push_file_blocks<W: Write + Seek>(
             .spawn_scoped(scope, move || {
                 decrypt_in_order(source, files, decrypted, job)
             })?;
-        let pushed = push_blocks(writer, &queue, opts, password, outer_folder, plan, job);
+        let pushed = push_blocks(writer, &queue, opts, password, vault_folder, plan, job);
         // Without its reader the worker stops at its next chunk.
         drop(queue);
         let read = worker
@@ -805,7 +807,7 @@ fn push_file_blocks<W: Write + Seek>(
 }
 
 /// Pack the files of `plan` into `dest`. `job` is checked before each block,
-/// every archive write fails once it is asked to stop, and its progress counts
+/// every write that reaches `dest` fails once it is asked to stop, and its progress counts
 /// the logical bytes packed. Returns `dest` and the files kept with zeros
 /// where their data was missing or damaged.
 pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
@@ -819,17 +821,19 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
 ) -> Result<(W, Vec<String>)> {
     job.ensure_running()?;
     let password = sevenz_password(archive_password)?;
-    let buffered = BufWriter::with_capacity(ARCHIVE_WRITE_BUFFER, dest);
-    let mut writer = ArchiveWriter::new(job.writer(buffered)).map_err(map_sevenz_error)?;
+    // The coder's small writes land in the buffer; the stop is checked as it
+    // empties, at most one buffer away.
+    let buffered = BufWriter::with_capacity(ARCHIVE_WRITE_BUFFER, job.writer(dest));
+    let mut writer = ArchiveWriter::new(buffered).map_err(map_sevenz_error)?;
     writer.set_encrypt_header(opts.encrypt_file_names);
-    // A vault with no files and no folders is one outer directory. Folders that
-    // exist in the vault, including empty ones, are members under that name.
+    // A vault with no files and no folders is its package's vault folder.
+    // Folders that exist in the vault, including empty ones, are members under it.
     if plan.files.is_empty() && plan.dirs.is_empty() {
-        push_directory(&mut writer, layout.outer)?;
+        push_directory(&mut writer, layout.vault_folder)?;
     } else {
         for dir in &plan.dirs {
             job.ensure_running()?;
-            let name = archive_member_name(&logical_member(layout.outer, &dir.path))?;
+            let name = archive_member_name(&logical_member(layout.vault_folder, &dir.path))?;
             push_directory(&mut writer, &name)?;
         }
     }
@@ -840,17 +844,18 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
         source,
         opts,
         &password,
-        layout.outer,
+        layout.vault_folder,
         plan,
         job,
     )?;
     job.ensure_running()?;
     // The header is sealed with its own salt and IV.
     writer.set_content_methods(content_methods(opts, password, plan.threads));
-    let buffered = writer.finish().map_err(map_io_error)?.into_inner();
+    let buffered = writer.finish().map_err(map_io_error)?;
     let dest = buffered
         .into_inner()
-        .map_err(|error| map_io_error(error.into_error()))?;
+        .map_err(|error| map_io_error(error.into_error()))?
+        .into_inner();
     Ok((dest, unreadable))
 }
 
@@ -967,7 +972,8 @@ mod tests {
             PASSWORD,
             opts,
             ArchiveLayout {
-                outer: "Notes",
+                package_folder: "Notes-sevenzip",
+                vault_folder: "Notes-sevenzip/Notes",
                 config_files: &[],
             },
             &plan,
@@ -1335,8 +1341,8 @@ mod tests {
         };
         let damaged = blob_of("docs/hi.txt");
         let mut bytes = crate::host_fs::read(&damaged).unwrap();
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0x01;
+        // Past the nonce, inside the blob's one chunk.
+        bytes[30] ^= 0x01;
         crate::host_fs::write(&damaged, &bytes).unwrap();
         crate::host_fs::remove_file(blob_of("gone.txt")).unwrap();
 

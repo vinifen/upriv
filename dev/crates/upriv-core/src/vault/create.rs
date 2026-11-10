@@ -130,8 +130,6 @@ pub(super) fn claim_new_vault_dir(root: &VaultRoot, dest: &Path) -> Result<Prepa
             Err(error) => Err(error.into()),
         })?;
         // The mark makes `rename_vault` of this id refuse during Argon2 seed.
-        PreparingGuard::enter(dest).inspect_err(|_| {
-            let _ = crate::host_fs::remove_dir_all(dest);
-        })
+        Ok(PreparingGuard::enter(dest))
     })
 }

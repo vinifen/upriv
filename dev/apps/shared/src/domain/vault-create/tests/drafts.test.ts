@@ -70,6 +70,27 @@ describe("createDraftFromBackup", () => {
     expect(draft.importFilePath).toBe("vaults/notes/backups/saves/20260528120000-notes.zip");
   });
 
+  it("points a zip of the chosen folder at its locator, never at a path", () => {
+    const draft = createDraftFromBackup(
+      "20260528120000",
+      "notes",
+      "Notes",
+      [1],
+      [],
+      null,
+      "20260528120000-notes.zip",
+      true,
+      "chosen",
+    );
+    expect(draft.importFileName).toBe("20260528120000-notes.zip");
+    expect(draft.importFilePath).toBe("vaults/notes/backups/chosen/saves/20260528120000-notes.zip");
+  });
+
+  it("starts with no backup folders carried from a file", () => {
+    const draft = createDraftFromBackup("20260528120000", "notes", "Notes", [1]);
+    expect(draft.carriedBackupFolders).toBeNull();
+  });
+
   it("pre-selects the source vault group", () => {
     const draft = createDraftFromBackup("20260528120000", "notes", "Notes", [1], [], "work");
     expect(draft.groupMode).toBe("existing");
@@ -318,11 +339,12 @@ describe("createVaultImportPackage", () => {
 });
 
 describe("importZipClassificationFromProbe", () => {
-  const probed = (ok: boolean, kind: string) => ({
+  const probed = (ok: boolean, kind: string, vaultName: string | null = null) => ({
     ok,
     kind,
     embedded: null,
     carriesWorkspace: false,
+    vaultName,
   });
 
   it("treats a files zip as documents and a store zip as a copy", () => {
@@ -330,21 +352,24 @@ describe("importZipClassificationFromProbe", () => {
       embedded: null,
       zipLayout: "files",
       carriesWorkspace: false,
+      vaultName: null,
     });
-    expect(importZipClassificationFromProbe(probed(true, "store_zip"))).toEqual({
+    expect(importZipClassificationFromProbe(probed(true, "store_zip", "Notes"))).toEqual({
       embedded: null,
       zipLayout: "store",
       carriesWorkspace: false,
+      vaultName: "Notes",
     });
-    expect(importZipClassificationFromProbe(probed(false, "store_zip"))).toEqual({
+    expect(importZipClassificationFromProbe(probed(false, "store_zip", "Notes"))).toEqual({
       embedded: null,
       zipLayout: "store",
       carriesWorkspace: false,
+      vaultName: null,
     });
     expect(importZipClassificationFromProbe(probed(false, "files_zip"))).toBe(null);
   });
 
-  it("keeps what a plain-text zip carries", () => {
+  it("keeps what a plain-text zip carries and the name of its vault folder", () => {
     const embedded = { settings: vaultSettingsFixture(), unlockPreset: null };
     expect(
       importZipClassificationFromProbe({
@@ -352,8 +377,9 @@ describe("importZipClassificationFromProbe", () => {
         kind: "files_zip",
         embedded,
         carriesWorkspace: true,
+        vaultName: "test",
       }),
-    ).toEqual({ embedded, zipLayout: "files", carriesWorkspace: true });
+    ).toEqual({ embedded, zipLayout: "files", carriesWorkspace: true, vaultName: "test" });
   });
 });
 

@@ -21,9 +21,11 @@ pub const PLAIN_RESERVED_PREFIX: &str = ".upriv-plain";
 /// Encrypted record of the place a plaintext folder was confirmed for, per system.
 pub const PLAIN_POLICY_FILE: &str = ".upriv-plain-policy.json";
 
-/// Folder beside the vault's files in a `.7z` or a plain-text `.zip`. It carries
-/// the vault's settings and file-manager layout. A vault never holds this name:
-/// an import moves what the folder carries to its place and leaves the folder.
+/// Folder beside the vault folder in the package of a `.7z` or a plain-text
+/// `.zip`. It carries the vault's settings and file-manager layout. A vault
+/// never holds this name, and every import skips it at any depth, so the folder
+/// never becomes a vault file, also when an unpacked export comes in as a
+/// folder.
 pub const EXPORT_CONFIG_DIR: &str = ".upriv-config";
 
 /// Paths the vault keeps for itself: the seed at the root, the file-manager

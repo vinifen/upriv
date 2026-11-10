@@ -11,6 +11,7 @@ mod header;
 mod held;
 mod index;
 mod kdf;
+mod record;
 mod tree;
 
 use std::path::Path;
@@ -22,10 +23,11 @@ use crate::error::{Result, UprivError};
 
 #[cfg(test)]
 pub(crate) use chunk::blob_path;
+pub(crate) use chunk::imported_node;
 pub(crate) use chunk::{
     blobs_need_pack, mutation_blob_ids, pack_blob_waste, read_file_chunks_keeping,
     read_logical_range_keeping, record_imported_file, remove_file_chunks, seal_import_chunk,
-    BlobPackMode, ChunkBlobMutation, ImportBlob, StagedBlobs,
+    BlobPackMode, ChunkBlobMutation, ImportBlob, RecordsDue, StagedBlobs,
 };
 pub use chunk::{
     read_logical_file, read_logical_range, seed_plaintext, truncate_logical_file,
@@ -37,7 +39,8 @@ pub use header::{
     CHUNK_SIZE, FORMAT_VERSION, HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
 };
 pub(crate) use held::{
-    delete_held, held_disk_bytes, remove_empty_held, restore_held, settle_held, HeldSources,
+    backup_zip_identity, delete_held, held_disk_bytes, remove_empty_held, restore_held,
+    settle_held, HeldSources,
 };
 pub(crate) use index::sha256_hex;
 pub use index::{
@@ -45,6 +48,9 @@ pub use index::{
     VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME, INDEX_FILE_NAME,
 };
 pub use kdf::KdfUnlockPreset;
+#[cfg(test)]
+pub(crate) use record::read_record;
+pub(crate) use record::{record_made_blob, RebuiltTree, Records};
 pub use tree::{
     build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
     ensure_folder, file_name, from_ui_path, is_export_config, is_plain_internal,
@@ -56,7 +62,10 @@ pub use tree::{
 
 pub(crate) use tree::require_parent_dir;
 
-use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
+use aead::{
+    derive_layer_keys, random_master_key, ContentKey, LayerKeys, RecordKey, INDEX_KEY_LEN,
+    MASTER_KEY_LEN,
+};
 use header::{create_header, save_header};
 #[cfg(test)]
 pub(crate) use index::load_index_files;
@@ -67,10 +76,24 @@ pub struct OpenedStore {
     pub master_key: Zeroizing<[u8; MASTER_KEY_LEN]>,
     pub content_key: ContentKey,
     pub index_key: Zeroizing<[u8; INDEX_KEY_LEN]>,
+    /// The key of the recovery records its blobs carry ([`record`]).
+    pub record_key: RecordKey,
     pub index: Index,
     /// The tree in the index copy when that file holds another one; see
     /// [`index::load_index_files`].
     pub other_copy: Option<Index>,
+}
+
+#[cfg(test)]
+impl OpenedStore {
+    /// What a seal of this store's tree writes its records with.
+    pub(crate) fn records(&self) -> Records<'_> {
+        Records {
+            header: &self.header,
+            key: &self.record_key,
+            index: &self.index,
+        }
+    }
 }
 
 /// Wrap a master key and persist `vault.header`. Caller writes the sealed index
@@ -83,14 +106,14 @@ fn create_store_core(
     store_dir: &Path,
     password: &[u8],
     preset: KdfUnlockPreset,
-) -> Result<(VaultHeader, ContentKey, Zeroizing<[u8; INDEX_KEY_LEN]>)> {
+) -> Result<(VaultHeader, LayerKeys)> {
     crate::host_fs::create_dir_all(store_dir.join(INDEX_DIR_NAME))?;
     crate::host_fs::create_dir_all(store_dir.join(DATA_DIR_NAME))?;
     let master = random_master_key();
     let header = create_header(password, preset, &master)?;
-    let (content_key, index_key) = derive_layer_keys(&master)?;
+    let keys = derive_layer_keys(&master)?;
     save_header(store_dir, &header)?;
-    Ok((header, content_key, index_key))
+    Ok((header, keys))
 }
 
 #[cfg(test)]
@@ -100,8 +123,8 @@ pub fn create_empty_store(
     preset: KdfUnlockPreset,
 ) -> Result<VaultHeader> {
     let store_dir = store_dir.as_ref();
-    let (header, _, index_key) = create_store_core(store_dir, password, preset)?;
-    save_new_sealed_index(store_dir, &header, &index_key, &Index::empty())?;
+    let (header, keys) = create_store_core(store_dir, password, preset)?;
+    save_new_sealed_index(store_dir, &header, &keys.index, &mut Index::empty())?;
     Ok(header)
 }
 
@@ -116,7 +139,7 @@ pub fn create_seeded_store(
     initial_files: &[(&str, &[u8])],
 ) -> Result<VaultHeader> {
     let store_dir = store_dir.as_ref();
-    let (header, content_key, index_key) = create_store_core(store_dir, password, preset)?;
+    let (header, keys) = create_store_core(store_dir, password, preset)?;
     let mut index = Index::empty();
     let seed = seed_plaintext(header.content_identity);
     let files =
@@ -125,14 +148,18 @@ pub fn create_seeded_store(
         let (_retired, mutation) = chunk::write_logical_file(
             store_dir,
             &header,
-            &content_key,
+            &keys.content,
             &mut index,
             logical_path,
             plaintext,
         )?;
-        mutation.sync_before_index()?;
+        mutation.sync_before_index(&Records {
+            header: &header,
+            key: &keys.record,
+            index: &index,
+        })?;
     }
-    save_new_sealed_index(store_dir, &header, &index_key, &index)?;
+    save_new_sealed_index(store_dir, &header, &keys.index, &mut index)?;
     Ok(header)
 }
 
@@ -145,16 +172,67 @@ pub fn create_seeded_store(
 pub fn open_store(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<OpenedStore> {
     let store_dir = store_dir.as_ref();
     let header = unlock_header(store_dir, password)?;
-    let (content_key, index_key) = derive_layer_keys(&header.master_key)?;
-    let loaded = index::load_index_files(store_dir, &header.header, &index_key)?;
+    let keys = derive_layer_keys(&header.master_key)?;
+    let loaded = index::load_index_files(store_dir, &header.header, &keys.index)?;
     Ok(OpenedStore {
         header: header.header,
         master_key: header.master_key,
-        content_key,
-        index_key,
+        content_key: keys.content,
+        index_key: keys.index,
+        record_key: keys.record,
         index: loaded.index,
         other_copy: loaded.other_copy,
     })
+}
+
+/// A store whose header opened with the password and whose index files did
+/// not ([`UprivError::VaultIndexUnreadable`]): what a rebuild needs.
+pub(crate) struct LostIndex {
+    header: VaultHeader,
+    keys: LayerKeys,
+}
+
+impl LostIndex {
+    /// Build a tree from what names the blobs in `store_dir`: their records,
+    /// and the vault's backup zips, newest first ([`record::rebuild_tree`]).
+    pub(crate) fn rebuild_tree(
+        &self,
+        store_dir: &Path,
+        backup_zips: &dyn Fn() -> Vec<std::path::PathBuf>,
+        step: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<RebuiltTree> {
+        let sources = record::RebuildSources {
+            header: &self.header,
+            content_key: &self.keys.content,
+            index_key: &self.keys.index,
+            record_key: &self.keys.record,
+            backup_zips,
+        };
+        record::rebuild_tree(store_dir, &sources, step)
+    }
+
+    /// Seal `index` into both index files of `store_dir` ([`flush_index_parts`]).
+    pub(crate) fn seal(&self, store_dir: &Path, index: &mut Index) -> Result<Sealed> {
+        flush_index_parts(store_dir, &self.header, &self.keys.index, index)
+            .map(|(_, sealed)| sealed)
+    }
+}
+
+/// Unlock `store/` to rebuild its index. Refused with
+/// [`UprivError::VaultIndexReadable`] when an index file opens: that index is
+/// the vault's tree, and a rebuild would lose what only it holds. Bypasses the
+/// unlock throttle, like [`open_store`]; the rebuild job applies it.
+pub(crate) fn unlock_lost_index(store_dir: &Path, password: &[u8]) -> Result<LostIndex> {
+    let unlocked = unlock_header(store_dir, password)?;
+    let keys = derive_layer_keys(&unlocked.master_key)?;
+    match index::load_index_files(store_dir, &unlocked.header, &keys.index) {
+        Ok(_) => Err(UprivError::VaultIndexReadable),
+        Err(UprivError::VaultIndexUnreadable { .. }) => Ok(LostIndex {
+            header: unlocked.header,
+            keys,
+        }),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPreset> {
@@ -163,7 +241,8 @@ pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPrese
 
 #[cfg(test)]
 pub fn flush_index(store_dir: impl AsRef<Path>, store: &mut OpenedStore) -> Result<()> {
-    let (_, sealed) = flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)?;
+    let (_, sealed) =
+        flush_index_parts(store_dir, &store.header, &store.index_key, &mut store.index)?;
     if sealed == Sealed::Flushed {
         store.index.clear_unsealed_holes();
     }
@@ -182,14 +261,15 @@ pub fn sealed_index_contains(
 }
 
 /// Seal `index` into `store/index/` and return the sealed bytes, which are now
-/// the primary index file, and whether that file is flushed. An error leaves
-/// the previous primary in place. A seal that does not flush is logged
+/// the primary index file, and whether that file is flushed. The seal counts
+/// one more save in `index` ([`VaultIndex::saves`]). An error leaves the
+/// previous primary in place. A seal that does not flush is logged
 /// (`vault_index_unflushed`).
 pub fn flush_index_parts(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
     index_key: &[u8; aead::INDEX_KEY_LEN],
-    index: &Index,
+    index: &mut Index,
 ) -> Result<(Vec<u8>, Sealed)> {
     let store_dir = store_dir.as_ref();
     let (bytes, sealed) = save_sealed_index(store_dir, header, index_key, index)?;
@@ -207,7 +287,7 @@ pub(crate) fn reflush_index_parts(
     store_dir: &Path,
     header: &VaultHeader,
     index_key: &[u8; aead::INDEX_KEY_LEN],
-    index: &Index,
+    index: &mut Index,
 ) -> Result<Sealed> {
     save_sealed_index(store_dir, header, index_key, index).map(|(_, sealed)| sealed)
 }
@@ -224,6 +304,17 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
         Err(error) => return Err(error.into()),
     };
     Ok(hash_header_and_index(&header_bytes, &index_bytes))
+}
+
+/// True when `store_dir` holds a header file and neither index file: the
+/// tree is gone while the vault can still unlock, so its list row is recovery.
+pub(crate) fn index_files_missing(store_dir: impl AsRef<Path>) -> bool {
+    let store_dir = store_dir.as_ref();
+    let header_there = header::VaultHeader::path(store_dir).host_exists()
+        || header::VaultHeader::copy_path(store_dir).host_exists();
+    header_there
+        && !index::index_path(store_dir).host_exists()
+        && !index::index_copy_path(store_dir).host_exists()
 }
 
 /// [`content_hash_hex`] for a store whose primary index file holds
@@ -314,7 +405,7 @@ mod tests {
         let mut opened = open_store(&dir, b"correct-horse").expect("open");
         opened.index.push(VaultNode::dir("docs"));
         let (sealed, flushed) =
-            flush_index_parts(&dir, &opened.header, &opened.index_key, &opened.index).unwrap();
+            flush_index_parts(&dir, &opened.header, &opened.index_key, &mut opened.index).unwrap();
         assert_eq!(flushed, Sealed::Flushed);
         assert_eq!(
             content_hash_with_index(&dir, &sealed).unwrap(),

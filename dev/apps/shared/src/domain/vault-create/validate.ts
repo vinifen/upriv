@@ -8,6 +8,7 @@ import {
   isContentUri,
   validateWorkspaceGlobalPath,
 } from "../workspace";
+import { BACKUP_FOLDER_SYSTEMS, backupFolderIssue } from "../backups/folders";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
 import {
   createVaultImportNeedsArchivePassword,
@@ -23,7 +24,6 @@ export type CreateVaultValidationCode =
   | "import_zip_pending"
   | "import_zip_rejected"
   | "password_empty"
-  | "password_too_short"
   | "password_mismatch"
   | "password_not_validated"
   | "password_wrong"
@@ -36,10 +36,13 @@ export type CreateVaultValidationCode =
   | "mount_path_not_absolute"
   | "mount_path_saf_tree"
   | "mount_path_reserved"
-  | "mount_path_root_unknown";
+  | "mount_path_root_unknown"
+  | "backup_folder_empty"
+  | "backup_folder_not_absolute"
+  | "backup_folder_reserved";
 
-/** Mock lifecycle unlock (`trim().length >= 4`). Live create/open only reject empty. */
-export const CREATE_VAULT_PASSWORD_MIN_LENGTH = 4;
+/** Mock lifecycle unlock (`trim().length >= 4`). Live create and open refuse only an empty one. */
+const MOCK_LIFECYCLE_PASSWORD_MIN_LENGTH = 4;
 
 /** Mock unlock / rewrap reject this word. Live create does not. */
 const MOCK_LIFECYCLE_WRONG_PASSWORD = "wrong";
@@ -48,7 +51,7 @@ const MOCK_LIFECYCLE_WRONG_PASSWORD = "wrong";
 export function isMockLifecyclePasswordValid(password: string): boolean {
   const trimmed = password.trim();
   if (!trimmed) return false;
-  if (trimmed.length < CREATE_VAULT_PASSWORD_MIN_LENGTH) return false;
+  if (trimmed.length < MOCK_LIFECYCLE_PASSWORD_MIN_LENGTH) return false;
   return trimmed !== MOCK_LIFECYCLE_WRONG_PASSWORD;
 }
 
@@ -145,6 +148,13 @@ export function validateCreateVaultStep(
         if (nameError === "empty") errors.push("group_name_empty");
         else if (nameError === "too_long") errors.push("group_name_too_long");
         else if (nameError) errors.push("group_name_invalid");
+      }
+      for (const system of BACKUP_FOLDER_SYSTEMS) {
+        const { place, path } = draft.backup[system];
+        const issue = backupFolderIssue(place, path, vaultRootPath);
+        if (issue === "empty") errors.push("backup_folder_empty");
+        else if (issue === "reserved") errors.push("backup_folder_reserved");
+        else if (issue) errors.push("backup_folder_not_absolute");
       }
       return errors;
     }

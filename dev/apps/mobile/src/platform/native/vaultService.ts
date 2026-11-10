@@ -94,8 +94,8 @@ export const nativeVaultService = createLiveVaultService({
   async rename(vaultId, displayName) {
     return rpcVaultRename(vaultId, displayName);
   },
-  async deleteVault(vaultId) {
-    await rpcVaultDelete(vaultId);
+  async deleteVault(vaultId, outsideBackups) {
+    return rpcVaultDelete(vaultId, outsideBackups);
   },
   // A picked folder is mounted for the export, so Rust writes the file straight into it.
   async exportVaultToFolder(vaultId, request, destDir, job) {

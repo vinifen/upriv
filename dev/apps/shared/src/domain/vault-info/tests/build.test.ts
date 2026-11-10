@@ -35,6 +35,7 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
         sizeBytes: 20,
       },
     ],
+    chosenBackups: null,
     runtime: {
       openCount: 2,
       lastOpenedAt: "2026-05-29T09:00:00.000Z",
@@ -268,5 +269,19 @@ describe("buildVaultInfoSections", () => {
       t,
     );
     expect(field(sections, "held_size")).toBe("2.0 KB");
+  });
+
+  it("shows the chosen backup folder and what it can do, only when there is one", () => {
+    expect(field(buildVaultInfoSections(snapshot(), t), "backups_chosen_path")).toBeUndefined();
+    const sections = buildVaultInfoSections(
+      snapshot({ chosenBackups: { path: "/mnt/usb/upriv-notes-backups", status: "no_room" } }),
+      t,
+    );
+    expect(field(sections, "backups_chosen_path")).toBe("/mnt/usb/upriv-notes-backups");
+    expect(field(sections, "backups_chosen_status")).toBe("modal.backup.folder.status.no_room");
+    const row = sections
+      .flatMap((section) => section.fields)
+      .find((entry) => entry.id === "backups_chosen_path");
+    expect(row?.openPath).toBe("/mnt/usb/upriv-notes-backups");
   });
 });

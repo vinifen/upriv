@@ -53,6 +53,7 @@ export type { VaultRootService } from "./vault-root/VaultRootService";
 export type {
   ChangeVaultKdfInput,
   ChangeVaultPasswordInput,
+  RebuildVaultInput,
   VaultSecurityService,
 } from "./vault-security/VaultSecurityService";
 export type { AppServices } from "./types";

@@ -11,7 +11,6 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   import_zip_pending: "vault.create.error.import_zip_pending",
   import_zip_rejected: "vault.create.error.import_zip_rejected",
   password_empty: "vault.create.error.password_empty",
-  password_too_short: "vault.create.error.password_too_short",
   password_mismatch: "vault.create.error.password_mismatch",
   password_not_validated: "vault.create.error.password_not_validated",
   password_wrong: "error.wrong_password",
@@ -25,6 +24,9 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   mount_path_saf_tree: "modal.workspace.error.saf_tree_child",
   mount_path_reserved: "modal.workspace.error.reserved",
   mount_path_root_unknown: "modal.workspace.error.unavailable",
+  backup_folder_empty: "modal.workspace.error.empty",
+  backup_folder_not_absolute: "modal.workspace.error.not_absolute",
+  backup_folder_reserved: "modal.workspace.error.reserved",
 } as const satisfies Record<CreateVaultValidationCode, I18nKey>;
 
 export type CreateVaultErrorI18nKey =

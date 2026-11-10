@@ -1,3 +1,4 @@
+import type { BackupFolderStatus } from "../../domain/backups";
 import type { PlainCloseSummary } from "../../domain/vault-plain";
 import type {
   VaultPipelineError,
@@ -17,6 +18,8 @@ export interface CloseVaultOutcome {
   backupFailed: boolean;
   /** Why the close backup was not written. Null when it succeeded or was skipped. */
   backupFailure: BackupFailureReason | null;
+  /** Why the close backup went to the data folder and not the chosen one. */
+  backupFallback: BackupFolderStatus | null;
   plain: PlainCloseSummary | null;
 }
 

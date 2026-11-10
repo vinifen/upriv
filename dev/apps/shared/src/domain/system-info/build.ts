@@ -5,6 +5,7 @@ import {
   workspaceContainerPath,
   workspaceSystemHasShortcut,
 } from "../workspace";
+import { backupFolderSystem } from "../backups/folders";
 import type { AppDistribution } from "../vault-root";
 import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
 import type { SystemInfoSnapshot } from "./types";
@@ -96,12 +97,15 @@ export function buildSystemInfoSections(
     ui,
     logging,
     workspace,
+    backups,
     workspaceSystem,
     lastOpenedVault,
     paths,
   } = snapshot;
   const workspaceRow = workspace[workspaceSystem];
   const workspacePath = workspaceInfoPath(workspaceRow, root);
+  const backupSystem = backupFolderSystem(workspaceSystem);
+  const backupRow = backupSystem ? backups[backupSystem] : null;
 
   const distribution = app.distribution != null ? t(DISTRIBUTION_KEYS[app.distribution]) : "—";
 
@@ -361,6 +365,18 @@ export function buildSystemInfoSections(
           },
           workspacePath,
         ),
+        ...(backupRow
+          ? [
+              {
+                id: "backups_default",
+                label: t("modal.info.field.backups_default"),
+                value:
+                  backupRow.place === "custom"
+                    ? emptyDash(backupRow.path)
+                    : t("modal.app_settings.field.backups.data_folder"),
+              },
+            ]
+          : []),
         ...(workspaceSystemHasShortcut(workspaceSystem)
           ? [
               {

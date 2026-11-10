@@ -2348,7 +2348,7 @@ mode = "encrypted_dir"
         let export = ExportMounted::new(DOWNLOAD_TREE);
 
         let written =
-            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job)
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", true, &job)
                 .unwrap();
         let name = "phone-copy.zip";
         assert_eq!(written.path, Path::new(SAF_EXPORT_ROOT).join(name));
@@ -2356,9 +2356,10 @@ mode = "encrypted_dir"
         let zip_path = export.dir.path().join(name);
         assert_eq!(written.size, std::fs::metadata(&zip_path).unwrap().len());
         let archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
+        // A phone's data folder has no path: inside the zip it is `Upriv`.
         assert!(archive
             .file_names()
-            .any(|entry| entry == "phone-copy/.upriv/settings.toml"));
+            .any(|entry| entry == "phone-copy/Upriv/.upriv/settings.toml"));
         // Nothing was written beside the data folder.
         assert!(!data.root().join(name).exists());
         assert!(!Path::new(SAF_EXPORT_ROOT).exists());
@@ -2377,7 +2378,7 @@ mode = "encrypted_dir"
         std::fs::write(export.dir.path().join("phone-copy.zip"), b"kept").unwrap();
 
         assert!(matches!(
-            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job),
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", true, &job),
             Err(crate::UprivError::DataFolderExportNameTaken(_))
         ));
         assert_eq!(
@@ -2400,7 +2401,7 @@ mode = "encrypted_dir"
             "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv%2F.upriv",
         );
         assert!(matches!(
-            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job),
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", true, &job),
             Err(crate::UprivError::ExportDestinationReserved(_))
         ));
         assert!(export.names().is_empty());
@@ -2441,7 +2442,8 @@ mode = "encrypted_dir"
         }
         let _unmount = Unmount;
 
-        match crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job) {
+        match crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", true, &job)
+        {
             Err(crate::UprivError::Io(error)) => {
                 assert_eq!(error.to_string(), "gone");
                 assert!(!super::is_unreachable(&error));

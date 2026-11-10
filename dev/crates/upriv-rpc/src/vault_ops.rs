@@ -5,19 +5,20 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    abort_import_vault, close_all_vaults, close_all_vaults_now, delete_backups, delete_vault,
-    export_backups, export_logical_seven_zip, export_plain_zip, export_store_zip, fs_create_file,
-    fs_create_folder, fs_delete, fs_ensure_folder, fs_held_delete, fs_held_list, fs_held_restore,
-    fs_import_from_os_path, fs_list_tree, fs_move, fs_os_path, fs_preview_fits, fs_read_file,
-    fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
-    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
-    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
-    import_store_zip, ingest_import_directory, list_backups, parse_backup_import_path,
-    parse_embedded_settings, probe_import_zip_bytes, probe_import_zip_path,
-    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, promote_backup_save,
-    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml, save_backup_now,
-    seven_zip_export_available, sweep_unfinished, vault_list_item, BackupEntry, ExportInclude,
-    ImportExtras, ImportZipProbe, KdfUnlockPreset, VaultConfig, ZipImportClass,
+    abort_import_vault, backup_listing, check_typed_backup_folder, close_all_vaults,
+    close_all_vaults_now, delete_backups, delete_vault, export_backups, export_logical_seven_zip,
+    export_plain_zip, export_store_zip, fs_create_file, fs_create_folder, fs_delete,
+    fs_ensure_folder, fs_held_delete, fs_held_list, fs_held_restore, fs_import_from_os_path,
+    fs_list_tree, fs_move, fs_os_path, fs_preview_fits, fs_read_file, fs_read_range, fs_rename,
+    fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
+    import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
+    import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
+    ingest_import_directory, parse_backup_import_path, probe_import_zip_bytes,
+    probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path,
+    promote_backup_save, read_import_archive_bytes, read_import_zip_bytes_settings,
+    read_import_zip_settings, reuse_backup_folder, save_backup_now, seven_zip_export_available,
+    sweep_unfinished, vault_list_item, BackupEntry, ExportInclude, ImportExtras, ImportZipProbe,
+    KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -169,7 +170,7 @@ struct VaultExportParams {
     /// `.upriv-config/` of a `.7z` or a plain-text `.zip` carries the vault settings.
     #[serde(default)]
     include_settings: bool,
-    /// The folder the export file goes into, named after the vault.
+    /// The folder the export file goes into, named after the vault and what it holds.
     dest_dir: String,
     /// Names this export for `job_status` and `job_cancel`.
     job: String,
@@ -293,10 +294,11 @@ struct AppShutdownParams {
 }
 
 /// A normal quit is closing vaults and the person chose Close now: stop every
-/// job that can still stop and hurry the closes. Returns at once; the quit
-/// already running finishes the Close now way.
+/// job that can still stop, hurry the closes, and stop waiting for wipes.
+/// Returns at once; the quit already running finishes the Close now way.
 pub fn hurry_shutdown() {
     stop_jobs_for_quit();
+    upriv_core::hurry_partial_wipes();
     if let Ok(Some(root)) = optional_vault_root() {
         upriv_core::hurry_quit(&root);
     }
@@ -327,7 +329,7 @@ pub fn shutdown_is_now(params: &Value) -> bool {
 pub(super) fn app_shutdown(params: Value) -> RpcResponse {
     let now = shutdown_is_now(&params);
     stop_jobs_for_quit();
-    match optional_vault_root() {
+    let response = match optional_vault_root() {
         Ok(Some(root)) => {
             let closed = if now {
                 close_all_vaults_now(&root)
@@ -341,7 +343,17 @@ pub(super) fn app_shutdown(params: Value) -> RpcResponse {
         }
         Ok(None) => ok(json!(null)),
         Err(response) => response,
+    };
+    // A normal quit waits for the plain-text file a stop left to be
+    // overwritten, as a close already running finishes first. Close now does
+    // not, also at the core's exit: what the wipe has not reached keeps its
+    // record for the next launch.
+    if now {
+        upriv_core::hurry_partial_wipes();
+    } else {
+        upriv_core::wait_for_partial_wipes();
     }
+    response
 }
 
 pub(super) fn vault_fs_list(params: Value) -> RpcResponse {
@@ -705,8 +717,17 @@ pub(super) fn vault_fs_move(params: Value) -> RpcResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultDeleteParams {
+    id: String,
+    /// Also remove what this vault wrote to its folder outside the data folder.
+    #[serde(default)]
+    outside_backups: bool,
+}
+
 pub(super) fn vault_delete(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
+    let parsed: VaultDeleteParams = match serde_json::from_value(params) {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
@@ -714,8 +735,11 @@ pub(super) fn vault_delete(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match delete_vault(&root, parsed.id.trim()) {
-        Ok(()) => ok(json!(null)),
+    match delete_vault(&root, parsed.id.trim(), parsed.outside_backups) {
+        Ok(outcome) => ok(json!({
+            "outside": outcome.outside.as_str(),
+            "folder": outcome.folder.map(|folder| folder.to_string_lossy().into_owned()),
+        })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1066,6 +1090,7 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
             };
             probe_logical_seven_zip(&bytes, archive_pw, job)
         }
+        .map(|probe| (probe.settings, Some(probe.vault_name)))
     } else if let Some(path) = path {
         if parse_backup_import_path(path).is_none() {
             match probe_import_zip_path(Path::new(path)) {
@@ -1076,7 +1101,7 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
                 Err(error) => return map_core_err(error),
             }
         }
-        read_import_zip_settings(&root, path)
+        read_import_zip_settings(&root, path).map(|store| (store.settings, store.vault_name))
     } else {
         let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
             Ok(bytes) => bytes,
@@ -1086,38 +1111,45 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
             Ok(probe) if probe.class == ZipImportClass::Files => {
                 return ok(files_zip_probe_body(&probe))
             }
-            Ok(_) => probe_store_zip(&bytes).and_then(|_| {
-                read_zip_config_toml(std::io::Cursor::new(bytes)).and_then(parse_optional_settings)
-            }),
+            Ok(_) => read_import_zip_bytes_settings(&bytes)
+                .map(|store| (store.settings, store.vault_name)),
             Err(error) => return map_core_err(error),
         }
     };
     match probed {
-        Ok(settings) => ok(probe_ok_body(kind, settings.as_ref())),
+        Ok((settings, vault_name)) => ok(probe_ok_body(
+            kind,
+            settings.as_ref(),
+            vault_name.as_deref(),
+        )),
         Err(upriv_core::UprivError::WrongPassword) => ok(json!({ "ok": false, "kind": kind })),
         Err(error) if kind == "seven_zip" => map_core_err(error),
         Err(_) => ok(json!({ "ok": false, "kind": kind })),
     }
 }
 
-fn parse_optional_settings(
-    bytes: Option<Vec<u8>>,
-) -> upriv_core::Result<Option<upriv_core::EmbeddedVaultSettings>> {
-    match bytes {
-        Some(bytes) => parse_embedded_settings(&bytes).map(Some),
-        None => Ok(None),
-    }
-}
-
 /// A `.zip` of readable files, with what its `.upriv-config/` carries.
 fn files_zip_probe_body(probe: &ImportZipProbe) -> Value {
-    let mut body = probe_ok_body("files_zip", probe.settings.as_ref());
+    let mut body = probe_ok_body(
+        "files_zip",
+        probe.settings.as_ref(),
+        probe.vault_name.as_deref(),
+    );
     body["carriesWorkspace"] = json!(probe.workspace);
     body
 }
 
-fn probe_ok_body(kind: &str, settings: Option<&upriv_core::EmbeddedVaultSettings>) -> Value {
+/// `vaultName` is the vault's own name, when the file knows it: an export's
+/// vault folder, or the name a backup's settings hold.
+fn probe_ok_body(
+    kind: &str,
+    settings: Option<&upriv_core::EmbeddedVaultSettings>,
+    vault_name: Option<&str>,
+) -> Value {
     let mut body = json!({ "ok": true, "kind": kind });
+    if let Some(name) = vault_name {
+        body["vaultName"] = json!(name);
+    }
     let Some(parsed) = settings else {
         return body;
     };
@@ -1159,9 +1191,13 @@ pub(super) fn backup_list(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match list_backups(&root, parsed.id.trim()) {
-        Ok(entries) => ok(json!({
-            "backups": entries.iter().map(backup_entry_json).collect::<Vec<_>>(),
+    match backup_listing(&root, parsed.id.trim()) {
+        Ok(listing) => ok(json!({
+            "backups": listing.entries.iter().map(backup_entry_json).collect::<Vec<_>>(),
+            "chosen": listing.chosen.map(|state| json!({
+                "path": state.path.to_string_lossy(),
+                "status": state.status.as_str(),
+            })),
         })),
         Err(error) => map_core_err(error),
     }
@@ -1174,10 +1210,57 @@ fn backup_entry_json(entry: &BackupEntry) -> Value {
         "createdAt": entry.created_at,
         "sizeBytes": entry.size_bytes,
         "saved": entry.saved,
+        "location": entry.location.as_str(),
+        "path": entry.path.to_string_lossy(),
     })
 }
 
-/// Zip the closed vault into `backups/saves/` now. Returns the new save, or
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackupFolderCheckParams {
+    path: String,
+    /// The vault that would use this folder as its own. Absent for the app default.
+    #[serde(default)]
+    vault: Option<String>,
+}
+
+/// What a folder typed into the settings can do right now.
+pub(super) fn backup_folder_check(params: Value) -> RpcResponse {
+    let parsed: BackupFolderCheckParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let path = parsed.path.trim();
+    if path.is_empty() {
+        return err("invalid_request", "path is required".into());
+    }
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let vault = parsed.vault.as_deref().map(str::trim);
+    let status = check_typed_backup_folder(&root, Path::new(path), vault);
+    ok(json!({ "status": status.as_str() }))
+}
+
+/// Use this vault's chosen folder again after its folder there went away.
+pub(super) fn backup_folder_reuse(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match reuse_backup_folder(&root, parsed.id.trim()) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Zip the closed vault into `saves/` where its backups go, now. Returns the
+/// new save and why it is in the data folder when it fell back, or
 /// `job_cancelled` when `job_cancel` stopped it first.
 pub(super) fn backup_save(params: Value) -> RpcResponse {
     let parsed: BackupSaveParams = match serde_json::from_value(params) {
@@ -1189,7 +1272,10 @@ pub(super) fn backup_save(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     match save_backup_now(&root, parsed.id.trim(), &parsed.job) {
-        Ok(entry) => ok(json!({ "backup": backup_entry_json(&entry) })),
+        Ok(saved) => ok(json!({
+            "backup": backup_entry_json(&saved.entry),
+            "fallback": saved.fell_back.map(|status| status.as_str()),
+        })),
         Err(error) => map_core_err(error),
     }
 }

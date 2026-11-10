@@ -1,4 +1,4 @@
-import type { VaultBackupEntry } from "../backups";
+import type { ChosenBackupFolder, VaultBackupEntry } from "../backups";
 import type { VaultListItem } from "../vault-list";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
 import type { WorkspaceSystem } from "../workspace";
@@ -24,6 +24,8 @@ export interface VaultInfoSnapshot {
   groupHidden: boolean;
   /** `null` while the list is read. */
   backups: VaultBackupEntry[] | null;
+  /** Null while this vault's backups go to the data folder. */
+  chosenBackups: ChosenBackupFolder | null;
   runtime: VaultRuntimeStats;
   passwordInSession: boolean;
   /** Resolved mount point when parent is known; shown even when vault is closed. */

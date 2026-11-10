@@ -416,6 +416,54 @@ fn stdio_a_quit_answers_job_status_while_it_closes_and_can_turn_into_close_now()
 }
 
 #[test]
+fn stdio_a_lost_index_is_rebuilt_from_its_blobs() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (mut child, mut stdin, mut stdout, _stderr) = daemon_with_open_vault(root.path());
+    let mut call = |id: u64, method: &str, params: serde_json::Value| {
+        let request = serde_json::json!({
+            "type": "request", "id": id, "method": method, "params": params
+        });
+        writeln!(stdin, "{request}").expect("write request");
+        stdin.flush().expect("flush stdin");
+        let response: serde_json::Value =
+            serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
+        response
+    };
+    let closed = call(20, "vault_close", serde_json::json!({ "id": "left-open" }));
+    assert_eq!(closed["ok"], true, "{closed}");
+    let index = root.path().join(".upriv/vaults/left-open/store/index");
+    std::fs::write(index.join("root.idx.enc"), b"torn").expect("break primary");
+    std::fs::write(index.join("root.idx.enc.copy"), b"torn").expect("break copy");
+
+    let open =
+        serde_json::json!({ "id": "left-open", "password": "pass-word-ok", "job": "stdio-reopen" });
+    let refused = call(21, "vault_open", open.clone());
+    assert_eq!(
+        refused["error"]["code"], "vault_index_unreadable",
+        "{refused}"
+    );
+    let rebuilt = call(
+        22,
+        "vault_rebuild",
+        serde_json::json!({ "id": "left-open", "password": "pass-word-ok", "job": "stdio-rebuild" }),
+    );
+    assert_eq!(rebuilt["ok"], true, "{rebuilt}");
+    assert_eq!(rebuilt["result"]["setAside"], 0, "{rebuilt}");
+    assert!(rebuilt["result"]["files"].as_u64().expect("files") >= 1);
+    let opened = call(23, "vault_open", open);
+    assert_eq!(opened["ok"], true, "{opened}");
+    let read = call(
+        24,
+        "vault_fs_read",
+        serde_json::json!({ "id": "left-open", "path": "/note.txt" }),
+    );
+    assert_eq!(read["result"]["contentB64"], "aGVsbG8=", "{read}");
+
+    child.kill().expect("kill daemon");
+    child.wait().expect("wait on daemon");
+}
+
+#[test]
 fn stdio_app_settings_save_rejects_flattened_shape() {
     let mut child = spawn_daemon();
     let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));

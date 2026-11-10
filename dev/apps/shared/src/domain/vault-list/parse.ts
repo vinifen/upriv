@@ -64,6 +64,7 @@ export function parseVaultListItemWire(raw: unknown): VaultListItem {
     note: typeof r.note === "string" ? r.note : "",
     unlockPreset: parseUnlockPreset(r.unlockPreset),
     plainLeftover: r.plainLeftover === true,
+    outsideBackups: r.outsideBackups === true,
   };
 }
 

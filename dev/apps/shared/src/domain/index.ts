@@ -20,6 +20,7 @@ export * from "./motion";
 export { delayMs } from "./timing/delay";
 export * from "./modal";
 export * from "./logs";
+export * from "./password-weakness";
 export * from "./vault";
 export * from "./vault-plain";
 export * from "./vault-create";

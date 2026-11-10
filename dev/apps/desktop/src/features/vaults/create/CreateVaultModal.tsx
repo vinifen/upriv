@@ -6,6 +6,7 @@ import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { useCreateVaultService, useJobService, useVaultRootService } from "@/platform/services";
 import {
   NO_VAULT_GROUPS,
+  PASSWORD_WEAKNESS_I18N_KEYS,
   vaultRootPathForWorkspaceValidation,
   type CreateVaultDraft,
   type CreateVaultResult,
@@ -15,6 +16,10 @@ import {
 import { useCreateVaultWizard } from "@upriv/shared/react";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { invalidateImportPicks, renderCreateVaultStep } from "./createVaultSteps";
+
+/** Above the buttons and out of the flow, so they stay exactly where they are. */
+const FOOTER_NOTICE_CLASS =
+  "absolute inset-x-0 bottom-full bg-surface-container-high pb-1.5 text-on-error-container";
 
 interface CreateVaultModalProps {
   open: boolean;
@@ -51,6 +56,7 @@ export function CreateVaultModal({
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [driverAttention, setDriverAttention] = useState(false);
+  const [backupFolderBlocking, setBackupFolderBlocking] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -120,6 +126,8 @@ export function CreateVaultModal({
     isLastStep,
     canCreate,
     discardConfirmOpen,
+    passwordWeakness,
+    footerPasswordWeakness,
     testingPassword,
     passwordTestStartedAt,
     patchDraft,
@@ -144,13 +152,17 @@ export function CreateVaultModal({
   }, [open]);
 
   const footer = (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="sm:min-w-0 sm:flex-1">
         <div className="text-sm" aria-live="polite">
           {discardConfirmOpen ? (
             <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
           ) : createError ? (
             <p className="text-on-error-container">{createError}</p>
+          ) : footerPasswordWeakness ? (
+            <p className={FOOTER_NOTICE_CLASS}>
+              {t(PASSWORD_WEAKNESS_I18N_KEYS[footerPasswordWeakness])}
+            </p>
           ) : null}
         </div>
         {!discardConfirmOpen ? (
@@ -177,7 +189,7 @@ export function CreateVaultModal({
               <Button
                 variant="primary"
                 size="md"
-                disabled={!canCreate || driverAttention}
+                disabled={!canCreate || driverAttention || backupFolderBlocking}
                 onClick={() => {
                   if (driverAttention) return;
                   setCreateError(null);
@@ -191,7 +203,12 @@ export function CreateVaultModal({
                 {t("vault.create.action.create")}
               </Button>
             ) : (
-              <Button variant="primary" size="md" onClick={handleNext}>
+              <Button
+                variant="primary"
+                size="md"
+                disabled={backupFolderBlocking}
+                onClick={handleNext}
+              >
                 {t("vault.create.action.next")}
               </Button>
             )}
@@ -220,7 +237,7 @@ export function CreateVaultModal({
         <div
           className="min-h-0 flex-1 overflow-y-auto p-1"
           onPointerDown={() => {
-            if (discardConfirmOpen) dismissFooterConfirm();
+            if (discardConfirmOpen || footerPasswordWeakness) dismissFooterConfirm();
           }}
         >
           {renderCreateVaultStep(currentStep, {
@@ -232,11 +249,14 @@ export function CreateVaultModal({
             existingDisplayNames,
             vaultRootPath,
             appWorkspace: appSettings.workspace,
+            appBackups: appSettings.backups,
             onDriverAttentionChange: setDriverAttention,
+            onBackupFolderBlockingChange: setBackupFolderBlocking,
             onTestImportPassword: handleTestImportPassword,
             onStopTestImportPassword: stopTestImportPassword,
             testingPassword,
             passwordTestStartedAt,
+            passwordWeakness,
             ...stepFocus,
           })}
         </div>

@@ -1,15 +1,20 @@
-import type { VaultBackupEntry } from "../../domain/backups";
+import type {
+  BackupFolderStatus,
+  VaultBackupListing,
+  VaultBackupSaved,
+} from "../../domain/backups";
 import type { VaultPathWriteResult } from "./createLiveBackupService";
 
 export interface BackupService {
-  listBackups(vaultId: string): Promise<VaultBackupEntry[]>;
+  listBackups(vaultId: string): Promise<VaultBackupListing>;
   deleteBackups(vaultId: string, stamps: readonly string[]): Promise<void>;
   promoteToSave(vaultId: string, stamp: string): Promise<void>;
   /**
-   * Zip the closed vault straight into Saves, as the job `job`. Refused while
-   * it is open or busy. Rejects with `job_cancelled` after `JobService.cancel`.
+   * Zip the closed vault straight into Saves where its backups go, as the job
+   * `job`. Refused while it is open or busy. Rejects with `job_cancelled` after
+   * `JobService.cancel`.
    */
-  saveNow(vaultId: string, job: string): Promise<VaultBackupEntry>;
+  saveNow(vaultId: string, job: string): Promise<VaultBackupSaved>;
   /**
    * Copy the backups named by `keys` (`backupEntryKey`) into the folder
    * `destDir`, as the job `job`: one keeps its file name, several become one
@@ -23,4 +28,11 @@ export interface BackupService {
     destDir: string,
     job: string,
   ): Promise<VaultPathWriteResult>;
+  /**
+   * What a folder typed into the settings can do right now. `vaultId` is the
+   * vault that would use it as its own; null is the app default.
+   */
+  checkFolder(path: string, vaultId: string | null): Promise<BackupFolderStatus>;
+  /** Use this vault's chosen folder again after its folder there went away. */
+  reuseFolder(vaultId: string): Promise<void>;
 }

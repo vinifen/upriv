@@ -64,6 +64,8 @@ import {
   type KdfUnlockPreset,
   type VaultListItem,
   type VaultRuntimePatch,
+  formatBytes,
+  vaultRebuildSpaceShort,
   vaultRowJobWork,
 } from "@upriv/shared";
 import {
@@ -89,6 +91,7 @@ import {
   useUnfinishedSweep,
   useVaultBackupJob,
   useVaultExportJob,
+  useVaultRebuildJob,
   useVaultRewrapJob,
   type VaultRewrapOutcome,
 } from "@upriv/shared/react";
@@ -516,6 +519,46 @@ export function useVaultListScreen() {
     onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
   });
   const rewrapJob = rewrap.job;
+  const vaultName = (vaultId: string) =>
+    vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
+  const rebuild = useVaultRebuildJob(securityService, jobs, {
+    onRebuilt: (result, { vaultId }, password) => {
+      // The new index is sealed and recorded: the vault is closed, not in recovery.
+      setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
+      const name = vaultName(vaultId);
+      show(
+        result.setAside > 0
+          ? t("toast.vault_rebuilt_set_aside", {
+              name,
+              files: result.files,
+              count: result.setAside,
+            })
+          : t("toast.vault_rebuilt", { name, files: result.files }),
+      );
+      // Ready to use: it opens with the password the rebuild ran with. The
+      // rebuild no longer holds it, though the list has not drawn that yet.
+      if (!password) return;
+      blockOpenVaultIdsRef.current.delete(vaultId);
+      lifecycle.openWithPassword(vaultId, password);
+    },
+    onFailed: (error, { vaultId }) => {
+      const space = vaultRebuildSpaceShort(error);
+      if (space) {
+        show(
+          t("toast.vault_rebuild_space_short", {
+            name: vaultName(vaultId),
+            needed: formatBytes(space.needed),
+            available: formatBytes(space.available),
+          }),
+        );
+        return;
+      }
+      show(t(mobileErrorI18nKey(error, "toast.vault_rebuild_failed")));
+    },
+    onCancelled: () => show(t("error.job_cancelled")),
+    onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
+  });
+  const rebuildJob = rebuild.job;
   const backupService = useBackupService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
@@ -540,6 +583,7 @@ export function useVaultListScreen() {
     [
       exportJob?.vaultId,
       rewrapJob?.vaultId,
+      rebuildJob?.vaultId,
       backupJob.job?.vaultId,
       ...(dataFolderExportJob ? vaults.map((vault) => vault.id) : []),
     ].filter((id): id is string => id != null),
@@ -553,6 +597,7 @@ export function useVaultListScreen() {
     dataFolderExportJob,
     exportJob,
     lifecycleRequest,
+    rebuildJob,
     rewrapJob,
     setLifecycleRequest,
   ]);
@@ -578,7 +623,7 @@ export function useVaultListScreen() {
   const backupNowJob = backupJob.job;
   const pipelineStatus = useMemo(() => {
     const rowWork = { ...lifecycle.rowWork };
-    for (const job of [exportJob, rewrapJob, backupNowJob]) {
+    for (const job of [exportJob, rewrapJob, rebuildJob, backupNowJob]) {
       if (!job) continue;
       rowWork[job.vaultId] = vaultRowJobWork({
         startedAt: job.startedAt,
@@ -593,7 +638,9 @@ export function useVaultListScreen() {
       exportingVaultIds: exportJob ? [exportJob.vaultId] : [],
       backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
       backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
-      recoveringVaultIds: lifecycle.plainRemoveJob ? [lifecycle.plainRemoveJob.vaultId] : undefined,
+      recoveringVaultIds: [lifecycle.plainRemoveJob, rebuildJob].flatMap((job) =>
+        job ? [job.vaultId] : [],
+      ),
       passwordChangeVaultIds: rewrapJob?.kind === "password" ? [rewrapJob.vaultId] : undefined,
       kdfChangeVaultIds: rewrapJob?.kind === "kdf" ? [rewrapJob.vaultId] : undefined,
       creatingVaultIds: [...lifecycle.creatingVaultIds],
@@ -617,6 +664,7 @@ export function useVaultListScreen() {
     lifecycle.openingVaultIds,
     lifecycle.queuedOpenVaultIds,
     lifecycle.queuedVaultIds,
+    rebuildJob,
     rewrapJob,
   ]);
 
@@ -626,10 +674,38 @@ export function useVaultListScreen() {
     (vaultId: string) => {
       if (exportJob?.vaultId === vaultId) vaultExport.stop();
       else if (rewrapJob?.vaultId === vaultId) rewrap.stop();
+      else if (rebuildJob?.vaultId === vaultId) rebuild.stop();
       else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
       else stopVaultWork(vaultId);
     },
-    [backupJob, backupNowJob, exportJob, rewrap, rewrapJob, stopVaultWork, vaultExport],
+    [
+      backupJob,
+      backupNowJob,
+      exportJob,
+      rebuild,
+      rebuildJob,
+      rewrap,
+      rewrapJob,
+      stopVaultWork,
+      vaultExport,
+    ],
+  );
+
+  /**
+   * Rebuild the lost index of the vault the unlock window shows, with the
+   * password typed there. The list owns the rebuild, so the window closes.
+   */
+  const { lifecycleVault, cancelLifecycle } = lifecycle;
+  const rebuildFromUnlock = useCallback(
+    (password: string) => {
+      if (!lifecycleVault) return;
+      if (!rebuild.rebuild(lifecycleVault.id, password)) {
+        show(t("toast.vault_rebuild_busy"));
+        return;
+      }
+      cancelLifecycle();
+    },
+    [cancelLifecycle, lifecycleVault, rebuild, show, t],
   );
 
   /** A file manager import runs in some vault. */
@@ -655,8 +731,8 @@ export function useVaultListScreen() {
             job: dataFolderExportJob,
             written: dataFolderExportWritten,
             clearWritten: clearDataFolderExportWritten,
-            onStart: (destDir, name) =>
-              dataFolderExportCanStart && startDataFolderExport(destDir, name),
+            onStart: (destDir, name, includeBackups) =>
+              dataFolderExportCanStart && startDataFolderExport(destDir, name, includeBackups),
             onStop: stopDataFolderExport,
           }
         : undefined,
@@ -1414,6 +1490,7 @@ export function useVaultListScreen() {
     closeCreate,
     pipelineStatus,
     stopRowWork,
+    rebuildFromUnlock,
     rewrapJob,
     rewrapOutcome,
     changePassword: rewrap.changePassword,

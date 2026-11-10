@@ -7,6 +7,7 @@ import {
   changeKdfFormIsDirty,
   changePasswordFormCanSubmit,
   changePasswordFormIsDirty,
+  vaultPublicText,
   createVaultErrorI18nKey,
   errorDisplayI18nKey,
   errorOnPasswordField,
@@ -60,6 +61,7 @@ import {
 } from "@/components/ui";
 import {
   useOperationLimit,
+  usePasswordWeakness,
   type VaultRewrapJob,
   type VaultRewrapOutcome,
 } from "@upriv/shared/react";
@@ -350,6 +352,21 @@ export function VaultSettingsModal({
     vaultListStatus,
     submitting: passwordRewrapRunning,
   });
+
+  const vaultText = useMemo(
+    () =>
+      vaultPublicText({
+        displayName: vault?.displayName ?? "",
+        passwordHint: baseline?.vault.password_hint ?? "",
+        note: baseline?.vault.note ?? "",
+      }),
+    [vault?.displayName, baseline?.vault.password_hint, baseline?.vault.note],
+  );
+  const passwordWeakness = usePasswordWeakness(
+    passwordFields.newPassword,
+    vaultText,
+    passwordFields.currentPassword,
+  );
 
   const kdfCanSubmit =
     headerUnlockPreset !== undefined &&
@@ -1199,6 +1216,7 @@ export function VaultSettingsModal({
               <FieldHint>{t("warning.password_change_backups")}</FieldHint>
               <VaultChangePasswordFields
                 fields={passwordFields}
+                weakness={passwordWeakness}
                 rewrapBlocked={rewrapBlocked && !passwordRewrapRunning}
                 busy={passwordRewrapRunning}
                 passwordFieldError={passwordFieldError}

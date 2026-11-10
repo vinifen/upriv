@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { InfoTranslate } from "../../info";
 import { createDefaultAppSettings } from "../../app-settings";
 import { appWorkspace } from "../../workspace";
+import { appBackupFolders } from "../../backups/folders";
 import { buildSystemInfoSections } from "../build";
 import type { SystemInfoSnapshot } from "../types";
 
@@ -20,6 +21,7 @@ function snapshot(overrides: Partial<SystemInfoSnapshot> = {}): SystemInfoSnapsh
       ...appWorkspace(),
       linux: { place: "custom", path: "/data/chosen" },
     },
+    backups: appBackupFolders(),
     workspaceSystem: "linux",
     lastOpenedVault: "notes",
     paths: { logsDir: "/data/.upriv/logs", logsOpenPath: "/data/.upriv/logs", appHome: "/data" },
@@ -131,6 +133,22 @@ describe("buildSystemInfoSections", () => {
       .find((field) => field.id === "workspace_global_path");
     expect(workspace?.value).toBe("—");
     expect(workspace?.openPath).toBeUndefined();
+  });
+
+  it("shows this system's default backup folder", () => {
+    const value = (backups: SystemInfoSnapshot["backups"]) =>
+      buildSystemInfoSections(snapshot({ backups }), t)
+        .flatMap((section) => section.fields)
+        .find((field) => field.id === "backups_default")?.value;
+    expect(value(appBackupFolders())).toBe("modal.app_settings.field.backups.data_folder");
+    expect(value({ ...appBackupFolders(), linux: { place: "custom", path: "/mnt/usb" } })).toBe(
+      "/mnt/usb",
+    );
+  });
+
+  it("has no default backup folder on a phone", () => {
+    const sections = buildSystemInfoSections(snapshot({ workspaceSystem: "android" }), t);
+    expect(fieldIds(sections)).not.toContain("backups_default");
   });
 
   it("attaches open paths for absolute locations", () => {

@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createEmptyCreateVaultDraft } from "../defaults";
 import {
   applyEmbeddedVaultSettings,
+  applyImportVaultName,
   parseEmbeddedVaultSettings,
+  revertEmbeddedVaultSettings,
 } from "../applyEmbeddedVaultSettings";
 import type { VaultSettingsConfig } from "../../vault-settings";
 import { vaultWorkspace } from "../../workspace";
+import { vaultBackupFolders } from "../../backups/folders";
 
 function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig {
   return {
@@ -23,7 +26,13 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       custom_file_manager_folder: true,
       linux: { place: "unset", path: "/data/vaults" },
     },
-    backup: { enabled: false, mode: "keep_all", keep_last: 3, skip_unchanged: false },
+    backup: {
+      enabled: false,
+      mode: "keep_all",
+      keep_last: 3,
+      skip_unchanged: false,
+      ...vaultBackupFolders(),
+    },
     security: {
       wipe_passes: 2,
       wipe_pattern: "zeros",
@@ -82,7 +91,13 @@ describe("applyEmbeddedVaultSettings", () => {
   it("keeps a backup mode the user already changed", () => {
     const snapshot = {
       ...createEmptyCreateVaultDraft([]),
-      backup: { enabled: true, mode: "keep_all" as const, keep_last: 1, skip_unchanged: true },
+      backup: {
+        enabled: true,
+        mode: "keep_all" as const,
+        keep_last: 1,
+        skip_unchanged: true,
+        ...vaultBackupFolders(),
+      },
     };
     const draft = {
       ...snapshot,
@@ -98,6 +113,24 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.backup.mode).toBe("keep_last");
     expect(next.note).toBe("tax year");
     expect(next.archiveUnlockPreset).toBe("1gib");
+  });
+
+  it("remembers the backup folders a file carried, and lets go of them with its settings", () => {
+    const snapshot = createEmptyCreateVaultDraft([]);
+    const folder = { place: "custom" as const, path: "/mnt/usb" };
+    const applied = applyEmbeddedVaultSettings(
+      snapshot,
+      {
+        settings: settings({ backup: { ...settings().backup, linux: folder } }),
+        unlockPreset: null,
+      },
+      snapshot,
+    );
+    expect(applied.carriedBackupFolders?.linux).toEqual(folder);
+    expect(applied.backup.linux).toEqual(folder);
+
+    const reverted = revertEmbeddedVaultSettings(applied, applied, snapshot);
+    expect(reverted.carriedBackupFolders).toBeNull();
   });
 
   it("does not change KDF for a store zip", () => {
@@ -120,22 +153,50 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.archiveUnlockPreset).toBe("2gib");
   });
 
-  it("uses the archive vault name and suffixes a taken name", () => {
+  it("leaves the name to the file's vault folder", () => {
     const draft = {
       ...createEmptyCreateVaultDraft([]),
       source: "import" as const,
       importKind: "file" as const,
-      importFileName: "export.zip",
-      importFilePath: "/tmp/export.zip",
-      displayName: "export",
+      importFileName: "test-plain-text.zip",
+      importFilePath: "/tmp/test-plain-text.zip",
+      displayName: "test-plain-text",
     };
     const next = applyEmbeddedVaultSettings(
       draft,
       { settings: settings(), unlockPreset: null },
       draft,
-      ["Notes"],
     );
-    expect(next.displayName).toBe("Notes 2");
+    expect(next.displayName).toBe("test-plain-text");
+  });
+});
+
+describe("applyImportVaultName", () => {
+  const draft = {
+    ...createEmptyCreateVaultDraft([]),
+    source: "import" as const,
+    importKind: "file" as const,
+    importFileName: "test-plain-text-2.zip",
+    importFilePath: "/tmp/test-plain-text-2.zip",
+    displayName: "test-plain-text-2",
+  };
+
+  it("names the vault after its folder, whatever the file is called", () => {
+    expect(applyImportVaultName(draft, "test", draft, []).displayName).toBe("test");
+  });
+
+  it("suffixes a taken name", () => {
+    expect(applyImportVaultName(draft, "Notes", draft, ["Notes"]).displayName).toBe("Notes 2");
+  });
+
+  it("keeps a name typed since the file was chosen", () => {
+    const typed = { ...draft, displayName: "Mine" };
+    expect(applyImportVaultName(typed, "test", draft, [])).toBe(typed);
+  });
+
+  it("leaves a vault made from a backup with its own name", () => {
+    const backup = { ...draft, importKind: "backup" as const, displayName: "Notes backup" };
+    expect(applyImportVaultName(backup, "Notes", backup, [])).toBe(backup);
   });
 });
 

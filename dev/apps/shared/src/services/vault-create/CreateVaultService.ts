@@ -4,6 +4,12 @@ import type { ImportZipClassification } from "../../domain/vault-create/zipClass
 export interface ImportPackageProbe {
   ok: boolean;
   embedded: EmbeddedVaultSettings | null;
+  /**
+   * The name the new vault takes: the name the `.7z`'s settings hold, as the
+   * person typed it, or else its package's vault folder, the id of the vault
+   * it came from.
+   */
+  vaultName: string | null;
 }
 
 /** Create-vault wizard platform hooks (import package probe). */

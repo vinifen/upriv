@@ -1,3 +1,4 @@
+import { vaultBackupFolders } from "../backups/folders";
 import { DEFAULT_KDF_UNLOCK_PRESET, DEFAULT_SEVEN_ZIP } from "../vault-settings";
 import { vaultWorkspace } from "../workspace";
 import type { CreateVaultDraft } from "./types";
@@ -44,7 +45,9 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
       mode: "keep_last",
       keep_last: 1,
       skip_unchanged: true,
+      ...vaultBackupFolders(),
     },
+    carriedBackupFolders: null,
     kdf: { unlock_preset: DEFAULT_KDF_UNLOCK_PRESET },
     archiveUnlockPreset: null,
     storage: { mode: "encrypted_dir", plain_files: "chosen" },

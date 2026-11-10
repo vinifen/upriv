@@ -5,6 +5,7 @@
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 mod backup;
+mod backup_folder;
 mod config_folder;
 mod create;
 mod data_folder_export;
@@ -19,10 +20,12 @@ mod import_job;
 mod import_slots;
 mod open_close;
 mod os_import;
+mod package;
 mod partial;
 mod persistence;
 mod plain;
 mod plain_zip;
+mod rebuild;
 mod rename;
 mod rewrap;
 mod seven_zip;
@@ -43,14 +46,17 @@ use crate::session::is_vault_open_at;
 use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
 
 pub use backup::{
-    backup_zip_file, delete_backups, export_backups, list_backups, promote_backup_save,
-    save_backup_now, BackupEntry,
+    backup_listing, backup_zip_file, delete_backups, export_backups, list_backups,
+    promote_backup_save, reuse_backup_folder, save_backup_now, BackupEntry, BackupListing,
+    BackupLocation, ChosenFolderState, SavedBackup,
 };
+pub use backup_folder::{check_typed_backup_folder, BackupFolderStatus};
+pub(crate) use backup_folder::{refuse_app_backup_overlap, refuse_vault_backup_overlap};
 pub use config_folder::{ExportInclude, ImportExtras};
 pub use create::{create_vault, create_vault_as_job};
 pub use data_folder_export::{export_data_folder, DataFolderExport};
-pub use delete::delete_vault;
-pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
+pub use delete::{delete_vault, OutsideBackups, VaultDeleteOutcome};
+pub use embedded_settings::EmbeddedVaultSettings;
 pub use export::{export_logical_seven_zip, export_plain_zip, export_store_zip};
 pub use export_folder::ExportedFile;
 pub use files_zip::{
@@ -65,7 +71,8 @@ pub use fs::{
 };
 pub use import::{
     import_store_from_archive_path, import_store_zip, parse_backup_import_path,
-    read_import_archive_bytes, read_import_zip_settings,
+    read_import_archive_bytes, read_import_zip_bytes_settings, read_import_zip_settings,
+    StoreZipSettings,
 };
 pub use import_slots::{import_slots, import_slots_for};
 pub use open_close::{
@@ -78,6 +85,7 @@ pub use os_import::{
     abort_import_vault, finish_import_session, import_logical_os_path, ingest_import_directory,
     ingest_import_reader, open_import_session,
 };
+pub use partial::{hurry_partial_wipes, wait_for_partial_wipes};
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub(crate) use plain::{ensure_no_leftover, holds_leftover, PlainSession};
 pub use plain::{
@@ -86,16 +94,16 @@ pub use plain::{
     PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
     PlainTotals, PlainUnsend, PlainWipe,
 };
+pub use rebuild::{rebuild_vault, VaultRebuild};
 pub use rename::{rename_vault, VaultRenameResult};
 pub use rewrap::{change_vault_kdf, change_vault_password};
 pub use seven_zip::{
     import_logical_seven_zip, import_logical_seven_zip_path, probe_logical_seven_zip,
-    probe_logical_seven_zip_path,
+    probe_logical_seven_zip_path, SevenZipProbe,
 };
 pub use seven_zip_pack::seven_zip_export_available;
 pub use unfinished::sweep_unfinished;
 pub use welcome::{VaultWelcome, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH};
-pub use zip_io::{probe_store_zip, read_zip_config_toml};
 
 /// Wire DTO for `vault_list`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +121,9 @@ pub struct VaultListItem {
     /// A plaintext folder from an earlier session waits to be removed. Its
     /// folder path, mode, and name are locked until then.
     pub plain_leftover: bool,
+    /// Backups of this vault went to the folder it uses now outside the data
+    /// folder. Read from the vault's own files, with no drive access.
+    pub outside_backups: bool,
 }
 
 /// One vault under a vault-root (scan row before session/header enrichment).
@@ -247,9 +258,11 @@ fn listed_persistence(
 /// a backup unpacked over the live one) uses the same recovery session as a dirty
 /// close. Unlock still opens that `store/`; the next close records its hash.
 ///
-/// A missing hash, or a read error while hashing, is not a mismatch. Chunk files
-/// are not part of the hash. An open session stays `open` — this only applies
-/// while the vault is closed, which is what the open action reads.
+/// Both index files gone under a header that is there is a different store
+/// too: the open that follows finds the index lost and offers the rebuild.
+/// A missing hash, or any other read error while hashing, is not a mismatch.
+/// Chunk files are not part of the hash. An open session stays `open` — this
+/// only applies while the vault is closed, which is what the open action reads.
 fn content_hash_mismatch(vault_dir: &Path, saved: Option<&str>) -> bool {
     let Some(saved) = saved else {
         return false;
@@ -257,7 +270,7 @@ fn content_hash_mismatch(vault_dir: &Path, saved: Option<&str>) -> bool {
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     match content_hash_hex(&store) {
         Ok(now) => now != saved,
-        Err(_) => false,
+        Err(_) => crate::store::index_files_missing(&store),
     }
 }
 
@@ -286,6 +299,13 @@ fn list_item_from_entry(
     // Every leftover is a dirty close, so a clean vault pays for no state read.
     let plain_leftover =
         session != Some("open") && dirty.contains(&entry.id) && holds_leftover(root, &entry.id);
+    // Almost no vault has any, so the settings are read only for one that does.
+    let outside_backups = saved
+        .as_ref()
+        .is_some_and(VaultPersistence::has_outside_backups)
+        && backup_folder::backup_places(root, &entry.id, &entry.vault_dir)
+            .chosen
+            .is_some();
     VaultListItem {
         id: entry.id.clone(),
         display_name: entry.display_name.clone(),
@@ -298,6 +318,7 @@ fn list_item_from_entry(
         last_accessed_at,
         unlock_preset,
         plain_leftover,
+        outside_backups,
     }
 }
 

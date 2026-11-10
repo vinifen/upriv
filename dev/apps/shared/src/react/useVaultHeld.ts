@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { heldSummary, type HeldItem, type HeldSummary } from "../domain";
 import type { VaultFileSystemService } from "../services";
 
@@ -11,9 +11,15 @@ export interface VaultHeld {
   show: (open: boolean) => void;
   /** Names a put back or a delete is working on. */
   working: ReadonlySet<string>;
-  /** Put these files back. Resolves to where they are now; null once a failure was reported. */
+  /**
+   * Put these files back. Resolves to where they are now; null once a failure
+   * was reported, or when every one is already being put back or deleted.
+   */
   restore: (names: string[]) => Promise<string[] | null>;
-  /** Delete these items for good. False once a failure was reported. */
+  /**
+   * Delete these items for good. False once a failure was reported, or when
+   * every one is already being put back or deleted.
+   */
   remove: (names: string[]) => Promise<boolean>;
 }
 
@@ -72,11 +78,16 @@ export function useVaultHeld(
     if (next) setReads((count) => count + 1);
   }, []);
 
+  /** Names in flight now, so a second press before the answer asks for nothing twice. */
+  const busyRef = useRef(new Set<string>());
   const run = useCallback(
-    async <T>(names: string[], call: () => Promise<T & { revision: number }>) => {
-      setWorking((prev) => new Set([...prev, ...names]));
+    async <T>(names: string[], call: (names: string[]) => Promise<T & { revision: number }>) => {
+      const fresh = names.filter((name) => !busyRef.current.has(name));
+      if (fresh.length === 0) return null;
+      for (const name of fresh) busyRef.current.add(name);
+      setWorking((prev) => new Set([...prev, ...fresh]));
       try {
-        const done = await call();
+        const done = await call(fresh);
         mutated(done.revision);
         return done;
       } catch (error) {
@@ -84,7 +95,8 @@ export function useVaultHeld(
         await synced().catch(() => undefined);
         return null;
       } finally {
-        setWorking((prev) => new Set([...prev].filter((name) => !names.includes(name))));
+        for (const name of fresh) busyRef.current.delete(name);
+        setWorking((prev) => new Set([...prev].filter((name) => !fresh.includes(name))));
         setReads((count) => count + 1);
       }
     },
@@ -93,13 +105,14 @@ export function useVaultHeld(
 
   const restore = useCallback(
     async (names: string[]) =>
-      (await run(names, () => fs.restoreHeld(vaultId, names)))?.paths ?? null,
+      (await run(names, (fresh) => fs.restoreHeld(vaultId, fresh)))?.paths ?? null,
     [fs, run, vaultId],
   );
 
   const remove = useCallback(
     async (names: string[]) =>
-      (await run(names, async () => ({ revision: await fs.deleteHeld(vaultId, names) }))) !== null,
+      (await run(names, async (fresh) => ({ revision: await fs.deleteHeld(vaultId, fresh) }))) !==
+      null,
     [fs, run, vaultId],
   );
 

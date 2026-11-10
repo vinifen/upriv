@@ -11,6 +11,7 @@
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
+mod backup_place;
 mod distribution;
 pub(crate) mod fs_env;
 mod init;
@@ -19,6 +20,11 @@ mod resolve;
 mod slug_alloc;
 mod workspace;
 
+pub use backup_place::{
+    own_backups_folder, resolve_chosen_backup_folder, shared_backups_folder, BackupFolderRow,
+    BackupFolderTable, BackupPlace, ChosenBackupFolder, VaultBackupFolderRow, VaultBackupPlace,
+    SHARED_BACKUPS_FOLDER,
+};
 pub use distribution::{
     default_vault_root_anchor, default_vault_root_anchor_for, detect_app_distribution,
     distribution_str, env_app_distribution, infer_app_distribution, init_app_distribution,
@@ -45,6 +51,7 @@ pub use resolve::{
     ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
 pub use slug_alloc::display_name_to_vault_id;
+pub(crate) use workspace::paths_equal_or_under_casefold;
 pub use workspace::{
     app_workspace_place, encrypted_shortcut_active, is_absolute_filesystem_path,
     is_absolute_workspace_address, is_reserved_upriv_workspace_path,
@@ -528,14 +535,10 @@ pub(crate) fn sanitize_display_leaf(name: &str) -> String {
     }
 }
 
-/// Outer folder inside a portable `.7z`. Same rules as the export file name.
-pub(crate) fn seven_zip_outer_folder(display_name: &str) -> String {
-    sanitize_filename_base(display_name)
-}
-
-/// The name a vault export file starts from, before its extension: the
-/// display name kept recognizable (`vaultExportFilename` in `@upriv/shared`).
-pub(crate) fn vault_export_file_stem(display_name: &str) -> String {
+/// The vault's folder inside an archive package, and the start of its export
+/// file name: the display name kept recognizable (`vaultFolderName` in
+/// `@upriv/shared`).
+pub(crate) fn vault_folder_name(display_name: &str) -> String {
     sanitize_filename_base(display_name)
 }
 
@@ -688,21 +691,15 @@ mod tests {
     }
 
     #[test]
-    fn seven_zip_outer_folder_sanitizes_and_defaults() {
-        assert_eq!(seven_zip_outer_folder("My notes"), "My notes");
-        assert_eq!(seven_zip_outer_folder("a/b:c"), "a_b_c");
-        assert_eq!(seven_zip_outer_folder("Notes: 2026"), "Notes_ 2026");
-        assert_eq!(seven_zip_outer_folder("a\u{7f}b"), "a_b");
-        assert_eq!(seven_zip_outer_folder("  "), "vault");
-        assert_eq!(seven_zip_outer_folder("CON"), "vault");
-        assert_eq!(seven_zip_outer_folder("My    notes"), "My notes");
-    }
-
-    #[test]
-    fn the_export_file_is_named_after_the_vault() {
-        assert_eq!(vault_export_file_stem("Notes: 2026"), "Notes_ 2026");
-        assert_eq!(vault_export_file_stem("My notes"), "My notes");
-        assert_eq!(vault_export_file_stem("NUL"), "vault");
+    fn the_vault_folder_keeps_the_name_a_system_can_hold() {
+        assert_eq!(vault_folder_name("My notes"), "My notes");
+        assert_eq!(vault_folder_name("a/b:c"), "a_b_c");
+        assert_eq!(vault_folder_name("Notes: 2026"), "Notes_ 2026");
+        assert_eq!(vault_folder_name("a\u{7f}b"), "a_b");
+        assert_eq!(vault_folder_name("  "), "vault");
+        assert_eq!(vault_folder_name("CON"), "vault");
+        assert_eq!(vault_folder_name("NUL"), "vault");
+        assert_eq!(vault_folder_name("My    notes"), "My notes");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { backupEntryKey, type VaultBackupEntry } from "../domain";
+import { backupEntryKey, type ChosenBackupFolder, type VaultBackupEntry } from "../domain";
 import type { BackupService } from "../services";
 
 export function useVaultBackups(
@@ -10,6 +10,7 @@ export function useVaultBackups(
   refreshToken = 0,
 ) {
   const [backups, setBackups] = useState<VaultBackupEntry[]>([]);
+  const [chosen, setChosen] = useState<ChosenBackupFolder | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -27,6 +28,7 @@ export function useVaultBackups(
   const reload = useCallback(async () => {
     if (!vaultId) {
       setBackups([]);
+      setChosen(null);
       setError(null);
       setIsLoading(false);
       return;
@@ -35,9 +37,10 @@ export function useVaultBackups(
     setIsLoading(true);
     setError(null);
     try {
-      const list = await backupService.listBackups(vaultId);
+      const listing = await backupService.listBackups(vaultId);
       if (requestId !== requestIdRef.current) return;
-      setBackups(list);
+      setBackups(listing.backups);
+      setChosen(listing.chosen);
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       setError(err);
@@ -54,11 +57,13 @@ export function useVaultBackups(
     if (!open || !vaultId) {
       invalidate();
       setBackups([]);
+      setChosen(null);
       setError(null);
       setIsLoading(false);
       return;
     }
     setBackups([]);
+    setChosen(null);
     setError(null);
     void reload().catch(() => undefined);
     return () => {
@@ -128,13 +133,22 @@ export function useVaultBackups(
     [backupService, reload, vaultId],
   );
 
+  /** Use the chosen folder again after its folder there went away, then read it. */
+  const reuseFolder = useCallback(async () => {
+    if (!vaultId) return;
+    await backupService.reuseFolder(vaultId);
+    await reload();
+  }, [backupService, reload, vaultId]);
+
   return {
     backups,
+    chosen,
     isLoading,
     isBusy,
     error,
     deleteBackups,
     promoteToSave,
     resetBackups: reload,
+    reuseFolder,
   };
 }

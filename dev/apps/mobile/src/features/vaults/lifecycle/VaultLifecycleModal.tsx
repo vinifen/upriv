@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import {
   lifecycleBusyLabelKey,
+  offersVaultRebuild,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
   vaultRowWorkClock,
@@ -29,9 +30,18 @@ interface VaultLifecycleModalProps {
   onClose: () => void;
   onConfirm: (password: string) => void;
   onStop: () => void;
+  /**
+   * The unlock found the vault's index lost: rebuild it with the password
+   * typed. The vault list runs the rebuild, so the window closes.
+   */
+  onRebuild: (password: string) => void;
 }
 
-/** Unlock password dialog. Lock starts the close without a dialog. */
+/**
+ * Unlock password dialog. Lock starts the close without a dialog. When the
+ * password opens the vault but its index is lost, the dialog offers the
+ * rebuild from the vault's own data.
+ */
 export function VaultLifecycleModal({
   vault,
   open,
@@ -43,6 +53,7 @@ export function VaultLifecycleModal({
   onClose,
   onConfirm,
   onStop,
+  onRebuild,
 }: VaultLifecycleModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -87,6 +98,8 @@ export function VaultLifecycleModal({
 
   const canSubmit = !submitting && lifecycleService.validateLifecyclePassword(password);
   const passwordHint = resolveVaultPasswordHint(vault);
+  // Shown for the password that found the index lost; editing it hides the offer.
+  const rebuildOffered = !submitting && error !== null && offersVaultRebuild(verifyErrorKey);
 
   return (
     <Modal
@@ -104,6 +117,12 @@ export function VaultLifecycleModal({
               stoppingSince={work.stoppingSince}
               stoppable={work.stop !== "final"}
               onStop={onStop}
+            />
+          ) : rebuildOffered ? (
+            <Button
+              label={t("unlock.rebuild")}
+              variant="primary"
+              onPress={() => onRebuild(password)}
             />
           ) : (
             <Button
@@ -147,6 +166,11 @@ export function VaultLifecycleModal({
 
       {error ? (
         <Text style={[typography.body, { color: colors.onErrorContainer }]}>{error}</Text>
+      ) : null}
+      {rebuildOffered ? (
+        <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
+          {t("unlock.rebuild_help")}
+        </Text>
       ) : null}
 
       {submitting ? (

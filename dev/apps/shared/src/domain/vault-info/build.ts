@@ -1,4 +1,4 @@
-import { backupEntryFileName, type VaultBackupEntry } from "../backups";
+import { backupEntryFileName, backupFolderStatusI18nKey, type VaultBackupEntry } from "../backups";
 import { workspaceSystemHasShortcut } from "../workspace";
 import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
@@ -65,6 +65,7 @@ export function buildVaultInfoSections(
     groupName,
     groupHidden,
     backups,
+    chosenBackups,
     runtime,
     passwordInSession,
     workspacePath,
@@ -181,6 +182,23 @@ export function buildVaultInfoSections(
       { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
       backupsOpenPath,
     ),
+    ...(chosenBackups
+      ? [
+          withOpenPath(
+            {
+              id: "backups_chosen_path",
+              label: t("modal.info.field.backups_chosen_path"),
+              value: chosenBackups.path,
+            },
+            chosenBackups.path,
+          ),
+          {
+            id: "backups_chosen_status",
+            label: t("modal.info.field.backups_chosen_status"),
+            value: t(backupFolderStatusI18nKey(chosenBackups.status)),
+          },
+        ]
+      : []),
     withOpenPath(
       {
         id: "workspace_path",

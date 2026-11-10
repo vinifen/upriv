@@ -16,7 +16,7 @@ pub(crate) struct WriteFailureClass {
 pub(crate) fn classify_write_failure(error: &UprivError) -> WriteFailureClass {
     let kind = match error {
         UprivError::Io(_) => "io",
-        UprivError::VaultStoreInvalid { .. } => "store",
+        UprivError::VaultStoreInvalid { .. } | UprivError::VaultIndexUnreadable { .. } => "store",
         UprivError::VaultConfigInvalid { .. } => "config",
         UprivError::VaultPathNotFound(_) => "path",
         _ => "other",
@@ -82,12 +82,15 @@ fn text_names_code(detail: &str, codes: &[i32]) -> bool {
     os_code_in_text(detail).is_some_and(|code| codes.contains(&code))
 }
 
-fn io_is_disk_full(error: &std::io::Error) -> bool {
+pub(crate) fn io_is_disk_full(error: &std::io::Error) -> bool {
     error.kind() == ErrorKind::StorageFull || text_is_disk_full(&error.to_string())
 }
 
-fn io_is_permission(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::PermissionDenied || text_is_permission(&error.to_string())
+pub(crate) fn io_is_permission(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+    ) || text_is_permission(&error.to_string())
 }
 
 fn text_is_disk_full(detail: &str) -> bool {
@@ -102,6 +105,7 @@ fn text_is_permission(detail: &str) -> bool {
     let lower = detail.to_ascii_lowercase();
     lower.contains("permission denied")
         || lower.contains("access is denied")
+        || lower.contains("read-only file system")
         || text_names_code(&lower, PERMISSION_CODES)
 }
 

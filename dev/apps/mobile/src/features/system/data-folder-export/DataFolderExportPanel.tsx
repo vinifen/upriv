@@ -9,7 +9,7 @@ import {
   fileNameOfPath,
 } from "@upriv/shared";
 import { ExportFolderField } from "@/components/ExportFolderField";
-import { FieldHint, FieldLabel, ThemedInput } from "@/components/settings";
+import { FieldHint, FieldLabel, SwitchRow, ThemedInput } from "@/components/settings";
 import { JobProgressBar } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -94,6 +94,12 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
             ) : null}
           </View>
           <ExportFolderField folder={destination.folder} />
+          <SwitchRow
+            value={destination.includeBackups}
+            onValueChange={destination.setIncludeBackups}
+            label={t("modal.data_folder_export.include_backups")}
+            hint={t("modal.data_folder_export.include_backups_help")}
+          />
           {written ? (
             <Text
               accessibilityRole="text"

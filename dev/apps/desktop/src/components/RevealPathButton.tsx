@@ -10,10 +10,13 @@ import { rpcRevealOsPath } from "@/lib/rpc";
 export function RevealPathButton({
   path,
   inset = false,
+  row = false,
 }: {
   path: string | null | undefined;
   /** Fills the path field’s height so the hit target is the whole right edge. */
   inset?: boolean;
+  /** Sits among a list row's action buttons. */
+  row?: boolean;
 }) {
   const { t } = useTranslation();
   const { toast, show, dismiss } = useToast();
@@ -37,6 +40,16 @@ export function RevealPathButton({
         >
           <Icon name="file-manager" size={18} />
         </button>
+      ) : row ? (
+        <IconButton
+          label={label}
+          size="row"
+          variant="row-action"
+          className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+          onClick={() => void open()}
+        >
+          <Icon name="file-manager" size={18} />
+        </IconButton>
       ) : (
         <IconButton label={label} size="md" variant="ghost" onClick={() => void open()}>
           <Icon name="file-manager" size={18} />

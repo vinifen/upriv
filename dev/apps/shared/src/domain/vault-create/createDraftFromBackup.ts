@@ -1,4 +1,4 @@
-import { backupEntryFileName, backupEntryKey } from "../backups";
+import { backupEntryFileName, backupEntryKey, type BackupLocation } from "../backups";
 import { backupVaultDisplayName } from "../vault/displayName";
 import { createEmptyCreateVaultDraft } from "./defaults";
 import type { CreateVaultDraft } from "./types";
@@ -21,12 +21,13 @@ export function createDraftFromBackup(
   sourceGroupId?: string | null,
   snapshotFileName?: string,
   saved = false,
+  location: BackupLocation = "data_folder",
 ): CreateVaultDraft {
   const draft = createEmptyCreateVaultDraft(existingOrders);
   const displayName = backupVaultDisplayName(sourceDisplayName, existingDisplayNames);
   const groupId = sourceGroupId?.trim() ?? "";
   const fileName = backupEntryFileName({ stamp, fileName: snapshotFileName }, sourceVaultId);
-  const key = backupEntryKey({ stamp, fileName: snapshotFileName, saved }, sourceVaultId);
+  const key = backupEntryKey({ stamp, fileName: snapshotFileName, saved, location }, sourceVaultId);
 
   return {
     ...draft,

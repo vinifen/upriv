@@ -13,6 +13,7 @@ import {
   CREATE_VAULT_STEPS,
   createEmptyCreateVaultDraft,
   createVaultImportNeedsArchivePassword,
+  createVaultSetsPassword,
   createVaultWizardInitialState,
   createVaultWizardReducer,
   firstInvalidCreateVaultField,
@@ -21,6 +22,7 @@ import {
   MODAL_OPEN_MS,
   newJobId,
   NO_VAULT_GROUPS,
+  ROW_ROLE_GUARD_MS,
   resolveCreateVaultCloseIntent,
   resolveCreateVaultFocusTarget,
   resolveCreateVaultNextKeyField,
@@ -30,6 +32,7 @@ import {
   shouldSelectCreateVaultFocusText,
   validateCreateVaultStep,
   VAULT_ERROR_CODES,
+  vaultPublicText,
   type CreateVaultDraft,
   type EmbeddedSettingsSnapshot,
   type EmbeddedVaultSettings,
@@ -39,7 +42,9 @@ import {
   type CreateVaultStepId,
   type VaultGroup,
 } from "../domain";
+import type { ImportPackageProbe } from "../services/vault-create/CreateVaultService";
 import { scheduleAnimationFrame, scheduleTimeout } from "./schedule";
+import { usePasswordWeakness } from "./usePasswordWeakness";
 
 /** Web inputs expose `select()`; React Native `TextInput` only has `focus()`. */
 export type CreateVaultFocusableField = {
@@ -78,7 +83,7 @@ export interface UseCreateVaultWizardOptions {
     password: string,
     importFile: { path: string; fileName: string; kind?: "file" | "backup" },
     job: string,
-  ) => Promise<{ ok: boolean; embedded: EmbeddedVaultSettings | null }>;
+  ) => Promise<ImportPackageProbe>;
   /** Ask core to stop the job `job` (`job_cancel`). */
   stopJob: (job: string) => Promise<void>;
   /** Classify a `.zip` and load the settings it carries. A `.7z` waits for its password. */
@@ -124,6 +129,16 @@ export function useCreateVaultWizard<
     [existingVaultIds, groups, vaultRootPath],
   );
   const view = useMemo(() => selectCreateVaultWizardView(state, context), [state, context]);
+
+  const setsPassword = createVaultSetsPassword(state.draft);
+  const { password, displayName, passwordHint, note } = state.draft;
+  const vaultText = useMemo(
+    () => vaultPublicText({ displayName, passwordHint, note }),
+    [displayName, passwordHint, note],
+  );
+  const passwordWeakness = usePasswordWeakness(setsPassword ? password : "", vaultText);
+  /** When the footer notice appeared: the second half of a double click must not answer it. */
+  const weaknessNoticeAt = useRef(0);
 
   const fieldRefs = useRef<Partial<Record<CreateVaultFocusField, TField>>>({});
   const lastFocusByStep = useRef<Partial<Record<CreateVaultStepId, CreateVaultFocusField>>>({});
@@ -232,13 +247,16 @@ export function useCreateVaultWizard<
           rejected: false,
           carriesWorkspace: classified.carriesWorkspace,
         });
-        if (classified.embedded) {
+        if (classified.vaultName) {
           dispatch({
-            type: "embeddedSettings",
-            embedded: classified.embedded,
+            type: "vaultNamed",
+            vaultName: classified.vaultName,
             snapshot: draft,
             existingDisplayNames: existingDisplayNamesRef.current,
           });
+        }
+        if (classified.embedded) {
+          dispatch({ type: "embeddedSettings", embedded: classified.embedded, snapshot: draft });
         }
       })
       .catch((error: unknown) => {
@@ -289,7 +307,7 @@ export function useCreateVaultWizard<
   }, [context]);
 
   const dismissFooterConfirm = useCallback(() => {
-    dispatch({ type: "discardConfirmDismissed" });
+    dispatch({ type: "footerMessageDismissed" });
   }, []);
 
   const handleTestImportPassword = useCallback(() => {
@@ -303,6 +321,7 @@ export function useCreateVaultWizard<
     void (async () => {
       let ok = false;
       let embedded: EmbeddedVaultSettings | null = null;
+      let vaultName: string | null = null;
       let unavailable = false;
       let stopped = false;
       try {
@@ -317,6 +336,7 @@ export function useCreateVaultWizard<
         );
         ok = probed.ok;
         embedded = probed.embedded;
+        vaultName = probed.vaultName;
       } catch (error) {
         stopped = isJobCancelled(error);
         unavailable = !(isRpcError(error) && error.code === VAULT_ERROR_CODES.WRONG_PASSWORD);
@@ -329,14 +349,17 @@ export function useCreateVaultWizard<
         return;
       }
       dispatch({ type: "importPasswordTestFinished", ok, unavailable });
-      if (ok && embedded) {
+      if (!ok) return;
+      const snapshot = settingsSnapshot.current ?? draftRef.current;
+      if (vaultName) {
         dispatch({
-          type: "embeddedSettings",
-          embedded,
-          snapshot: settingsSnapshot.current ?? draftRef.current,
+          type: "vaultNamed",
+          vaultName,
+          snapshot,
           existingDisplayNames: existingDisplayNamesRef.current,
         });
       }
+      if (embedded) dispatch({ type: "embeddedSettings", embedded, snapshot });
     })();
   }, [state.draft, testImportPassword]);
 
@@ -365,10 +388,21 @@ export function useCreateVaultWizard<
     ) {
       return;
     }
+    if (passwordWeakness !== null) {
+      // The window closes on create, so a press without the notice only brings it up.
+      if (!state.weaknessNoticeOpen) {
+        weaknessNoticeAt.current = Date.now();
+        dispatch({ type: "weaknessNoticeRequested" });
+        return;
+      }
+      if (Date.now() - weaknessNoticeAt.current < ROW_ROLE_GUARD_MS) return;
+    }
     void onCreate(buildCreateVaultResult(state.draft, existingVaultIds), state.draft.password);
     handleClose();
   }, [
     state.draft,
+    state.weaknessNoticeOpen,
+    passwordWeakness,
     existingVaultIds,
     context.knownGroupIds,
     context.vaultRootPath,
@@ -379,7 +413,7 @@ export function useCreateVaultWizard<
   const requestClose = useCallback(() => {
     switch (resolveCreateVaultCloseIntent(state)) {
       case "dismiss-confirm":
-        dispatch({ type: "discardConfirmDismissed" });
+        dispatch({ type: "footerMessageDismissed" });
         return;
       case "ask-confirm":
         dispatch({ type: "discardConfirmRequested" });
@@ -486,6 +520,10 @@ export function useCreateVaultWizard<
     testingPassword: state.testingPassword,
     passwordTestStartedAt: state.testingPassword ? passwordTestStartedAt : null,
     discardConfirmOpen: state.discardConfirmOpen,
+    /** What is wrong with the new password, `null` when nothing is or this draft sets none. */
+    passwordWeakness,
+    /** The same, for the footer: from a press on Create until the next interaction. */
+    footerPasswordWeakness: state.weaknessNoticeOpen ? passwordWeakness : null,
     ...view,
     patchDraft,
     goToStep,

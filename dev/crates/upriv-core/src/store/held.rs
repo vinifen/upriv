@@ -17,12 +17,14 @@
 //!   names it, it holds that tree's bytes and is held like any other;
 //! - a held blob the tree names again goes back to `data/`.
 //!
-//! A newly held blob is matched with the indexes this vault still has: the
-//! other index file when it holds another tree, then each backup zip, newest
-//! first. The first file naming its id whose first chunk opens from it is the
-//! file it holds. A blob that holds an internal file of the app is deleted.
-//! Chunk AAD binds a version only an index records, so a blob no index names
-//! cannot be read: it stays an unnamed piece until the person deletes it.
+//! A newly held blob is matched with what this vault still has that names it:
+//! the other index file when it holds another tree, then the recovery record
+//! the blob carries ([`super::record`]), then each backup zip, newest first.
+//! The first file naming its id whose first chunk opens from it is the file
+//! it holds. A blob that holds an internal file of the app is deleted. Chunk
+//! AAD binds a version only an index or a record holds, so a blob none of
+//! them names cannot be read: it stays an unnamed piece until the person
+//! deletes it.
 //! Backups and store zips copy `store/` only, so they leave `held/` out. The
 //! folder is removed once nothing is in it ([`remove_empty_held`]).
 
@@ -34,13 +36,14 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::aead::{CONTENT_KEY_LEN, INDEX_KEY_LEN};
+use super::aead::{CONTENT_KEY_LEN, INDEX_KEY_LEN, RECORD_KEY_LEN};
 use super::chunk::{blob_path, first_chunk_opens, StagedBlobs, BLOB_FILE_SUFFIX, MIN_BLOB_LEN};
 use super::header::{parse_header_bytes, VaultHeader, HEADER_DIR_NAME, HEADER_FILE_NAME};
 use super::index::{
     open_sealed_index, FileProblem, HeldBlob, VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_DIR_NAME,
     INDEX_FILE_NAME,
 };
+use super::record::read_record;
 use super::tree::{
     child_logical_path, file_name, is_reserved_logical, mkdir_logical, parent_logical,
     unique_file_name,
@@ -63,6 +66,8 @@ pub(crate) fn held_dir(store_dir: &Path) -> PathBuf {
 pub(crate) struct HeldSources<'a> {
     /// The tree in the index copy when that file holds another one.
     pub other_copy: Option<&'a VaultIndex>,
+    /// The key of the record each blob carries ([`super::record`]).
+    pub record_key: &'a [u8; RECORD_KEY_LEN],
     /// This vault's backup zips, newest first. Listed and read only while a
     /// newly held blob is still unknown.
     pub backup_zips: &'a dyn Fn() -> Vec<PathBuf>,
@@ -328,7 +333,7 @@ fn walk_data(
         }
     });
     // Not tried again: the next unlock walks both folders anew.
-    if moves.sync().is_err() {
+    if moves.sync_moves().is_err() {
         log_event(
             LogLevel::Warn,
             "vault_held_unflushed",
@@ -468,9 +473,116 @@ fn held_number(name: &str) -> u32 {
         .unwrap_or(1)
 }
 
+/// A held file not recorded yet, and the file it holds once a source names it.
+struct Unknown {
+    /// Its name in `held/`; empty for a blob still in `data/`.
+    name: String,
+    path: PathBuf,
+    id: Option<Uuid>,
+    /// The file it holds, and the save count of the tree that named it.
+    file: Option<(u64, VaultNode)>,
+}
+
+/// True when every blob that carries an id has its file.
+fn all_named(open: &[Unknown]) -> bool {
+    open.iter()
+        .all(|unknown| unknown.id.is_none() || unknown.file.is_some())
+}
+
+/// Name the blobs of `open` that `source` names by their id.
+fn name_from_index(
+    open: &mut [Unknown],
+    source: &VaultIndex,
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+) {
+    let by_id: HashMap<Uuid, &VaultNode> = source
+        .nodes()
+        .iter()
+        .filter_map(|node| {
+            let (file_id, size, _) = node.as_file()?;
+            (size > 0).then_some(())?;
+            Some((Uuid::parse_str(file_id).ok()?, node))
+        })
+        .collect();
+    for unknown in open.iter_mut().filter(|unknown| unknown.file.is_none()) {
+        let Some(&node) = unknown.id.and_then(|id| by_id.get(&id)) else {
+            continue;
+        };
+        if first_chunk_opens(&unknown.path, header, content_key, node) {
+            unknown.file = Some((source.saves, node.clone()));
+        }
+    }
+}
+
+/// Name the blobs of `open` from the record each one carries
+/// ([`super::record`]): the newest one, as the seal that wrote it saw the file.
+fn name_from_records(
+    open: &mut [Unknown],
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+    record_key: &[u8; RECORD_KEY_LEN],
+) {
+    for unknown in open.iter_mut().filter(|unknown| unknown.file.is_none()) {
+        let Some(id) = unknown.id else {
+            continue;
+        };
+        let Some(record) = read_record(&unknown.path, &id.to_string(), header, record_key, false)
+        else {
+            continue;
+        };
+        if first_chunk_opens(&unknown.path, header, content_key, &record.node) {
+            unknown.file = Some((record.save, record.node));
+        }
+    }
+}
+
+/// Name each blob of `blobs` (`(path, file id)`) from this vault's backup
+/// zips, newest first (`backup_zips`): the first whose index names the id and
+/// whose first chunk opens from the blob. Each answer carries the save count
+/// of that backup's tree, so it can be weighed against the blob's own record.
+/// `None` for a blob no backup names. A zip is read only while a blob is
+/// still unnamed.
+pub(super) fn name_from_backups(
+    blobs: &[(PathBuf, String)],
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+    index_key: &[u8; INDEX_KEY_LEN],
+    backup_zips: &dyn Fn() -> Vec<PathBuf>,
+) -> Vec<Option<(u64, VaultNode)>> {
+    let mut open: Vec<Unknown> = blobs
+        .iter()
+        .map(|(path, id)| Unknown {
+            name: String::new(),
+            path: path.clone(),
+            id: Uuid::parse_str(id).ok(),
+            file: None,
+        })
+        .collect();
+    if !all_named(&open) {
+        for zip in backup_zips() {
+            if let Some(source) = backup_index(&zip, header, index_key) {
+                name_from_index(&mut open, &source, header, content_key);
+                if all_named(&open) {
+                    break;
+                }
+            }
+        }
+    }
+    open.into_iter()
+        .map(|unknown| {
+            unknown.file.map(|(saves, mut node)| {
+                node.problem = None;
+                (saves, node)
+            })
+        })
+        .collect()
+}
+
 /// Record each of the `unknown` held files in `index`, with the file it holds
-/// when an index of this vault names it. Returns how many were recorded, and
-/// how many of those hold a file.
+/// when a source names it: the other index file, then the record the blob
+/// carries, then each backup zip. Returns how many were recorded, and how
+/// many of those hold a file.
 fn name_held(
     held: &Path,
     header: &VaultHeader,
@@ -480,39 +592,26 @@ fn name_held(
     unknown: Vec<String>,
     sources: HeldSources<'_>,
 ) -> (usize, usize) {
-    let mut open: Vec<(String, Option<Uuid>, Option<VaultNode>)> = unknown
+    let mut open: Vec<Unknown> = unknown
         .into_iter()
-        .map(|name| {
-            let id = held_blob_id(&name);
-            (name, id, None)
+        .map(|name| Unknown {
+            id: held_blob_id(&name),
+            path: held.join(&name),
+            name,
+            file: None,
         })
         .collect();
-    let mut match_with = |source: &VaultIndex| {
-        let by_id: HashMap<Uuid, &VaultNode> = source
-            .nodes()
-            .iter()
-            .filter_map(|node| {
-                let (file_id, size, _) = node.as_file()?;
-                (size > 0).then_some(())?;
-                Some((Uuid::parse_str(file_id).ok()?, node))
-            })
-            .collect();
-        for (name, id, file) in open.iter_mut().filter(|(_, _, file)| file.is_none()) {
-            let Some(&node) = id.and_then(|id| by_id.get(&id)) else {
-                continue;
-            };
-            if first_chunk_opens(&held.join(name.as_str()), header, content_key, node) {
-                *file = Some(node.clone());
-            }
-        }
-        open.iter()
-            .all(|(_, id, file)| id.is_none() || file.is_some())
-    };
-    let done = sources.other_copy.is_some_and(&mut match_with);
-    if !done {
+    if let Some(copy) = sources.other_copy {
+        name_from_index(&mut open, copy, header, content_key);
+    }
+    if !all_named(&open) {
+        name_from_records(&mut open, header, content_key, sources.record_key);
+    }
+    if !all_named(&open) {
         for zip in (sources.backup_zips)() {
             if let Some(source) = backup_index(&zip, header, index_key) {
-                if match_with(&source) {
+                name_from_index(&mut open, &source, header, content_key);
+                if all_named(&open) {
                     break;
                 }
             }
@@ -521,8 +620,11 @@ fn name_held(
     let now = crate::time::unix_millis();
     let recorded = index.held.len();
     let mut named = 0;
-    for (name, _, file) in open {
-        let path = held.join(&name);
+    for Unknown {
+        name, path, file, ..
+    } in open
+    {
+        let file = file.map(|(_, node)| node);
         if file
             .as_ref()
             .is_some_and(|file| is_reserved_logical(&file.path))
@@ -554,6 +656,18 @@ fn name_held(
 }
 
 /// The index of the backup zip at `zip`, when it is a copy of this vault.
+/// The content identity a backup zip carries in its header, readable with no
+/// password. `None` when it holds no vault header.
+pub(crate) fn backup_zip_identity(zip: &Path) -> Option<Uuid> {
+    let file = crate::paths::open_nofollow(zip, crate::paths::NofollowMode::Read).ok()?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file)).ok()?;
+    let header_name = format!("{STORE_DIR_NAME}/{HEADER_DIR_NAME}/{HEADER_FILE_NAME}");
+    let raw = zip_entry(&mut archive, &header_name, MAX_SOURCE_HEADER_BYTES)?;
+    parse_header_bytes(&raw)
+        .ok()
+        .map(|header| header.content_identity)
+}
+
 fn backup_index(
     zip: &Path,
     header: &VaultHeader,
@@ -649,7 +763,7 @@ fn flush_shards(restored: &[RestoredHeld]) -> Result<()> {
     for one in restored {
         staged.add_moved(&one.blob);
     }
-    staged.sync()
+    staged.sync_moves()
 }
 
 fn restore_one(store_dir: &Path, index: &mut VaultIndex, name: &str) -> Result<RestoredHeld> {
@@ -807,6 +921,7 @@ mod tests {
                 &mut opened.index,
                 HeldSources {
                     other_copy: opened.other_copy.as_ref(),
+                    record_key: &opened.record_key,
                     backup_zips: &backups,
                 },
             );
@@ -948,6 +1063,58 @@ mod tests {
             opened.index.held[0].file.as_ref().unwrap().path,
             "docs/b.txt"
         );
+    }
+
+    #[test]
+    fn a_blob_whose_seal_never_landed_is_named_from_its_own_record() {
+        let store = Store::new();
+        let mut opened = store.open();
+        store.write(&mut opened, "a.txt", b"first");
+        // A file made and recorded for a seal whose index never reached the
+        // disk, and that no backup names.
+        mkdir_logical(&mut opened.index, "docs").unwrap();
+        let (_, made) = write_logical_file(
+            &store.dir,
+            &opened.header,
+            &opened.content_key,
+            &mut opened.index,
+            "docs/b.txt",
+            b"second",
+        )
+        .unwrap();
+        made.sync_before_index(&opened.records()).unwrap();
+        let blob = store.blob_of(&opened, "docs/b.txt");
+        drop(opened);
+
+        let mut opened = store.settle(Vec::new());
+        assert!(!blob.host_exists());
+        assert_eq!(opened.index.held.len(), 1);
+        let held = opened.index.held[0].clone();
+        assert_eq!(held.file.as_ref().unwrap().path, "docs/b.txt");
+        restore_held(&store.dir, &mut opened.index, &[held.name]).unwrap();
+        assert_eq!(store.read(&opened, "docs/b.txt"), b"second");
+    }
+
+    #[test]
+    fn a_blob_with_no_record_and_no_index_naming_it_stays_a_piece() {
+        let store = Store::new();
+        let mut opened = store.open();
+        store.write(&mut opened, "a.txt", b"first");
+        // Made, never recorded, never sealed.
+        write_logical_file(
+            &store.dir,
+            &opened.header,
+            &opened.content_key,
+            &mut opened.index,
+            "b.txt",
+            b"second",
+        )
+        .unwrap();
+        drop(opened);
+
+        let opened = store.settle(Vec::new());
+        assert_eq!(opened.index.held.len(), 1);
+        assert!(opened.index.held[0].file.is_none());
     }
 
     fn write_zip(path: &Path, header: &[u8], index: &[u8]) {

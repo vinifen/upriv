@@ -1,6 +1,6 @@
 //! Long work a person can stop: opening, creating, importing, the password and
-//! unlock-RAM change, exports, backups, file imports, the copy of a data
-//! folder, and the removal of a leftover folder.
+//! unlock-RAM change, the rebuild of a lost index, exports, backups, file
+//! imports, the copy of a data folder, and the removal of a leftover folder.
 //!
 //! The UI names each job with an id it sends with the request, then asks
 //! `job_status` and `job_cancel` by that id. A stop can arrive while the
@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
@@ -42,6 +43,8 @@ pub(crate) enum JobKind {
     FileImport,
     /// The password or unlock-RAM change of a closed vault.
     Rewrap,
+    /// A closed vault's tree, built again from its blobs' records.
+    Rebuild,
     VaultExport,
     BackupSave,
     BackupExport,
@@ -62,6 +65,7 @@ impl JobKind {
             Self::ImportProbe => "import_probe",
             Self::FileImport => "file_import",
             Self::Rewrap => "rewrap",
+            Self::Rebuild => "rebuild",
             Self::VaultExport => "vault_export",
             Self::BackupSave => "backup_save",
             Self::BackupExport => "backup_export",
@@ -126,10 +130,8 @@ type Registry = &'static Mutex<Jobs>;
 
 static JOBS: LazyLock<Mutex<Jobs>> = LazyLock::new(|| Mutex::new(Jobs::default()));
 
-fn lock(registry: Registry) -> Result<std::sync::MutexGuard<'static, Jobs>> {
-    registry
-        .lock()
-        .map_err(|_| super::session_lock_poisoned("job lock poisoned"))
+fn lock(registry: Registry) -> std::sync::MutexGuard<'static, Jobs> {
+    super::lock_table(registry)
 }
 
 /// Letters, digits, `-`, and `_`, so an id never carries a path or a name.
@@ -172,7 +174,16 @@ impl Job {
         let vault_id = vault_id.filter(|id| crate::paths::slug_id_is_valid(id));
         log_started(kind, vault_id);
         let started = Instant::now();
-        let result = job.settle(work(&job));
+        // A panic still ends the job in the log, with where it happened; the
+        // caller of the request turns it into an error.
+        let worked = std::panic::catch_unwind(AssertUnwindSafe(|| work(&job)));
+        let result = match worked {
+            Ok(result) => job.settle(result),
+            Err(payload) => {
+                log_panicked(kind, vault_id, started);
+                std::panic::resume_unwind(payload)
+            }
+        };
         log_ended(kind, vault_id, &result, started);
         result
     }
@@ -187,7 +198,7 @@ impl Job {
         if !is_valid_job_id(id) {
             return Err(UprivError::JobIdInvalid);
         }
-        let mut jobs = lock(registry)?;
+        let mut jobs = lock(registry);
         if jobs.quitting {
             return Err(UprivError::JobCancelled);
         }
@@ -219,10 +230,8 @@ impl Job {
         if !is_valid_job_id(id) {
             return true;
         }
-        // A poisoned registry ends the wait too: starting the job reports it.
-        lock(registry).map_or(true, |jobs| {
-            jobs.quitting || jobs.stopped_early.iter().any(|early| early == id)
-        })
+        let jobs = lock(registry);
+        jobs.quitting || jobs.stopped_early.iter().any(|early| early == id)
     }
 
     /// Work nobody watches or stops: the wipe a vault delete runs.
@@ -281,10 +290,18 @@ impl Job {
         let Some((registry, _)) = &self.listed else {
             return self.ensure_running();
         };
-        let _jobs = lock(registry)?;
+        let _jobs = lock(registry);
         self.ensure_running()?;
         self.state.stoppable.store(false, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// The work begins again from nothing, as when a backup that failed in its
+    /// chosen folder is written to the data folder: its bytes count from zero
+    /// and a stop is taken again.
+    pub(crate) fn start_over(&self) {
+        self.state.bytes_done.store(0, Ordering::Relaxed);
+        self.state.stoppable.store(true, Ordering::Relaxed);
     }
 
     /// A failure that comes after a stop reads as the stop: the write that
@@ -312,9 +329,7 @@ impl Drop for Job {
         let Some((registry, id)) = self.listed.take() else {
             return;
         };
-        if let Ok(mut jobs) = registry.lock() {
-            jobs.running.remove(&id);
-        }
+        lock(registry).running.remove(&id);
     }
 }
 
@@ -332,6 +347,84 @@ fn log_started(kind: JobKind, vault_id: Option<&str>) {
         "job_started",
         &job_log_fields(kind, vault_id),
     );
+}
+
+/// Where the last panic in this process happened, set by the app's panic hook
+/// through [`note_panic`] and read by the job that panic ends.
+static LAST_PANIC: Mutex<Option<String>> = Mutex::new(None);
+
+/// Keep where a panic happened, for the log line of the job it ends. The app's
+/// panic hook calls this. It never waits for a lock, and it keeps the source
+/// file from its crate folder on, so no folder of the machine reaches the log.
+pub fn note_panic(location: Option<&std::panic::Location<'_>>) {
+    let Some(location) = location else {
+        return;
+    };
+    if let Ok(mut slot) = LAST_PANIC.try_lock() {
+        *slot = Some(format!(
+            "{}:{}",
+            source_from_crate(location.file()),
+            location.line()
+        ));
+    }
+}
+
+/// `…/upriv-core/src/vault/export.rs` → `upriv-core/src/vault/export.rs`.
+fn source_from_crate(file: &str) -> String {
+    let parts: Vec<&str> = file.split(['/', '\\']).collect();
+    let from = parts
+        .iter()
+        .rposition(|part| *part == "src")
+        .map_or(parts.len().saturating_sub(1), |src| src.saturating_sub(1));
+    parts[from..].join("/")
+}
+
+/// Where the last panic in this process happened, or `unknown`.
+fn last_panic_at() -> String {
+    LAST_PANIC
+        .try_lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Log a panic that ended the request `method`, with where it happened: the
+/// app gets `internal_error`, which names no place. A job the panic ended
+/// logged its own line first. A method that is not an RPC name is `unknown`.
+pub fn log_request_panic(method: &str) {
+    let at = last_panic_at();
+    log_event(
+        LogLevel::Error,
+        "rpc_panicked",
+        &[("method", rpc_name_or_unknown(method)), ("at", at.as_str())],
+    );
+}
+
+/// `method` when it reads as an RPC name (`vault_export`), else `unknown`.
+fn rpc_name_or_unknown(method: &str) -> &str {
+    let is_rpc_name = !method.is_empty()
+        && method.len() <= 64
+        && method
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    if is_rpc_name {
+        method
+    } else {
+        "unknown"
+    }
+}
+
+fn log_panicked(kind: JobKind, vault_id: Option<&str>, started: Instant) {
+    let elapsed = started.elapsed().as_secs().to_string();
+    let at = last_panic_at();
+    let mut fields = job_log_fields(kind, vault_id);
+    fields.extend([
+        ("elapsed_s", elapsed.as_str()),
+        ("outcome", "failed"),
+        ("reason", "panic"),
+        ("at", at.as_str()),
+    ]);
+    log_event(LogLevel::Error, "job_ended", &fields);
 }
 
 /// `outcome` is `done`, `stopped`, or `failed`; a failure adds why
@@ -427,7 +520,7 @@ pub fn job_status(id: &str) -> Option<JobStatus> {
 }
 
 fn status_in(registry: Registry, id: &str) -> Option<JobStatus> {
-    let jobs = lock(registry).ok()?;
+    let jobs = lock(registry);
     Some(status_of(jobs.running.get(id)?))
 }
 
@@ -456,7 +549,7 @@ fn cancel_in(registry: Registry, id: &str) -> Result<JobStop> {
     if !is_valid_job_id(id) {
         return Err(UprivError::JobIdInvalid);
     }
-    let mut jobs = lock(registry)?;
+    let mut jobs = lock(registry);
     if let Some(state) = jobs.running.get(id) {
         if !state.stoppable.load(Ordering::Relaxed) {
             return Err(UprivError::JobNotStoppable);
@@ -481,9 +574,7 @@ pub fn stop_all_jobs() -> usize {
 }
 
 fn stop_all_in(registry: Registry) -> usize {
-    let Ok(mut jobs) = lock(registry) else {
-        return 0;
-    };
+    let mut jobs = lock(registry);
     jobs.quitting = true;
     let mut stopped = 0;
     for state in jobs.running.values() {
@@ -736,6 +827,40 @@ mod tests {
         drop(running);
         assert!(status_in(registry, "running").is_none());
         assert_eq!(cancel_in(registry, "running").unwrap(), JobStop::Kept);
+    }
+
+    #[test]
+    fn a_job_that_panics_leaves_the_registry_and_names_its_source_from_the_crate() {
+        let registry = registry();
+        let panicked = std::panic::catch_unwind(|| {
+            Job::run_in(
+                registry,
+                "panics",
+                JobKind::VaultExport,
+                None,
+                |_| -> Result<()> { panic!("export went wrong") },
+            )
+        });
+        assert!(panicked.is_err());
+        assert!(status_in(registry, "panics").is_none());
+        // The registry still takes jobs.
+        Job::run_in(registry, "after", JobKind::VaultExport, None, |_| Ok(())).unwrap();
+
+        assert_eq!(
+            source_from_crate("/home/someone/upriv/dev/crates/upriv-core/src/vault/export.rs"),
+            "upriv-core/src/vault/export.rs"
+        );
+        assert_eq!(
+            source_from_crate(r"C:\Users\someone\.cargo\registry\src\x\zip-0.6.6\src\write.rs"),
+            "zip-0.6.6/src/write.rs"
+        );
+        assert_eq!(source_from_crate("lib.rs"), "lib.rs");
+
+        // A request's panic names its method only when it reads as one.
+        assert_eq!(rpc_name_or_unknown("vault_export"), "vault_export");
+        for method in ["", "../notes", "Vault Export", &"x".repeat(65)] {
+            assert_eq!(rpc_name_or_unknown(method), "unknown");
+        }
     }
 
     #[test]

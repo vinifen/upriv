@@ -34,6 +34,18 @@ describe("backupEntryFileName", () => {
     );
   });
 
+  it("puts a zip of the chosen folder under chosen, before saves", () => {
+    const entry = {
+      stamp: "20260927151022",
+      fileName: "20260927151022-casis.zip",
+      location: "chosen" as const,
+    };
+    expect(backupEntryKey(entry, "casis")).toBe("chosen/20260927151022-casis.zip");
+    expect(backupEntryKey({ ...entry, saved: true }, "casis")).toBe(
+      "chosen/saves/20260927151022-casis.zip",
+    );
+  });
+
   it("ignores a listed name that is not a single file", () => {
     expect(
       backupEntryFileName(
@@ -54,6 +66,12 @@ describe("backupExportFilename", () => {
     );
   });
 
+  it("keeps the name of one backup in the chosen folder", () => {
+    expect(backupExportFilename(["chosen/saves/20260927151022-casis.zip"], "casis")).toBe(
+      "20260927151022-casis.zip",
+    );
+  });
+
   it("names a bundle of several for the vault", () => {
     const keys = ["20260927151022-casis.zip", "20260928151022-casis.zip"];
     expect(backupExportFilename(keys, "casis")).toBe("upriv-backups-casis.zip");
@@ -61,9 +79,9 @@ describe("backupExportFilename", () => {
 
   it("adds the number core takes when the name is in the folder", () => {
     expect(backupExportFilename(["20260927151022-casis.zip"], "casis", 2)).toBe(
-      "20260927151022-casis 2.zip",
+      "20260927151022-casis-2.zip",
     );
-    expect(backupExportFilename(["a.zip", "b.zip"], "casis", 3)).toBe("upriv-backups-casis 3.zip");
+    expect(backupExportFilename(["a.zip", "b.zip"], "casis", 3)).toBe("upriv-backups-casis-3.zip");
   });
 });
 

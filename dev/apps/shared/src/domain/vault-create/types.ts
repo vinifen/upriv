@@ -1,3 +1,4 @@
+import type { VaultBackupFolders } from "../backups/folders";
 import type { KdfUnlockPreset } from "../vault-settings/kdf";
 import type { VaultSettingsConfig } from "../vault-settings";
 
@@ -81,6 +82,12 @@ export interface CreateVaultDraft {
   passwordProbeUnavailable: boolean;
   auto_close: VaultSettingsConfig["auto_close"];
   backup: VaultSettingsConfig["backup"];
+  /**
+   * The backup folders a file's settings carried. A row still holding one of
+   * them is not held up by the live folder check: that folder may be on a
+   * drive this computer does not have.
+   */
+  carriedBackupFolders: VaultBackupFolders | null;
   /** Create-time only — written to `vault.header`, not `config.toml`. */
   kdf: { unlock_preset: KdfUnlockPreset };
   /**

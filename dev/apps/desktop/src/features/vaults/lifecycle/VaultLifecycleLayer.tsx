@@ -23,6 +23,7 @@ interface VaultLifecycleLayerProps {
   onLifecycleClose: () => void;
   onLifecycleConfirm: (password: string) => void;
   onLifecycleStop: () => void;
+  onLifecycleRebuild: (password: string) => void;
   recoveryVault: VaultListItem | null;
   recoveryLeftover: PlainLeftover | null | undefined;
   recoveryOpen: boolean;
@@ -69,6 +70,7 @@ export function VaultLifecycleLayer({
   onLifecycleClose,
   onLifecycleConfirm,
   onLifecycleStop,
+  onLifecycleRebuild,
   recoveryVault,
   recoveryLeftover,
   recoveryOpen,
@@ -115,6 +117,7 @@ export function VaultLifecycleLayer({
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
         onStop={onLifecycleStop}
+        onRebuild={onLifecycleRebuild}
       />
       <PlainPlaceModal
         open={placeOpen}

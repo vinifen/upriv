@@ -70,11 +70,15 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
     )
 }
 
-/// Password and unlock-RAM change. Own worker: the safety zip of `store/`
-/// must not sit ahead of another vault's close. Argon2 inside the call still
-/// takes `with_unlock_lock` only for the derive.
+/// Password and unlock-RAM change, and the rebuild of a lost index. Own
+/// worker: the safety zip of `store/` must not sit ahead of another vault's
+/// close. Argon2 inside the call still takes `with_unlock_lock` only for the
+/// derive.
 pub fn is_rewrap_io_method(method: &str) -> bool {
-    matches!(method, "vault_change_password" | "vault_change_kdf")
+    matches!(
+        method,
+        "vault_change_password" | "vault_change_kdf" | "vault_rebuild"
+    )
 }
 
 /// Zip and `.7z` import, portable export, the wipes of what a crashed plain-text
@@ -92,6 +96,21 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_plain_remove"
             | "backup_save"
             | "backup_export"
+    )
+}
+
+/// The small calls that reach a chosen backup folder: listing, deleting, and
+/// pinning backups, and checking a folder. That folder can be a sleeping or
+/// dead drive, so they stay off stdin, where a stop and Close now arrive. The
+/// backups themselves run on the close and pack lanes.
+pub fn is_backup_folder_method(method: &str) -> bool {
+    matches!(
+        method,
+        "backup_list"
+            | "backup_delete"
+            | "backup_promote"
+            | "backup_folder_check"
+            | "backup_folder_reuse"
     )
 }
 
@@ -122,6 +141,7 @@ pub enum HeavyLane {
     Pack,
     Import,
     DataFolder,
+    BackupFolder,
 }
 
 pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
@@ -148,6 +168,9 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     }
     if is_data_folder_io_method(method, params) {
         return Some(HeavyLane::DataFolder);
+    }
+    if is_backup_folder_method(method) {
+        return Some(HeavyLane::BackupFolder);
     }
     None
 }
@@ -211,8 +234,11 @@ mod tests {
         assert!(!is_lifecycle_io_method("vault_change_kdf"));
         assert!(is_rewrap_io_method("vault_change_password"));
         assert!(is_rewrap_io_method("vault_change_kdf"));
+        assert!(is_rewrap_io_method("vault_rebuild"));
         assert!(!is_argon2_bound_method("vault_change_password", &empty));
         assert!(!is_argon2_bound_method("vault_change_kdf", &empty));
+        assert!(!is_argon2_bound_method("vault_rebuild", &empty));
+        assert_eq!(heavy_lane("vault_rebuild", &empty), Some(HeavyLane::Rewrap));
         assert_eq!(
             heavy_lane("vault_change_password", &empty),
             Some(HeavyLane::Rewrap)
@@ -249,6 +275,19 @@ mod tests {
         );
         assert_eq!(heavy_lane("backup_save", &empty), Some(HeavyLane::Pack));
         assert_eq!(heavy_lane("backup_export", &empty), Some(HeavyLane::Pack));
+        for method in [
+            "backup_list",
+            "backup_delete",
+            "backup_promote",
+            "backup_folder_check",
+            "backup_folder_reuse",
+        ] {
+            assert_eq!(
+                heavy_lane(method, &empty),
+                Some(HeavyLane::BackupFolder),
+                "{method}"
+            );
+        }
         assert_eq!(
             heavy_lane("data_folder_export", &empty),
             Some(HeavyLane::DataFolder)
@@ -316,7 +355,12 @@ mod tests {
             let _ = parts.next();
         }
         let expected = [
+            "backup_delete",
             "backup_export",
+            "backup_folder_check",
+            "backup_folder_reuse",
+            "backup_list",
+            "backup_promote",
             "backup_save",
             "data_folder_export",
             "vault_change_kdf",
@@ -340,6 +384,7 @@ mod tests {
             "vault_plain_send",
             "vault_plain_sync",
             "vault_plain_unsend",
+            "vault_rebuild",
             "vault_unfinished_sweep",
         ];
         let expected: std::collections::BTreeSet<_> = expected

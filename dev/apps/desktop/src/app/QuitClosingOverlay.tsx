@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useElapsed } from "@upriv/shared/react";
 import { Button, ElapsedTime, JobStopButton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { CloseNowModal } from "@/features/vaults/lifecycle";
@@ -31,8 +32,10 @@ function useWorkReport(): void {
  * Shown after the quit dialog. A normal quit first lists the work still
  * running, each with Stop, then closes the open vaults with their backups,
  * one line per vault with its step (`useQuitClose`, the same words as its row).
- * With no vault open and no work running it only says Upriv is quitting, with
- * no Close now: there is nothing to hurry.
+ * With no vault open and no work running it says Upriv is quitting, and offers
+ * Close now only once that takes longer than a moment: core may still be
+ * overwriting a plain-text export a stop left, and Close now leaves the rest of
+ * that file to the next launch.
  * Nothing in it has a time limit; Close now is there while anything runs. It asks first in
  * the same window as a vault's Close now, with the same "Don't ask again",
  * while `lifecycle_confirm_close_now` is on. After Close now it says the
@@ -70,8 +73,9 @@ export function QuitClosingOverlay() {
   };
 
   const waiting = active && !now && items.length > 0;
-  // No vault was open and no work runs: nothing to close, so nothing to hurry.
+  // No vault was open and no work runs: only a wipe in core can still hold the quit.
   const quittingOnly = !waiting && closes.length === 0;
+  const lingering = useElapsed(active && quittingOnly ? startedAt : null)?.visible ?? false;
 
   return (
     <>
@@ -85,7 +89,7 @@ export function QuitClosingOverlay() {
         dismissible={false}
         panelClassName="max-w-md"
         footer={
-          now || quittingOnly ? undefined : (
+          now || (quittingOnly && !lingering) ? undefined : (
             <div className="flex justify-end">
               <Button variant="danger" size="md" onClick={requestCloseNow}>
                 {t("quit.close_now")}

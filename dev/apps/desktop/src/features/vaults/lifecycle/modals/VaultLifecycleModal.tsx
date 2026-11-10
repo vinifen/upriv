@@ -4,6 +4,7 @@ import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
 import {
   lifecycleBusyLabelKey,
+  offersVaultRebuild,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
   vaultRowWorkClock,
@@ -31,9 +32,18 @@ interface VaultLifecycleModalProps {
   onClose: () => void;
   onConfirm: (password: string) => void;
   onStop: () => void;
+  /**
+   * The unlock found the vault's index lost: rebuild it with the password
+   * typed. The vault list runs the rebuild, so the window closes.
+   */
+  onRebuild: (password: string) => void;
 }
 
-/** Unlock password dialog. Lock starts the close without a dialog. */
+/**
+ * Unlock password dialog. Lock starts the close without a dialog. When the
+ * password opens the vault but its index is lost, the dialog offers the
+ * rebuild from the vault's own data.
+ */
 export function VaultLifecycleModal({
   vault,
   open,
@@ -45,6 +55,7 @@ export function VaultLifecycleModal({
   onClose,
   onConfirm,
   onStop,
+  onRebuild,
 }: VaultLifecycleModalProps) {
   const { t } = useTranslation();
   const lifecycleService = useVaultLifecycleService();
@@ -79,6 +90,8 @@ export function VaultLifecycleModal({
 
   const canSubmit = !submitting && lifecycleService.validateLifecyclePassword(password);
   const passwordHint = resolveVaultPasswordHint(vault);
+  // Shown for the password that found the index lost; editing it hides the offer.
+  const rebuildOffered = !submitting && error !== null && offersVaultRebuild(verifyErrorKey);
 
   return (
     <Modal
@@ -107,6 +120,10 @@ export function VaultLifecycleModal({
                 />
               ) : null}
             </>
+          ) : rebuildOffered ? (
+            <Button variant="primary" size="sm" onClick={() => onRebuild(password)}>
+              {t("unlock.rebuild")}
+            </Button>
           ) : (
             <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
               {t("unlock.submit")}
@@ -136,6 +153,9 @@ export function VaultLifecycleModal({
           {passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
         </div>
         {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
+        {rebuildOffered ? (
+          <p className="text-sm text-on-surface-variant">{t("unlock.rebuild_help")}</p>
+        ) : null}
         {submitting && work?.stop !== "stopping" ? (
           <ElapsedTime startedAt={vaultRowWorkClock(work)} />
         ) : null}

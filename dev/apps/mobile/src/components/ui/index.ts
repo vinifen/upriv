@@ -10,6 +10,7 @@ export {
 } from "./DropdownPanel";
 export { DropdownOverlayProvider } from "./DropdownOverlayHost";
 export { Modal, type ModalProps, type ModalPanelClassName } from "./Modal";
+export { PasswordWeaknessNotice } from "./PasswordWeaknessNotice";
 export { Collapse } from "./Collapse";
 export {
   ModalFooterActions,

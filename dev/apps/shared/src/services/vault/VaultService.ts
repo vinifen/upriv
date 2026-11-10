@@ -1,7 +1,7 @@
 import type { KdfUnlockPreset } from "../../domain/vault-settings/kdf";
 import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
-import type { VaultRow } from "../../domain/vault";
+import type { VaultDeleteOutcome, VaultRow } from "../../domain/vault";
 import type { VaultWelcomeFiles } from "../../domain/vault-create/welcomeReadme";
 import type { VaultDiskUsage } from "../../domain/vault-info";
 
@@ -80,15 +80,20 @@ export interface VaultService {
    */
   rename(vaultId: string, displayName: string): Promise<VaultRenameResult>;
 
-  /** Remove the vault folder (wipe) via `vault_delete`. */
-  unregisterSettings(vaultId: string): Promise<void>;
+  /**
+   * Remove the vault folder (wipe) via `vault_delete`. With `outsideBackups`,
+   * what it wrote to its folder outside the data folder goes too.
+   */
+  unregisterSettings(vaultId: string, outsideBackups?: boolean): Promise<VaultDeleteOutcome>;
 
   /**
-   * Write `{display_name}.zip` or `{display_name}.7z` into the folder
-   * `destDir` in core, as the job `job`. Zip = envelope of `store/` (no zip
-   * password). `.7z` = logical stream (never `.enc` blobs). When that name is
-   * already in the folder the file gets the next free number
-   * (`{display_name} 2.zip`, see `vaultExportToast`); nothing is replaced.
+   * Write `{display_name}-upriv.zip`, `{display_name}-sevenzip.7z`, or
+   * `{display_name}-plain-text.zip` into the folder `destDir` in core, as the
+   * job `job`. `-upriv.zip` = envelope of `store/` (no zip password). `.7z` =
+   * logical stream (never `.enc` blobs). `-plain-text.zip` = the readable
+   * files, not encrypted. When that name is already in the folder the
+   * file gets the next free number (`{display_name}-upriv-2.zip`, see
+   * `vaultExportToast`); nothing is replaced.
    * Every file goes in; the result names the ones kept with zeros where their
    * data was missing or damaged. Rejects with `job_cancelled` after
    * `JobService.cancel`.

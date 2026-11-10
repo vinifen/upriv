@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import type { VaultBackupEntry } from "../domain";
+import type { VaultBackupSaved } from "../domain";
 import type { BackupService, JobService } from "../services";
 import { useCoreJob, type CoreJob } from "./useCoreJob";
 
@@ -7,7 +7,7 @@ import { useCoreJob, type CoreJob } from "./useCoreJob";
 export type VaultBackupJob = CoreJob<{ vaultId: string }>;
 
 export interface VaultBackupJobEvents {
-  onSaved: (vaultId: string, entry: VaultBackupEntry) => void;
+  onSaved: (vaultId: string, saved: VaultBackupSaved) => void;
   onFailed: (vaultId: string, error: unknown) => void;
   /** The save was stopped and left no zip. */
   onCancelled: (vaultId: string) => void;
@@ -29,8 +29,8 @@ export function useVaultBackupJob(
     job,
     start: startJob,
     stop,
-  } = useCoreJob<{ vaultId: string }, VaultBackupEntry>(jobs, {
-    onDone: (entry, { vaultId }) => events.onSaved(vaultId, entry),
+  } = useCoreJob<{ vaultId: string }, VaultBackupSaved>(jobs, {
+    onDone: (saved, { vaultId }) => events.onSaved(vaultId, saved),
     onFailed: (error, { vaultId }) => events.onFailed(vaultId, error),
     onCancelled: ({ vaultId }) => events.onCancelled(vaultId),
     onStopRefused: (error, { vaultId }) => events.onStopRefused(vaultId, error),

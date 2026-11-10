@@ -56,6 +56,8 @@ import { useVaultRootService } from "@/platform/services";
 
 const SAVED_INDICATOR_MS = 1500;
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
+/** A phone keeps its backups in the data folder, so it has no backup folder to choose. */
+const PHONE_SETTINGS_SECTIONS = APP_SETTINGS_SECTIONS.filter((section) => section !== "backups");
 
 interface AppSettingsModalProps {
   open: boolean;
@@ -490,7 +492,7 @@ export function AppSettingsModal({
         footer={footer}
       >
         <View style={styles.content} {...dismissConfirmOnBodyTap}>
-          {APP_SETTINGS_SECTIONS.map((sectionId) => (
+          {PHONE_SETTINGS_SECTIONS.map((sectionId) => (
             <SettingsAccordionSection
               key={sectionId}
               title={t(`modal.app_settings.section.${sectionId}`)}

@@ -6,7 +6,8 @@
 //! first byte. An import records its new vault before the vault's folder
 //! exists. A job that ends forgets its record. [`sweep_unfinished`] clears what
 //! is still recorded: it removes each unfinished file, overwriting a plain-text
-//! one first, and deletes each vault an import never finished.
+//! one first on a thread of its own, and deletes each vault an import never
+//! finished.
 
 use std::path::Path;
 
@@ -23,7 +24,7 @@ use crate::session::{job_status, Job};
 use super::backup::vault_id_log_field;
 use super::export_folder::PART_SUFFIX;
 use super::open_close::delete_failed_import;
-use super::partial::{discard_partial, wipe_partial, PartialWork};
+use super::partial::{discard_partial, is_wiping, wipe_partial_behind, PartialWork};
 use super::wipe::WipeOptions;
 
 /// Record the unfinished file `partial` that `job` is about to write, so a
@@ -107,7 +108,7 @@ fn sweep_imports(root: &VaultRoot) -> Result<()> {
 fn sweep_files(root: &VaultRoot) -> Result<Vec<String>> {
     let mut folders = Vec::new();
     for record in unfinished_files_here(root)? {
-        if job_status(&record.job).is_some() {
+        if job_status(&record.job).is_some() || is_wiping(Path::new(&record.path)) {
             continue;
         }
         // `state.json` is only trusted to name a file this app wrote.
@@ -124,17 +125,17 @@ fn sweep_files(root: &VaultRoot) -> Result<Vec<String>> {
         }
         let path = Path::new(&record.path);
         let work = partial_work(record.work);
-        let gone = if record.work == UnfinishedWork::PlainExport {
-            // A vault deleted since then wipes with the default passes.
+        if record.work == UnfinishedWork::PlainExport {
+            // A vault deleted since then wipes with the default passes. The
+            // wipe forgets the record once the file is gone.
             let vault_dir = match record.vault_id.as_deref() {
                 Some(id) => root.vault_dir(id)?,
                 None => std::path::PathBuf::new(),
             };
-            wipe_partial(path, work, &WipeOptions::for_vault_dir(&vault_dir))
-        } else {
-            discard_partial(path, work)
-        };
-        if gone {
+            wipe_partial_behind(root, path, work, WipeOptions::for_vault_dir(&vault_dir));
+            continue;
+        }
+        if discard_partial(path, work) {
             remove_unfinished_file(root, &record.path)?;
         }
     }
@@ -180,6 +181,8 @@ mod tests {
         .unwrap();
 
         assert!(sweep_unfinished(&root).unwrap().is_empty());
+        // The sweep answers at once; the wipe forgets the record when done.
+        crate::vault::wait_for_partial_wipes();
         assert!(!partial.host_exists());
         assert!(load_runtime_state(&root)
             .unwrap()

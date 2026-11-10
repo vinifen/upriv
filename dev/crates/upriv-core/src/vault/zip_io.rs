@@ -1,11 +1,14 @@
-//! Zip envelope of a ciphertext `store/` tree (no zip password).
+//! Zip envelope of a ciphertext `store/` tree (no zip password):
+//! `README.md`, `config.toml`, and `store/`, at the zip root in a backup and
+//! in the vault folder of the package (`super::package`) in an export.
 
 use crate::host_fs::File;
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::io::{BufWriter, Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use zeroize::{Zeroize, Zeroizing};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -13,6 +16,7 @@ use crate::error::{Result, UprivError};
 use crate::session::Job;
 
 use super::embedded_settings::{store_zip_readme, ZIP_CONFIG_ENTRY, ZIP_README_ENTRY};
+use super::package::Package;
 use crate::paths::STORE_DIR_NAME;
 use crate::store::{
     HEADER_DIR_NAME, HEADER_FILE_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME, INDEX_FILE_NAME,
@@ -20,9 +24,10 @@ use crate::store::{
 };
 
 const ZIP_WRITE_BUFFER: usize = 256 * 1024;
-/// Bytes a store zip writes between flushes to disk. One flush at the end of a
-/// large zip would hold a stop for minutes.
-const ZIP_SYNC_BYTES: u64 = 64 * 1024 * 1024;
+/// Bytes an export or backup file writes between two steps of sending it to
+/// the disk ([`PacedFile`]). One flush at the end of a large file would hold
+/// its last step for minutes on a slow drive.
+const PACED_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
 /// Bytes moved per read when a file goes into or out of a zip.
 const ZIP_COPY_BUFFER: usize = 256 * 1024;
 /// What [`SeekBufReader`] reads at a time. A scan of local headers reads at
@@ -33,31 +38,173 @@ const ZIP_READ_WINDOW: usize = 8 * 1024;
 const ZIP_READ_BACK_TAIL: usize = 64;
 
 /// Batches small zip headers and stored bytes. A storage-access file pays for
-/// each write; seeking flushes first so the zip offsets stay correct.
+/// each write; seeking flushes first so the zip offsets stay correct. A write
+/// as large as the buffer goes straight through. The buffer is wiped each time
+/// its bytes go out, and when it goes: a plain-text export's readable files
+/// pass through it. Nothing is flushed on drop; a writer that is done flushes.
+///
+/// Once a write, flush, or seek fails, every later one fails too. The zip
+/// writer rewrites each finished entry's header in place: a rewrite that fails
+/// after its seek leaves the file inside that header, and the next finish of
+/// the entry, which the zip writer's drop runs, would take its size from there
+/// and come out below zero.
 pub(super) struct SeekBufWriter<W: Write + Seek> {
-    inner: BufWriter<W>,
+    inner: W,
+    /// Bytes waiting for `inner`, at most [`ZIP_WRITE_BUFFER`].
+    buf: Zeroizing<Vec<u8>>,
+    failed: bool,
 }
 
 pub(super) fn buffered_zip_file<W: Write + Seek>(file: W) -> SeekBufWriter<W> {
     SeekBufWriter {
-        inner: BufWriter::with_capacity(ZIP_WRITE_BUFFER, file),
+        inner: file,
+        buf: Zeroizing::new(Vec::with_capacity(ZIP_WRITE_BUFFER)),
+        failed: false,
     }
 }
 
-/// A file flushed to disk every [`ZIP_SYNC_BYTES`], so a job's stop is never
-/// further than one such flush away.
-struct PacedFile {
+/// The file a zip of `job` writes: [`buffered_zip_file`] over `file`, with
+/// every write refused once the job is asked to stop. The stop sits beneath
+/// the buffer, so the write it refuses fails the buffer, and with it every
+/// later write, flush, and seek of the zip.
+pub(super) fn job_zip_file<'a, W: Write + Seek + 'a>(
+    job: &'a Job,
+    file: W,
+) -> SeekBufWriter<impl Write + Seek + 'a> {
+    buffered_zip_file(job.writer(file))
+}
+
+impl<W: Write + Seek> SeekBufWriter<W> {
+    fn unless_failed<T>(
+        &mut self,
+        op: impl FnOnce(&mut Self) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        if self.failed {
+            return Err(std::io::Error::other("an earlier write to this zip failed"));
+        }
+        let result = op(self);
+        if result
+            .as_ref()
+            .is_err_and(|error| error.kind() != ErrorKind::Interrupted)
+        {
+            self.failed = true;
+        }
+        result
+    }
+}
+
+/// An export or backup file that goes to the disk while it is written, one
+/// [`PACED_WINDOW_BYTES`] window at a time, so the flush before its rename
+/// stays short and a stop is never far behind one.
+///
+/// On Linux each window starts going out without a wait, after the window
+/// before it is waited for: the disk writes while the next window is made, and
+/// at most two windows wait in RAM. Elsewhere each window is flushed. Neither
+/// reaches the drive's own cache: the export's install flushes the whole file
+/// (`sync_file_durable`) before it renames it. A failed send fails the file,
+/// and is never tried again.
+pub(super) struct PacedFile {
     file: File,
-    unsynced: u64,
+    /// [`PACED_WINDOW_BYTES`], smaller in a test.
+    window: u64,
+    unsent: u64,
+    /// Where the bytes already sent to the disk end.
+    #[cfg(target_os = "linux")]
+    sent_to: u64,
+    /// This file takes ranges ([`send_range`]); one that does not is flushed.
+    #[cfg(target_os = "linux")]
+    ranges: bool,
+}
+
+impl PacedFile {
+    pub(super) fn new(file: File) -> Self {
+        Self {
+            file,
+            window: PACED_WINDOW_BYTES,
+            unsent: 0,
+            #[cfg(target_os = "linux")]
+            sent_to: 0,
+            #[cfg(target_os = "linux")]
+            ranges: true,
+        }
+    }
+
+    pub(super) fn into_file(self) -> File {
+        self.file
+    }
+
+    #[cfg(target_os = "linux")]
+    fn send_window(&mut self) -> std::io::Result<()> {
+        if self.ranges {
+            let end = self.file.stream_position()?.max(self.sent_to);
+            match send_range(&self.file, self.sent_to, end) {
+                Ok(()) => {
+                    self.sent_to = end;
+                    return Ok(());
+                }
+                Err(error) if range_unsupported(&error) => self.ranges = false,
+                Err(error) => return Err(error),
+            }
+        }
+        self.file.sync_data()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn send_window(&mut self) -> std::io::Result<()> {
+        self.file.sync_data()
+    }
+}
+
+/// Wait until `..from` of `file` is written, writing what is still dirty
+/// there (a header rewritten in place), then start `from..to` without a wait.
+#[cfg(target_os = "linux")]
+fn send_range(file: &File, from: u64, to: u64) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let range = |offset: u64, len: u64, flags: libc::c_uint| {
+        let (Ok(offset), Ok(len)) = (
+            libc::off64_t::try_from(offset),
+            libc::off64_t::try_from(len),
+        ) else {
+            return Err(std::io::Error::from(ErrorKind::InvalidInput));
+        };
+        // SAFETY: the descriptor stays open for the life of `file`, and the
+        // call reads no memory of this process.
+        match unsafe { libc::sync_file_range(file.as_raw_fd(), offset, len, flags) } {
+            0 => Ok(()),
+            _ => Err(std::io::Error::last_os_error()),
+        }
+    };
+    if from > 0 {
+        range(
+            0,
+            from,
+            libc::SYNC_FILE_RANGE_WAIT_BEFORE
+                | libc::SYNC_FILE_RANGE_WRITE
+                | libc::SYNC_FILE_RANGE_WAIT_AFTER,
+        )?;
+    }
+    if to > from {
+        range(from, to - from, libc::SYNC_FILE_RANGE_WRITE)?;
+    }
+    Ok(())
+}
+
+/// A file system or descriptor that cannot send a range: it is flushed.
+#[cfg(target_os = "linux")]
+fn range_unsupported(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ENOSYS | libc::EINVAL | libc::ESPIPE | libc::EOPNOTSUPP)
+    )
 }
 
 impl Write for PacedFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let written = self.file.write(buf)?;
-        self.unsynced += written as u64;
-        if self.unsynced >= ZIP_SYNC_BYTES {
-            self.file.sync_data()?;
-            self.unsynced = 0;
+        self.unsent += written as u64;
+        if self.unsent >= self.window {
+            self.send_window()?;
+            self.unsent = 0;
         }
         Ok(written)
     }
@@ -73,20 +220,47 @@ impl Seek for PacedFile {
     }
 }
 
+impl<W: Write + Seek> SeekBufWriter<W> {
+    /// Write the waiting bytes to the file, then wipe them.
+    fn write_out(&mut self) -> std::io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let written = self.inner.write_all(&self.buf);
+        self.buf.zeroize();
+        written
+    }
+}
+
 impl<W: Write + Seek> Write for SeekBufWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner.write(buf)
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.unless_failed(|this| {
+            if this.buf.len() + data.len() > ZIP_WRITE_BUFFER {
+                this.write_out()?;
+            }
+            if data.len() >= ZIP_WRITE_BUFFER {
+                this.inner.write_all(data)?;
+            } else {
+                this.buf.extend_from_slice(data);
+            }
+            Ok(data.len())
+        })
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
+        self.unless_failed(|this| {
+            this.write_out()?;
+            this.inner.flush()
+        })
     }
 }
 
 impl<W: Write + Seek> Seek for SeekBufWriter<W> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.inner.flush()?;
-        self.inner.get_mut().seek(pos)
+        self.unless_failed(|this| {
+            this.write_out()?;
+            this.inner.seek(pos)
+        })
     }
 }
 
@@ -225,20 +399,10 @@ pub(super) fn zip_err(path: &Path, error: impl std::fmt::Display) -> UprivError 
     }
 }
 
-/// True when `bytes` is a readable zip (store envelope probe).
-pub fn probe_store_zip(bytes: &[u8]) -> Result<()> {
-    probe_store_zip_reader(Cursor::new(bytes))
-}
-
-fn probe_store_zip_reader<R: Read + Seek>(reader: R) -> Result<()> {
-    ZipArchive::new(reader).map_err(|e| zip_err(Path::new("zip"), e))?;
-    Ok(())
-}
-
-/// A vault zip is recognized by `store/header/vault.header`, including one outer folder.
-/// A symlink at the final component is not a vault zip.
-/// Reads only the central directory, buffered: one zip of a large vault is a
-/// few reads, not a seek per entry.
+/// A store zip holds `store/header/vault.header` at its root (a backup) or in
+/// its package's vault folder (an export, [`StoreEnvelope`]). A symlink at
+/// the final component is not one. Reads only the central directory,
+/// buffered: one zip of a large vault is a few reads, not a seek per entry.
 pub(crate) fn zip_contains_store_header(path: &Path) -> bool {
     let Ok(file) = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read) else {
         return false;
@@ -246,38 +410,40 @@ pub(crate) fn zip_contains_store_header(path: &Path) -> bool {
     let Ok(archive) = ZipArchive::new(std::io::BufReader::new(file)) else {
         return false;
     };
-    let found = archive.file_names().any(zip_entry_is_store_header);
-    found
+    StoreEnvelope::find(&archive).is_some()
 }
 
-fn zip_entry_is_store_header(name: &str) -> bool {
-    let normalized = name.replace('\\', "/");
-    let parts: Vec<&str> = normalized
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect();
-    let n = parts.len();
-    n >= 3
-        && parts[n - 3] == STORE_DIR_NAME
-        && parts[n - 2] == HEADER_DIR_NAME
-        && parts[n - 1] == HEADER_FILE_NAME
+/// Require the two sealed index files to be present and byte-identical, after
+/// [`verify_store_zip_entries`].
+pub(crate) fn verify_store_zip_copies(path: &Path, job: &Job) -> Result<()> {
+    match verify_store_zip_entries(path, job)? {
+        (Some(primary), Some(copy)) if primary == copy && !primary.is_empty() => Ok(()),
+        (Some(_), Some(_)) => Err(zip_err(path, "index copies in the backup zip differ")),
+        _ => Err(zip_err(path, "backup zip is missing an index copy")),
+    }
 }
 
-/// Require the two sealed index files to be present and byte-identical.
+/// The primary index file and the index copy of a store zip, when it has them.
+pub(crate) type ZipIndexFiles = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+/// Read every entry of the store zip at `path` against its checksum, and
+/// return its index files.
 ///
 /// Every entry is read through to the end so its checksum is checked before
 /// an older backup can be deleted. Skipping bodies on a storage-access folder
 /// let a bad persist replace the previous zip.
-pub(crate) fn verify_store_zip_copies(path: &Path, job: &Job) -> Result<()> {
+pub(crate) fn verify_store_zip_entries(path: &Path, job: &Job) -> Result<ZipIndexFiles> {
     let file = buffered_zip_reader(File::open(path)?)?;
     let mut archive = ZipArchive::new(file).map_err(|e| zip_err(path, e))?;
+    let envelope = StoreEnvelope::find(&archive)
+        .ok_or_else(|| zip_err(path, "zip holds no store/header/vault.header"))?;
     let mut primary = None;
     let mut copy = None;
     for i in 0..archive.len() {
         job.ensure_running()?;
         let mut entry = archive.by_index(i).map_err(|e| zip_err(path, e))?;
         let name = entry.name().replace('\\', "/");
-        let keep = index_zip_role(&name);
+        let keep = envelope.inside(&name).and_then(index_zip_role);
         let bytes = read_zip_entry_checked(path, &mut entry, keep.is_some())?;
         match keep {
             Some(IndexZipRole::Primary) if primary.is_some() => {
@@ -291,11 +457,7 @@ pub(crate) fn verify_store_zip_copies(path: &Path, job: &Job) -> Result<()> {
             None => {}
         }
     }
-    match (primary, copy) {
-        (Some(primary), Some(copy)) if primary == copy && !primary.is_empty() => Ok(()),
-        (Some(_), Some(_)) => Err(zip_err(path, "index copies in the backup zip differ")),
-        _ => Err(zip_err(path, "backup zip is missing an index copy")),
-    }
+    Ok((primary, copy))
 }
 
 enum IndexZipRole {
@@ -303,11 +465,9 @@ enum IndexZipRole {
     Copy,
 }
 
-fn index_zip_role(name: &str) -> Option<IndexZipRole> {
-    let name = name.trim_matches('/');
-    let name = name
-        .strip_prefix(&format!("{STORE_DIR_NAME}/"))
-        .unwrap_or(name);
+/// What `rest`, a path in the envelope, is among the index files.
+fn index_zip_role(rest: &str) -> Option<IndexZipRole> {
+    let name = rest.strip_prefix(&format!("{STORE_DIR_NAME}/"))?;
     let (dir, file) = name.rsplit_once('/')?;
     if dir != INDEX_DIR_NAME {
         return None;
@@ -340,12 +500,14 @@ fn read_zip_entry_checked(
     Ok(if keep { Some(kept) } else { None })
 }
 
-/// `README.md` and `config.toml` beside `store/`.
+/// An export's package folders, then `README.md` and `config.toml` beside
+/// `store/` in `envelope`.
 ///
 /// The warning file already in `store/` is copied with the tree, and each
 /// byte copied from `store/` counts toward `job`.
 fn write_zip_with_config<W: Write + std::io::Seek>(
     tree: &ZipTree<'_>,
+    envelope: &StoreEnvelope,
     config_toml: &[u8],
     readme: &str,
     writer: W,
@@ -354,41 +516,74 @@ fn write_zip_with_config<W: Write + std::io::Seek>(
     let src = tree.root;
     let mut zip = ZipWriter::new(writer);
     let options = FileOptions::default().compression_method(CompressionMethod::Stored);
-    zip.start_file(ZIP_README_ENTRY, options)
+    for folder in envelope.folders() {
+        zip.add_directory(folder, options)
+            .map_err(|e| zip_err(src, e))?;
+    }
+    zip.start_file(envelope.member(ZIP_README_ENTRY), options)
         .map_err(|e| zip_err(src, e))?;
     zip.write_all(readme.as_bytes())
         .map_err(|e| zip_err(src, e))?;
-    zip.start_file(ZIP_CONFIG_ENTRY, options)
+    zip.start_file(envelope.member(ZIP_CONFIG_ENTRY), options)
         .map_err(|e| zip_err(src, e))?;
     zip.write_all(config_toml).map_err(|e| zip_err(src, e))?;
-    zip.add_directory(format!("{STORE_DIR_NAME}/"), options)
+    zip.add_directory(format!("{}/", envelope.member(STORE_DIR_NAME)), options)
         .map_err(|e| zip_err(src, e))?;
     tree.write(&mut zip, options, job)?;
     zip.finish().map_err(|e| zip_err(src, e))
 }
 
-/// Zip of `store/` plus `README.md` and `config.toml`, written to `dest`.
-/// Each write fails once `job` is asked to stop. Its progress counts the
-/// bytes of `store/` copied.
+/// Zip of `store/` plus `README.md` and `config.toml` in `envelope`, written
+/// to `dest`. Each write fails once `job` is asked to stop. Its progress
+/// counts the bytes of `store/` copied.
 ///
 /// `created_stamp` is UTC `YYYYMMDDHHmmss` and is written into `README.md`.
 pub(super) fn zip_store_with_config_to_path(
     store: &Path,
+    envelope: &StoreEnvelope,
     config_toml: &[u8],
     created_stamp: &str,
     dest: &Path,
     job: &Job,
 ) -> Result<u64> {
     // One listing gives both the size `README.md` records and what to copy.
-    let tree = ZipTree::list(store, Path::new(STORE_DIR_NAME))?;
+    let prefix = PathBuf::from(envelope.member(STORE_DIR_NAME));
+    let tree = ZipTree::list(store, &prefix)?;
     job.set_total(tree.bytes);
     let readme = store_zip_readme(created_stamp, tree.bytes)?;
-    let file = job.writer(buffered_zip_file(PacedFile {
-        file: File::create(dest)?,
-        unsynced: 0,
-    }));
-    let file = write_zip_with_config(&tree, config_toml, &readme, file, job)?;
+    let file = job_zip_file(job, PacedFile::new(File::create(dest)?));
+    let mut file = write_zip_with_config(&tree, envelope, config_toml, &readme, file, job)?;
+    // Dropping a buffered writer would discard a failed last flush.
+    file.flush()?;
     written_len(file, dest)
+}
+
+/// End records, zip64 records, and room for small entries written beside a
+/// tree, such as `README.md` and `config.toml`, or a log that grows while
+/// it is copied.
+pub(super) const ZIP_SLACK: u64 = 1024 * 1024;
+
+/// What one entry adds around its bytes: the local header and the central
+/// record, each with the name and a zip64 field.
+pub(super) fn zip_entry_overhead(name: &str) -> u64 {
+    30 + 46 + 2 * 28 + 2 * name.len() as u64
+}
+
+/// At most how many bytes [`zip_store_with_config_to_path`] writes for a
+/// backup of `store`: its files, what each entry adds, and [`ZIP_SLACK`].
+pub(super) fn store_zip_bytes(store: &Path) -> Result<u64> {
+    let tree = ZipTree::list(store, Path::new(STORE_DIR_NAME))?;
+    let overhead: u64 = tree
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            TreeEntry::Dir(rel) | TreeEntry::File(rel) => zip_entry_overhead(&tree.zip_name(rel)),
+        })
+        .sum();
+    Ok(tree
+        .bytes
+        .saturating_add(overhead)
+        .saturating_add(ZIP_SLACK))
 }
 
 /// Length of the file `out` wrote to `dest`, from the position on the fd we
@@ -414,26 +609,44 @@ pub(super) fn finish_zip_file<W: Write + Seek>(mut zip: ZipWriter<W>, dest: &Pat
     written_len(out, dest)
 }
 
-/// The root `config.toml`, if this zip carries vault settings.
-pub fn read_zip_config_toml<R: Read + Seek>(reader: R) -> Result<Option<Vec<u8>>> {
-    read_zip_root_entry(reader, ZIP_CONFIG_ENTRY)
+/// A store zip's envelope and the `config.toml` beside its `store/`, from one
+/// open of the zip. `(None, None)` when the zip holds no store.
+pub(crate) fn read_store_zip_config<R: Read + Seek>(
+    reader: R,
+) -> Result<(Option<StoreEnvelope>, Option<Vec<u8>>)> {
+    let mut archive = ZipArchive::new(reader).map_err(|e| zip_err(Path::new("zip"), e))?;
+    let Some(envelope) = StoreEnvelope::find(&archive) else {
+        return Ok((None, None));
+    };
+    let config = read_envelope_entry(&mut archive, &envelope, ZIP_CONFIG_ENTRY)?;
+    Ok((Some(envelope), config))
 }
 
-/// One file at the zip root (`config.toml` or `README.md`), not a file inside `store/`.
+/// One file beside `store/` in a store zip's envelope (`config.toml` or
+/// `README.md`), not a file inside `store/`. `None` when the zip holds no
+/// store or lacks that file.
+#[cfg(test)]
 pub(crate) fn read_zip_root_entry<R: Read + Seek>(
     reader: R,
     entry: &str,
 ) -> Result<Option<Vec<u8>>> {
     let mut archive = ZipArchive::new(reader).map_err(|e| zip_err(Path::new("zip"), e))?;
-    let strip = detect_single_root_prefix(&mut archive)?;
+    let Some(envelope) = StoreEnvelope::find(&archive) else {
+        return Ok(None);
+    };
+    read_envelope_entry(&mut archive, &envelope, entry)
+}
+
+fn read_envelope_entry<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    envelope: &StoreEnvelope,
+    entry: &str,
+) -> Result<Option<Vec<u8>>> {
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
             .map_err(|e| zip_err(Path::new("zip"), e))?;
-        let Some(enclosed) = enclosed_path(file.name(), strip.as_deref()) else {
-            continue;
-        };
-        if enclosed != Path::new(entry) {
+        if envelope.inside(&file.name().replace('\\', "/")) != Some(entry) {
             continue;
         }
         let mut bytes = Vec::new();
@@ -587,7 +800,7 @@ pub(super) fn open_regular_nofollow(src: &Path) -> Result<File> {
 /// stop; its progress counts the bytes copied.
 pub(super) fn copy_file_to_path(src: &Path, dest: &Path, job: &Job) -> Result<u64> {
     let mut input = job.progress_reader(open_regular_nofollow(src)?);
-    let mut output = job.writer(File::create(dest)?);
+    let mut output = job.writer(PacedFile::new(File::create(dest)?));
     let mut buf = vec![0u8; ZIP_COPY_BUFFER];
     let copied = copy_through(&mut input, &mut output, &mut buf)?;
     output.flush()?;
@@ -602,7 +815,7 @@ pub(super) fn zip_files_to_path(
     dest: &Path,
     job: &Job,
 ) -> Result<u64> {
-    let mut zip = ZipWriter::new(job.writer(buffered_zip_file(File::create(dest)?)));
+    let mut zip = ZipWriter::new(job_zip_file(job, PacedFile::new(File::create(dest)?)));
     let options = FileOptions::default().compression_method(CompressionMethod::Stored);
     let mut buf = vec![0u8; ZIP_COPY_BUFFER];
     for (name, src) in entries {
@@ -648,12 +861,20 @@ fn unzip_store_reader<R: Read + Seek>(reader: R, dest: &Path, source_len: u64) -
     let expand_limit = source_len.saturating_mul(ZIP_EXPAND_FACTOR);
     crate::host_fs::create_dir_all(dest)?;
     let mut archive = ZipArchive::new(reader).map_err(|e| zip_err(dest, e))?;
-    let strip = detect_single_root_prefix(&mut archive)?;
+    let envelope = StoreEnvelope::find(&archive).ok_or_else(|| UprivError::VaultStoreInvalid {
+        path: dest.to_path_buf(),
+        detail: "zip holds no store/header/vault.header".into(),
+    })?;
     let mut unpacked: u64 = 0;
     let mut buf = vec![0u8; ZIP_COPY_BUFFER];
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| zip_err(dest, e))?;
-        let Some(enclosed) = enclosed_path(file.name(), strip.as_deref()) else {
+        let name = file.name().replace('\\', "/");
+        // An export's package folders, and what a system leaves beside them.
+        let Some(rest) = envelope.inside(&name) else {
+            continue;
+        };
+        let Some(enclosed) = enclosed_path(rest) else {
             return Err(UprivError::VaultStoreInvalid {
                 path: dest.to_path_buf(),
                 detail: "zip entry escapes destination".into(),
@@ -734,59 +955,90 @@ fn skip_store_unpack_entry(path: &Path) -> bool {
     name == ZIP_README_ENTRY || name == ZIP_CONFIG_ENTRY || name == STORE_DANGER_FILE_NAME
 }
 
-fn detect_single_root_prefix<R: Read + std::io::Seek>(
-    archive: &mut ZipArchive<R>,
-) -> Result<Option<String>> {
-    let mut tops = std::collections::BTreeSet::new();
-    for i in 0..archive.len() {
-        let file = archive
-            .by_index(i)
-            .map_err(|e| zip_err(Path::new("zip"), e))?;
-        let name = file.name().replace('\\', "/");
-        if name.is_empty() {
-            continue;
-        }
-        let top = name.split('/').next().unwrap_or("");
-        if !top.is_empty() {
-            tops.insert(top.to_string());
-        }
-    }
-    if tops.len() == 1 {
-        let only = tops.into_iter().next().unwrap();
-        if only == "." || only == ".." {
-            return Err(UprivError::VaultStoreInvalid {
-                path: PathBuf::from(only),
-                detail: "zip entry escapes destination".into(),
-            });
-        }
-        // A header file at the zip root is not a directory. Keep the name so
-        // the allowlist rejects it.
-        if !matches!(
-            only.as_str(),
-            "header" | "index" | "data" | "vault.header" | "vault.header.copy"
-        ) {
-            return Ok(Some(only));
-        }
-    }
-    Ok(None)
+/// Where a store zip keeps `README.md`, `config.toml`, and `store/`: at the
+/// zip root in a backup, or in the vault folder of an export's package
+/// (`super::package`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StoreEnvelope {
+    package: Option<Package>,
 }
 
-fn enclosed_path(name: &str, strip: Option<&str>) -> Option<PathBuf> {
-    let normalized = name.replace('\\', "/");
-    let mut trimmed = normalized.as_str();
-    if let Some(prefix) = strip {
-        let with_slash = format!("{prefix}/");
-        if let Some(rest) = trimmed.strip_prefix(&with_slash) {
-            trimmed = rest;
-        } else if trimmed == prefix || trimmed == format!("{prefix}/") {
-            return Some(PathBuf::new());
+impl StoreEnvelope {
+    /// A backup's: the zip root.
+    pub(crate) const BACKUP: Self = Self { package: None };
+
+    /// An export's: the vault folder of `package`.
+    pub(crate) fn export(package: Package) -> Self {
+        Self {
+            package: Some(package),
         }
     }
-    if trimmed.is_empty() {
-        return Some(PathBuf::new());
+
+    /// The envelope of `archive`, from its central directory.
+    pub(crate) fn find<R: Read + Seek>(archive: &ZipArchive<R>) -> Option<Self> {
+        Self::find_in(archive.file_names())
     }
+
+    /// The envelope zip entries `names` hold: an export's package whose
+    /// vault folder holds `store/header/vault.header`, or that file at the zip
+    /// root.
+    pub(crate) fn find_in<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+        let names: Vec<String> = names
+            .into_iter()
+            .map(|name| name.replace('\\', "/"))
+            .collect();
+        let header = format!("{STORE_DIR_NAME}/{HEADER_DIR_NAME}/{HEADER_FILE_NAME}");
+        let holds = |member: &str| names.iter().any(|name| name == member);
+        if let Some(package) = Package::find_in_zip(names.iter().map(String::as_str)) {
+            if holds(&package.member(&header)) {
+                return Some(Self::export(package));
+            }
+        }
+        holds(&header).then_some(Self::BACKUP)
+    }
+
+    /// An export's package; `None` for a backup.
+    pub(crate) fn package(&self) -> Option<&Package> {
+        self.package.as_ref()
+    }
+
+    /// `rest`, a path in the envelope, as a zip member.
+    fn member(&self, rest: &str) -> String {
+        match &self.package {
+            Some(package) => package.member(rest),
+            None => rest.to_string(),
+        }
+    }
+
+    /// The path in the envelope that the member `name` is. `None` for an
+    /// export's two package folders and what a system leaves beside them.
+    fn inside<'a>(&self, name: &'a str) -> Option<&'a str> {
+        match &self.package {
+            Some(package) => package.inside(name),
+            None => {
+                let rest = name.trim_start_matches('/').trim_end_matches('/');
+                (!rest.is_empty()).then_some(rest)
+            }
+        }
+    }
+
+    /// An export's two package folders, as zip folder entries.
+    fn folders(&self) -> Vec<String> {
+        match &self.package {
+            Some(package) => vec![
+                format!("{}/", package.outer),
+                format!("{}/", package.root()),
+            ],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// `rest`, a path in the envelope, as a relative path with no part that
+/// leaves it.
+fn enclosed_path(rest: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
-    for part in trimmed.split('/') {
+    for part in rest.split('/') {
         if part.is_empty() || part == "." {
             continue;
         }
@@ -1025,31 +1277,62 @@ mod tests {
         let out = tmp.path().join("store.zip");
         let id = crate::test_support::test_job_id();
         let job = Job::start(&id).unwrap();
-        zip_store_with_config_to_path(&src, b"[vault]\n", "20260529120000", &out, &job).unwrap();
+        zip_store_with_config_to_path(
+            &src,
+            &StoreEnvelope::BACKUP,
+            b"[vault]\n",
+            "20260529120000",
+            &out,
+            &job,
+        )
+        .unwrap();
         let status = crate::session::job_status(&id).unwrap();
         assert_eq!(status.bytes_total, 13);
         assert_eq!(status.bytes_done, 13);
-        let mut archive = ZipArchive::new(File::open(&out).unwrap()).unwrap();
-        let names: Vec<String> = (0..archive.len())
-            .map(|index| archive.by_index(index).unwrap().name().to_string())
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "README.md",
-                "config.toml",
-                "store/",
-                &format!("store/{STORE_DANGER_FILE_NAME}"),
-                "store/data/",
-                "store/data/0c/",
-                "store/data/0c/c.blob",
-                "store/data/b1/",
-                "store/data/b1/a.blob",
-                "store/data/b1/z.blob",
-                "store/header/",
-                "store/header/vault.header",
-            ]
+        let envelope = [
+            "README.md",
+            "config.toml",
+            "store/",
+            &format!("store/{STORE_DANGER_FILE_NAME}"),
+            "store/data/",
+            "store/data/0c/",
+            "store/data/0c/c.blob",
+            "store/data/b1/",
+            "store/data/b1/a.blob",
+            "store/data/b1/z.blob",
+            "store/header/",
+            "store/header/vault.header",
+        ];
+        assert_eq!(zip_names(&out), envelope);
+
+        // An export holds the same envelope in its package.
+        let package = Package::new("Notes-upriv-2", "Notes");
+        zip_store_with_config_to_path(
+            &src,
+            &StoreEnvelope::export(package),
+            b"[vault]\n",
+            "20260529120000",
+            &out,
+            &Job::untracked(),
+        )
+        .unwrap();
+        let mut packaged = vec![
+            "Notes-upriv-2/".to_string(),
+            "Notes-upriv-2/Notes/".to_string(),
+        ];
+        packaged.extend(
+            envelope
+                .iter()
+                .map(|name| format!("Notes-upriv-2/Notes/{name}")),
         );
+        assert_eq!(zip_names(&out), packaged);
+    }
+
+    fn zip_names(path: &Path) -> Vec<String> {
+        let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+        (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .collect()
     }
 
     #[test]
@@ -1063,31 +1346,76 @@ mod tests {
         let id = crate::test_support::test_job_id();
         let job = Job::start(&id).unwrap();
         let out = tmp.path().join("store.zip");
-        zip_store_with_config_to_path(&src, b"[vault]\n", "20260529120000", &out, &job).unwrap();
+        zip_store_with_config_to_path(
+            &src,
+            &StoreEnvelope::BACKUP,
+            b"[vault]\n",
+            "20260529120000",
+            &out,
+            &job,
+        )
+        .unwrap();
         let status = crate::session::job_status(&id).unwrap();
         assert_eq!(status.bytes_total, 300_012);
         assert_eq!(status.bytes_done, 300_012);
     }
 
     #[test]
-    fn zip_round_trip_preserves_bytes() {
+    fn a_backup_and_an_export_both_unzip_to_their_store() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join(crate::paths::STORE_DIR_NAME);
         crate::host_fs::create_dir_all(src.join("header")).unwrap();
         crate::host_fs::create_dir_all(src.join("data")).unwrap();
         crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
         crate::host_fs::write(src.join("data").join("a.blob"), b"cipher").unwrap();
-        let zipped = zip_dir(&src);
-        let dest = tmp.path().join("out");
-        unzip_store_bytes(&zipped, &dest, &Job::untracked()).unwrap();
-        assert_eq!(
-            crate::host_fs::read(dest.join("header").join("vault.header")).unwrap(),
-            b"header-bytes"
-        );
-        assert_eq!(
-            crate::host_fs::read(dest.join("data").join("a.blob")).unwrap(),
-            b"cipher"
-        );
+        let config = b"[vault]\ndisplay_name = \"Notes\"\n";
+        for (envelope, name) in [
+            (StoreEnvelope::BACKUP, None),
+            (
+                StoreEnvelope::export(Package::new("Notes-upriv", "notes")),
+                Some("notes"),
+            ),
+        ] {
+            let out = tmp.path().join("store.zip");
+            let job = Job::untracked();
+            zip_store_with_config_to_path(&src, &envelope, config, "20260529120000", &out, &job)
+                .unwrap();
+            let zipped = crate::host_fs::read(&out).unwrap();
+            let archive = ZipArchive::new(Cursor::new(zipped.as_slice())).unwrap();
+            let found = StoreEnvelope::find(&archive).unwrap();
+            assert_eq!(found, envelope);
+            assert_eq!(found.package().map(|package| package.vault.as_str()), name);
+            assert_eq!(
+                read_zip_root_entry(Cursor::new(zipped.as_slice()), ZIP_CONFIG_ENTRY)
+                    .unwrap()
+                    .unwrap(),
+                config
+            );
+            let dest = tmp.path().join(format!("out-{}", name.unwrap_or("backup")));
+            unzip_store_bytes(&zipped, &dest, &Job::untracked()).unwrap();
+            assert_eq!(
+                crate::host_fs::read(dest.join("header").join("vault.header")).unwrap(),
+                b"header-bytes"
+            );
+            assert_eq!(
+                crate::host_fs::read(dest.join("data").join("a.blob")).unwrap(),
+                b"cipher"
+            );
+        }
+    }
+
+    #[test]
+    fn a_store_in_one_folder_is_no_store_zip() {
+        let mut cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(&mut cursor);
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        zip.start_file("Notes/store/header/vault.header", options)
+            .unwrap();
+        zip.write_all(b"header-bytes").unwrap();
+        zip.finish().unwrap();
+        drop(zip);
+        let archive = ZipArchive::new(Cursor::new(cursor.into_inner())).unwrap();
+        assert_eq!(StoreEnvelope::find(&archive), None);
     }
 
     #[test]
@@ -1099,10 +1427,17 @@ mod tests {
         crate::host_fs::write(src.join(STORE_DANGER_FILE_NAME), b"notice").unwrap();
         let config = b"[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\nnote = \"kept\"\n";
         let out = tmp.path().join("store.zip");
-        zip_store_with_config_to_path(&src, config, "20260529120000", &out, &Job::untracked())
-            .unwrap();
+        zip_store_with_config_to_path(
+            &src,
+            &StoreEnvelope::BACKUP,
+            config,
+            "20260529120000",
+            &out,
+            &Job::untracked(),
+        )
+        .unwrap();
         let zipped = crate::host_fs::read(&out).unwrap();
-        let read = read_zip_config_toml(Cursor::new(zipped.clone()))
+        let read = read_zip_root_entry(Cursor::new(zipped.clone()), ZIP_CONFIG_ENTRY)
             .unwrap()
             .unwrap();
         assert_eq!(read, config);
@@ -1271,6 +1606,9 @@ mod tests {
             crate::store::INDEX_DIR_NAME,
             crate::store::INDEX_COPY_FILE_NAME
         );
+        zip.start_file("store/header/vault.header", options)
+            .unwrap();
+        zip.write_all(b"header").unwrap();
         zip.start_file(&primary_name, options).unwrap();
         zip.write_all(primary).unwrap();
         if !copy.is_empty() {
@@ -1280,5 +1618,126 @@ mod tests {
         zip.start_file("store/data/note.blob", options).unwrap();
         zip.write_all(b"cipher").unwrap();
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn a_stop_between_two_entries_ends_the_zip_without_a_panic() {
+        let id = crate::test_support::test_job_id();
+        let job = Job::start(&id).unwrap();
+        let mut zip = ZipWriter::new(job_zip_file(&job, Cursor::new(Vec::new())));
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        zip.start_file("a.txt", options).unwrap();
+        zip.write_all(b"first entry").unwrap();
+        crate::session::cancel_job(&id).unwrap();
+        // The next entry first finishes this one, and the stop refuses that.
+        assert!(zip.start_file("b.txt", options).is_err());
+        // The drop finishes the zip once more: that fails too.
+        drop(zip);
+    }
+
+    /// A file that fails its `fail_at`-th write, then answers again, as a
+    /// drive that drops one write.
+    struct DropsOneWrite {
+        inner: Cursor<Vec<u8>>,
+        writes: usize,
+        fail_at: usize,
+    }
+
+    impl Write for DropsOneWrite {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            if self.writes == self.fail_at {
+                return Err(std::io::Error::other("the drive dropped a write"));
+            }
+            self.inner.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for DropsOneWrite {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn a_failed_header_rewrite_ends_the_zip_without_a_panic() {
+        // The first two writes carry the entry's header and its bytes; the
+        // third, that header rewritten in place once the entry's size is known.
+        let file = DropsOneWrite {
+            inner: Cursor::new(Vec::new()),
+            writes: 0,
+            fail_at: 3,
+        };
+        let mut zip = ZipWriter::new(buffered_zip_file(file));
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        zip.start_file("a.txt", options).unwrap();
+        zip.write_all(b"first entry").unwrap();
+        assert!(zip.finish().is_err());
+        drop(zip);
+    }
+
+    #[test]
+    fn a_paced_file_sends_each_window_and_keeps_every_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Notes-upriv.zip.upriv-part");
+        let mut file = PacedFile {
+            window: 4096,
+            ..PacedFile::new(File::create(&path).unwrap())
+        };
+        let body: Vec<u8> = (0..64 * 1024u32).map(|n| (n % 251) as u8).collect();
+        for part in body.chunks(1000) {
+            file.write_all(part).unwrap();
+        }
+        // A header rewritten in place, as the zip writer does, then more bytes.
+        file.seek(SeekFrom::Start(10)).unwrap();
+        file.write_all(b"header").unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
+        file.write_all(&body[..5000]).unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            assert!(file.ranges, "a local file takes ranges");
+            assert!(file.sent_to >= 64 * 1024);
+        }
+        drop(file.into_file());
+        crate::paths::sync_file_durable(&path).unwrap();
+        let mut want = body.clone();
+        want[10..16].copy_from_slice(b"header");
+        want.extend_from_slice(&body[..5000]);
+        assert_eq!(crate::host_fs::read(&path).unwrap(), want);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_file_that_cannot_send_a_range_is_flushed_instead() {
+        let os = std::io::Error::from_raw_os_error;
+        for code in [libc::ENOSYS, libc::EINVAL, libc::ESPIPE, libc::EOPNOTSUPP] {
+            assert!(range_unsupported(&os(code)), "{code}");
+        }
+        // A write error fails the file.
+        for code in [libc::EIO, libc::ENOSPC] {
+            assert!(!range_unsupported(&os(code)), "{code}");
+        }
+    }
+
+    #[test]
+    fn the_zip_buffer_keeps_every_byte_in_order() {
+        let mut out = buffered_zip_file(Cursor::new(Vec::new()));
+        let big = vec![7u8; ZIP_WRITE_BUFFER + 1];
+        out.write_all(b"small").unwrap();
+        out.write_all(&big).unwrap();
+        out.seek(SeekFrom::Start(1)).unwrap();
+        out.write_all(b"M").unwrap();
+        out.seek(SeekFrom::End(0)).unwrap();
+        out.write_all(b"tail").unwrap();
+        out.flush().unwrap();
+        assert!(out.buf.is_empty());
+        let mut want = b"sMall".to_vec();
+        want.extend_from_slice(&big);
+        want.extend_from_slice(b"tail");
+        assert_eq!(out.inner.into_inner(), want);
     }
 }

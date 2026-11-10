@@ -91,7 +91,11 @@ export type { VaultErrorCode } from "./errors/codes";
 export {
   errorOnPasswordField,
   isVaultCredentialChallengeI18nKey,
+  offersVaultRebuild,
   requireVaultErrorI18nKey,
   vaultErrorI18nKey,
 } from "./errors/messages";
 export type { VaultErrorI18nKey } from "./errors/messages";
+export { parseVaultRebuildResult, vaultRebuildSpaceShort } from "./rebuild";
+export { parseVaultDeleteOutcome, type VaultDeleteOutcome } from "./delete";
+export type { VaultRebuildResult, VaultRebuildSpace } from "./rebuild";

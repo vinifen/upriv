@@ -2,6 +2,7 @@ import { Fragment, useId } from "react";
 import { PathField } from "@/components/PathField";
 import { Button, Select, SwitchRow } from "@/components/ui";
 import {
+  BackupFolderChoices,
   DisplayNameFieldError,
   PolicyRadioOption,
   settingsControlClass,
@@ -11,6 +12,8 @@ import {
 import { useTranslation } from "@/i18n";
 import { useVaultRootService } from "@/platform/services";
 import {
+  BACKUP_FOLDER_SYSTEMS,
+  backupFolderSystem,
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
@@ -508,6 +511,73 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
           ]}
         />
       </SettingsField>
+    </SettingsFormGrid>
+  );
+}
+
+interface AppSettingsBackupsSectionProps extends SectionPatchProps<"backups"> {
+  /** Rows as saved: a folder already saved that fails never holds Save. */
+  saved: AppSettingsConfig["backups"];
+  vaultRootPath?: string | null;
+  onBlockingChange?: (blocking: boolean) => void;
+}
+
+/** Where backups go by default. Each vault follows this unless it sets its own. */
+export function AppSettingsBackupsSection({
+  config,
+  onChange,
+  saved,
+  vaultRootPath = null,
+  onBlockingChange,
+}: AppSettingsBackupsSectionProps) {
+  const { t } = useTranslation();
+  const current = backupFolderSystem(currentWorkspaceSystem());
+  const dataFolderLabel = t("modal.app_settings.field.backups.data_folder");
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.backups_intro")}
+      </p>
+      {BACKUP_FOLDER_SYSTEMS.filter((system) => system === current).map((system) => (
+        <SettingsField
+          key={system}
+          label={t(`modal.app_settings.field.workspace.system.${system}`)}
+        >
+          <BackupFolderChoices
+            groupLabel={t(`modal.app_settings.field.workspace.system.${system}`)}
+            active
+            place={config[system].place}
+            path={config[system].path}
+            dataFolderTitle={dataFolderLabel}
+            dataFolderDescription={t("modal.app_settings.field.backups.data_folder_desc")}
+            customTitle={t("modal.app_settings.field.backups.custom")}
+            customDescription={t("modal.app_settings.field.backups.custom_desc")}
+            vaultId={null}
+            vaultRootPath={vaultRootPath}
+            savedPlace={saved[system].place}
+            savedPath={saved[system].path}
+            onChange={(place, path) =>
+              onChange({ [system]: { place: place === "custom" ? "custom" : "data_folder", path } })
+            }
+            onBlockingChange={onBlockingChange}
+          />
+        </SettingsField>
+      ))}
+      {BACKUP_FOLDER_SYSTEMS.filter((system) => system !== current).map((system) => (
+        <SettingsField
+          key={system}
+          label={t(`modal.app_settings.field.workspace.system.${system}`)}
+          hint={t("modal.app_settings.field.workspace.other_system")}
+          disabled
+        >
+          <PathField
+            value={config[system].place === "custom" ? config[system].path : ""}
+            disabled
+            placeholder={dataFolderLabel}
+          />
+        </SettingsField>
+      ))}
     </SettingsFormGrid>
   );
 }

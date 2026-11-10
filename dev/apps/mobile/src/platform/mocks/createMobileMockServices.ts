@@ -330,6 +330,7 @@ export function createMobileMockServices(): AppServices {
         unregisterMockVaultId(vaultId);
         suppressMockSeedVaultId(vaultId);
         removeRemappedMockSeedVault(vaultId);
+        return { outside: "none" as const, folder: null };
       },
       // A mock pick is not a real folder: report the file core would write there.
       async exportToFolder(vault, request, destDir) {
@@ -483,7 +484,7 @@ export function createMobileMockServices(): AppServices {
 
     backups: {
       async listBackups(vaultId) {
-        return (MOCK_BACKUPS[vaultId] ?? []).map((b) => ({ ...b }));
+        return { backups: (MOCK_BACKUPS[vaultId] ?? []).map((b) => ({ ...b })), chosen: null };
       },
       async deleteBackups(vaultId, stamps) {
         const list = MOCK_BACKUPS[vaultId];
@@ -511,11 +512,15 @@ export function createMobileMockServices(): AppServices {
           saved: true,
         };
         MOCK_BACKUPS[vaultId] = [entry, ...(MOCK_BACKUPS[vaultId] ?? [])];
-        return { ...entry };
+        return { backup: { ...entry }, fallback: null };
       },
       async exportTo(vaultId, keys, destDir) {
         return { path: `${destDir}/${backupExportFilename(keys, vaultId)}`, size: keys.length };
       },
+      async checkFolder() {
+        return "ok" as const;
+      },
+      async reuseFolder() {},
     },
 
     logs: {
@@ -565,7 +570,7 @@ export function createMobileMockServices(): AppServices {
       },
       async runClosingPipeline(vaultId, onStep) {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep);
-        return { backupFailed: false, backupFailure: null, plain: null };
+        return { backupFailed: false, backupFailure: null, backupFallback: null, plain: null };
       },
       async hurryClose() {
         return true;
@@ -600,10 +605,15 @@ export function createMobileMockServices(): AppServices {
     createVault: {
       async testImportPackagePassword(password) {
         await new Promise((resolve) => setTimeout(resolve, MOCK_IMPORT_PASSWORD_TEST_MS));
-        return { ok: password.length > 0, embedded: null };
+        return { ok: password.length > 0, embedded: null, vaultName: null };
       },
       async readImportPackageSettings() {
-        return { embedded: null, zipLayout: "store" as const, carriesWorkspace: false };
+        return {
+          embedded: null,
+          zipLayout: "store" as const,
+          carriesWorkspace: false,
+          vaultName: null,
+        };
       },
       async selectImportPackageForProbe() {
         return {

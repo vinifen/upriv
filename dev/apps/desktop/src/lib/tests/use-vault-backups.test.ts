@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { BackupService, VaultBackupEntry } from "@upriv/shared";
+import type { BackupService, VaultBackupEntry, VaultBackupListing } from "@upriv/shared";
 import { useVaultBackups } from "@upriv/shared/react";
 
 function deferred<T>() {
@@ -16,21 +16,27 @@ function entry(stamp: string): VaultBackupEntry {
   return { stamp, createdAt: "2026-01-01T00:00:00.000Z" };
 }
 
+function listing(backups: VaultBackupEntry[]): VaultBackupListing {
+  return { backups, chosen: null };
+}
+
 function serviceWith(overrides: Partial<BackupService>): BackupService {
   return {
-    listBackups: async () => [],
+    listBackups: async () => listing([]),
     deleteBackups: async () => undefined,
     promoteToSave: async () => undefined,
-    saveNow: async () => ({ ...entry("saved"), saved: true }),
+    saveNow: async () => ({ backup: { ...entry("saved"), saved: true }, fallback: null }),
     exportTo: async (_vaultId, _keys, destDir) => ({ path: destDir, size: 0 }),
+    checkFolder: async () => "ok",
+    reuseFolder: async () => undefined,
     ...overrides,
   };
 }
 
 describe("useVaultBackups", () => {
   it("ignores a stale listBackups response after the vault id changes", async () => {
-    const first = deferred<VaultBackupEntry[]>();
-    const second = deferred<VaultBackupEntry[]>();
+    const first = deferred<VaultBackupListing>();
+    const second = deferred<VaultBackupListing>();
     const backupService = serviceWith({
       listBackups: (vaultId) => (vaultId === "vault-a" ? first.promise : second.promise),
     });
@@ -42,8 +48,8 @@ describe("useVaultBackups", () => {
 
     rerender({ vaultId: "vault-b" });
     await act(async () => {
-      first.resolve([entry("from-a")]);
-      second.resolve([entry("from-b")]);
+      first.resolve(listing([entry("from-a")]));
+      second.resolve(listing([entry("from-b")]));
     });
 
     await waitFor(() => {
@@ -54,7 +60,7 @@ describe("useVaultBackups", () => {
   it("clears isBusy when the modal closes during deleteBackups", async () => {
     const hang = deferred<void>();
     const backupService = serviceWith({
-      listBackups: async () => [entry("s1")],
+      listBackups: async () => listing([entry("s1")]),
       deleteBackups: () => hang.promise,
     });
 
@@ -89,7 +95,7 @@ describe("useVaultBackups", () => {
     const backupService = serviceWith({
       listBackups: async () => {
         calls += 1;
-        return [entry(calls === 1 ? "first" : "second")];
+        return listing([entry(calls === 1 ? "first" : "second")]);
       },
     });
 

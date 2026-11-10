@@ -11,6 +11,9 @@ import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
   appSettingsEqual,
+  backupFolderLeftBehind,
+  backupFolderSystem,
+  vaultBackupFolders,
   isRpcError,
   shouldBumpVaultRootEpoch,
   normalizeAppSettings,
@@ -23,6 +26,7 @@ import {
   type AppSettingsSectionId,
 } from "@upriv/shared";
 import {
+  AppSettingsBackupsSection,
   AppSettingsGeneralSection,
   AppSettingsGroupsPrefsSection,
   AppSettingsHiddenVaultsSection,
@@ -84,6 +88,7 @@ export function AppSettingsModal({
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [backupFolderBlocking, setBackupFolderBlocking] = useState(false);
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [resolveFailure, setResolveFailure] = useState<unknown>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
@@ -310,7 +315,7 @@ export function AppSettingsModal({
     Boolean(settings.workspace[workspaceSystem].path.trim());
 
   const handleSaveClick = () => {
-    if (!isDirty || saveBusy) return;
+    if (!isDirty || saveBusy || backupFolderBlocking) return;
     if (workspaceClearWhileOpen) return;
     const workspaceForCheck = workspaceTouchedRef.current
       ? (draft ?? settings).workspace
@@ -323,7 +328,7 @@ export function AppSettingsModal({
   };
 
   const commitSave = () => {
-    if (!isDirty || saveBusy) return;
+    if (!isDirty || saveBusy || backupFolderBlocking) return;
     if (workspaceClearWhileOpen) return;
     const workspaceForSave = workspaceTouchedRef.current
       ? (draft ?? settings).workspace
@@ -349,6 +354,15 @@ export function AppSettingsModal({
       try {
         if (!appSettingsEqual(normalized, settings)) {
           await replaceSettings(normalized);
+          const backupSystem = backupFolderSystem(currentWorkspaceSystem());
+          if (backupSystem) {
+            const vault = vaultBackupFolders()[backupSystem];
+            const leftBehind = backupFolderLeftBehind(
+              { app: settings.backups[backupSystem], vault },
+              { app: normalized.backups[backupSystem], vault },
+            );
+            if (leftBehind) onNotice?.(t("toast.backup_folder_changed"));
+          }
           if (generation !== saveBusyGen.current) return;
           if (openRef.current) setDraft(normalized);
         }
@@ -389,7 +403,12 @@ export function AppSettingsModal({
   };
 
   const saveBlocked =
-    !isDirty || saveBusy || saveConfirmOpen || workspacePathInvalid || workspaceClearWhileOpen;
+    !isDirty ||
+    saveBusy ||
+    saveConfirmOpen ||
+    workspacePathInvalid ||
+    workspaceClearWhileOpen ||
+    backupFolderBlocking;
 
   if (!open || !formConfig) return null;
 
@@ -478,6 +497,8 @@ export function AppSettingsModal({
               setDraftHiddenSession,
               workspaceRootForValidation,
               hasOpenVault,
+              settings.backups,
+              setBackupFolderBlocking,
             )}
           </VaultSettingsSection>
         ))}
@@ -497,6 +518,8 @@ function renderAppSettingsSection(
   onShowHiddenVaultsSessionChange: (value: boolean) => void,
   workspaceRootForValidation: string | null,
   hasOpenVault: boolean,
+  savedBackups: AppSettingsConfig["backups"],
+  onBackupFolderBlocking: (blocking: boolean) => void,
 ) {
   switch (sectionId) {
     case "language":
@@ -520,6 +543,16 @@ function renderAppSettingsSection(
           vaultRootPath={workspaceRootForValidation}
           clearDisabled={hasOpenVault}
           onChange={(patch) => patchDraft("workspace", patch)}
+        />
+      );
+    case "backups":
+      return (
+        <AppSettingsBackupsSection
+          config={draft.backups}
+          saved={savedBackups}
+          vaultRootPath={workspaceRootForValidation}
+          onChange={(patch) => patchDraft("backups", patch)}
+          onBlockingChange={onBackupFolderBlocking}
         />
       );
     case "vault_list":

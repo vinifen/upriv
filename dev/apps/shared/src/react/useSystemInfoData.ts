@@ -53,6 +53,8 @@ export function useSystemInfoData({
   const ui = settings.ui;
   const logging = settings.logging;
   const workspace = settings.workspace;
+  const backups = settings.backups;
+  const backupsKey = JSON.stringify(backups);
   const workspaceSystem = currentWorkspaceSystem(host);
   const workspacePath = workspace[workspaceSystem].path;
   const workspaceMount = workspace.file_manager_folder;
@@ -110,6 +112,7 @@ export function useSystemInfoData({
           ui,
           logging,
           workspace,
+          backups,
           workspaceSystem,
           lastOpenedVault,
           paths: {
@@ -173,6 +176,7 @@ export function useSystemInfoData({
     logging.keep_last_entries,
     workspacePath,
     workspaceMount,
+    backupsKey,
     workspaceSystem,
     vaultRootService,
     getVersion,

@@ -40,6 +40,11 @@ pub struct DeadBlobSpan {
 #[serde(try_from = "IndexFile")]
 pub struct VaultIndex {
     pub format_version: u32,
+    /// How many times this tree was sealed to the store: each seal counts one
+    /// more ([`save_sealed_index`]). A recovery record carries the number of
+    /// the seal it was written for, so a rebuild can tell the newer of two
+    /// records for one path without trusting any clock.
+    pub saves: u64,
     /// Every file and folder, in the order they joined the tree. Changed only
     /// through the methods below, which keep `lookup` in step with it.
     nodes: Vec<VaultNode>,
@@ -70,6 +75,8 @@ pub struct VaultIndex {
 struct IndexFile {
     format_version: u32,
     #[serde(default)]
+    saves: u64,
+    #[serde(default)]
     nodes: Vec<VaultNode>,
     #[serde(default)]
     held: Vec<HeldBlob>,
@@ -84,6 +91,7 @@ impl TryFrom<IndexFile> for VaultIndex {
         let lookup = PathLookup::of(&file.nodes);
         let index = Self {
             format_version: file.format_version,
+            saves: file.saves,
             nodes: file.nodes,
             held: file.held,
             released: file.released,
@@ -100,6 +108,7 @@ impl TryFrom<IndexFile> for VaultIndex {
 impl PartialEq for VaultIndex {
     fn eq(&self, other: &Self) -> bool {
         self.format_version == other.format_version
+            && self.saves == other.saves
             && self.nodes == other.nodes
             && self.held == other.held
             && self.released == other.released
@@ -208,6 +217,11 @@ pub struct SessionWrites {
     pub track_digests: bool,
     /// Blobs a range write or truncate left dead bytes in. Close packs only these.
     pub rewritten_blobs: std::collections::BTreeSet<String>,
+    /// The newest recovery record of each blob this session opened for a
+    /// write, `(start, length)` with its footer, by `file_id`. Found from the
+    /// blob's last bytes, and kept here once chunks are written after it, so
+    /// chunk placement still keeps off it ([`super::record`]).
+    pub(crate) records: std::collections::HashMap<String, (u64, u64)>,
     /// Running digest of files written in order from byte 0, by `file_id`.
     streams: Vec<DigestStream>,
 }
@@ -224,6 +238,7 @@ impl Default for SessionWrites {
         Self {
             track_digests: true,
             rewritten_blobs: Default::default(),
+            records: Default::default(),
             streams: Vec::new(),
         }
     }
@@ -234,6 +249,7 @@ impl std::fmt::Debug for SessionWrites {
         f.debug_struct("SessionWrites")
             .field("track_digests", &self.track_digests)
             .field("rewritten_blobs", &self.rewritten_blobs)
+            .field("records", &self.records.len())
             .field("streams", &self.streams.len())
             .finish()
     }
@@ -245,6 +261,7 @@ impl PartialEq for SessionWrites {
     fn eq(&self, other: &Self) -> bool {
         self.track_digests == other.track_digests
             && self.rewritten_blobs == other.rewritten_blobs
+            && self.records == other.records
             && self.streams.len() == other.streams.len()
             && self
                 .streams
@@ -279,6 +296,7 @@ impl SessionWrites {
             stream.file_id = to.to_string();
         }
         self.rewritten_blobs.remove(from);
+        self.records.remove(from);
     }
 }
 
@@ -313,9 +331,9 @@ pub struct HeldBlob {
     pub size: u64,
     /// When the unlock moved it there, in Unix epoch milliseconds.
     pub held_at: u64,
-    /// The file it holds, as another index of this vault named it: the other
-    /// index file, or one in a backup zip. `None` when no index does, so it
-    /// cannot be read.
+    /// The file it holds, as something else of this vault named it: the other
+    /// index file, the record the blob carries, or the index in a backup zip.
+    /// `None` when none does, so it cannot be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<VaultNode>,
 }
@@ -580,6 +598,7 @@ impl VaultIndex {
     pub fn empty() -> Self {
         Self {
             format_version: super::header::FORMAT_VERSION,
+            saves: 0,
             nodes: Vec::new(),
             held: Vec::new(),
             released: Vec::new(),
@@ -750,7 +769,7 @@ impl VaultIndex {
     /// breaks one was not made by these edits: reading it fails, and no path
     /// in it reaches a plaintext folder or an export. The error names the node
     /// by its place in the list, never by its path, which may reach a log.
-    fn check_tree(&self) -> std::result::Result<(), String> {
+    pub(crate) fn check_tree(&self) -> std::result::Result<(), String> {
         let is_folder = |path: &str| {
             self.lookup
                 .find(&self.nodes, path)
@@ -860,22 +879,26 @@ pub enum Sealed {
     Unflushed,
 }
 
-/// Seal `index` into both index files and return the bytes written. An error
-/// means the primary file is still the previous index, so nothing changed for
-/// the next open. A primary in place but not flushed is [`Sealed::Unflushed`];
-/// the caller logs it ([`log_index_unflushed`]), since only it knows whether
-/// this is a save or the index written again right after one.
+/// Seal `index` into both index files and return the bytes written. The seal
+/// counts one more save first ([`VaultIndex::saves`]); a seal that fails keeps
+/// that count, so every later seal has a higher number than the records any
+/// earlier attempt wrote. An error means the primary file is still the
+/// previous index, so nothing changed for the next open. A primary in place
+/// but not flushed is [`Sealed::Unflushed`]; the caller logs it
+/// ([`log_index_unflushed`]), since only it knows whether this is a save or
+/// the index written again right after one.
 pub fn save_sealed_index(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
     index_key: &[u8; INDEX_KEY_LEN],
-    index: &VaultIndex,
+    index: &mut VaultIndex,
 ) -> Result<(Vec<u8>, Sealed)> {
     let store_dir = store_dir.as_ref();
     let path = index_path(store_dir);
     if let Some(parent) = path.parent() {
         crate::host_fs::create_dir_all(parent)?;
     }
+    index.saves = index.saves.saturating_add(1);
     let sealed = sealed_index_bytes(header, index_key, index)?;
     // Copy first. The primary file is the commit, so a crash before that write
     // still opens the previous tree. Both live in one folder: once its flush
@@ -904,7 +927,7 @@ pub(crate) fn save_new_sealed_index(
     store_dir: &Path,
     header: &VaultHeader,
     index_key: &[u8; INDEX_KEY_LEN],
-    index: &VaultIndex,
+    index: &mut VaultIndex,
 ) -> Result<()> {
     match save_sealed_index(store_dir, header, index_key, index)? {
         (_, Sealed::Flushed) => Ok(()),
@@ -928,9 +951,11 @@ pub struct LoadedIndex {
 /// that keeps its blobs ([`super::held`]) reads it, and the next seal
 /// replaces it.
 ///
-/// When neither file opens, the error is why the primary was refused (the
-/// copy's when there is no primary): a tag that fails, or a tree that breaks
-/// its rules. "Missing" only when neither file is there.
+/// When neither file opens, the error is [`UprivError::VaultIndexUnreadable`]
+/// with why the primary was refused (the copy's when there is no primary): a
+/// tag that fails, or a tree that breaks its rules. "Missing" only when
+/// neither file is there. The header opened, so the blobs can still rebuild
+/// the tree (`vault::rebuild`).
 pub fn load_index_files(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
@@ -979,10 +1004,12 @@ pub fn load_index_files(
             }
         }
     }
-    Err(refused.unwrap_or(UprivError::VaultStoreInvalid {
-        path: primary_path,
-        detail: "missing index".into(),
-    }))
+    let detail = match refused {
+        None => "missing index".to_string(),
+        Some(UprivError::VaultStoreInvalid { detail, .. }) => detail,
+        Some(other) => other.to_string(),
+    };
+    Err(UprivError::VaultIndexUnreadable { detail })
 }
 
 /// Open `sealed` as an index of the store `header` describes. Another copy of
@@ -1074,7 +1101,7 @@ mod tests {
         // The copy and the primary are put in place; neither folder flush lands.
         crate::paths::fail_folder_flushes(2);
         let (sealed, flushed) =
-            save_sealed_index(&dir, &opened.header, &opened.index_key, &index).unwrap();
+            save_sealed_index(&dir, &opened.header, &opened.index_key, &mut index).unwrap();
         crate::paths::fail_folder_flushes(0);
         assert_eq!(flushed, Sealed::Unflushed);
         assert_eq!(crate::host_fs::read(index_path(&dir)).unwrap(), sealed);
@@ -1084,13 +1111,13 @@ mod tests {
         // that follows proves nothing.
         crate::paths::fail_folder_flushes(1);
         let (_, flushed) =
-            save_sealed_index(&dir, &opened.header, &opened.index_key, &index).unwrap();
+            save_sealed_index(&dir, &opened.header, &opened.index_key, &mut index).unwrap();
         crate::paths::fail_folder_flushes(0);
         assert_eq!(flushed, Sealed::Unflushed);
 
         // Creating a store needs an index that survives a power cut.
         crate::paths::fail_folder_flushes(2);
-        let refused = save_new_sealed_index(&dir, &opened.header, &opened.index_key, &index);
+        let refused = save_new_sealed_index(&dir, &opened.header, &opened.index_key, &mut index);
         crate::paths::fail_folder_flushes(0);
         assert!(refused.is_err());
     }
@@ -1172,7 +1199,7 @@ mod tests {
         crate::host_fs::write(&primary, b"torn").unwrap();
 
         let err = super::super::open_store(&dir, b"index-copy-ok");
-        assert!(matches!(err, Err(UprivError::VaultStoreInvalid { .. })));
+        assert!(matches!(err, Err(UprivError::VaultIndexUnreadable { .. })));
         assert_eq!(crate::host_fs::read(&primary).unwrap(), b"torn");
         assert!(!copy.host_exists());
     }
@@ -1266,7 +1293,7 @@ mod tests {
         // Both refused: the error says why, not that the index is missing.
         crate::host_fs::write(&primary, &escaping).unwrap();
         crate::host_fs::write(&copy, &escaping).unwrap();
-        let Err(UprivError::VaultStoreInvalid { detail, .. }) =
+        let Err(UprivError::VaultIndexUnreadable { detail }) =
             super::super::open_store(&dir, b"tree-rules-ok")
         else {
             panic!("both index files are refused");
@@ -1275,7 +1302,7 @@ mod tests {
 
         crate::host_fs::remove_file(&primary).unwrap();
         crate::host_fs::remove_file(&copy).unwrap();
-        let Err(UprivError::VaultStoreInvalid { detail, .. }) =
+        let Err(UprivError::VaultIndexUnreadable { detail }) =
             super::super::open_store(&dir, b"tree-rules-ok")
         else {
             panic!("no index file is there");
@@ -1289,7 +1316,7 @@ mod tests {
     #[test]
     fn an_index_file_reads_back_and_seals_to_the_same_bytes() {
         let file = concat!(
-            r#"{"format_version":1,"nodes":["#,
+            r#"{"format_version":1,"saves":12,"nodes":["#,
             r#"{"path":"docs","kind":{"type":"dir"},"created_at":1,"modified_at":2},"#,
             r#"{"path":"docs/a.txt","kind":{"type":"file","#,
             r#""file_id":"00000000-0000-4000-8000-000000000001","size":5,"#,
@@ -1303,6 +1330,7 @@ mod tests {
         let (_, _, versions) = index.find("docs/a.txt").unwrap().as_file().unwrap();
         assert_eq!(versions, [VERSION]);
         assert!(index.find("docs").unwrap().is_dir());
+        assert_eq!(index.saves, 12);
         assert_eq!(encode_index(&index).unwrap(), file.as_bytes());
     }
 

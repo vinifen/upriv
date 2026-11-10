@@ -263,11 +263,12 @@ describe("createNativeServices", () => {
     services.exportFolderGrants?.hold(picked);
     services.exportFolderGrants?.hold(picked);
 
-    await services.dataFolder?.exportTo(picked, "phone-copy", "job-1");
+    await services.dataFolder?.exportTo(picked, "phone-copy", true, "job-1");
     expect(mountSafExport).toHaveBeenCalledWith(picked);
     expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith(
       "/upriv-saf-export",
       "phone-copy",
+      true,
       "job-1",
     );
     expect(rpc.rpcJobStatus).toHaveBeenCalledWith("job-1");
@@ -342,7 +343,7 @@ describe("createNativeServices", () => {
         { path: "/tmp/notes.zip", fileName: "notes.zip" },
         "job-1",
       ),
-    ).resolves.toEqual({ ok: true, embedded: null });
+    ).resolves.toEqual({ ok: true, embedded: null, vaultName: null });
     await expect(
       services.createVault.testImportPackagePassword(
         "x",
@@ -353,7 +354,7 @@ describe("createNativeServices", () => {
         },
         "job-2",
       ),
-    ).resolves.toEqual({ ok: true, embedded: null });
+    ).resolves.toEqual({ ok: true, embedded: null, vaultName: null });
   });
 
   it("calls import and backup RPCs while a SAF tree is active", async () => {
@@ -366,6 +367,7 @@ describe("createNativeServices", () => {
     ).resolves.toEqual({
       ok: false,
       embedded: null,
+      vaultName: null,
     });
     await expect(services.backups.listBackups("vault-1")).resolves.toEqual([]);
     expect(rpc.rpcBackupList).toHaveBeenCalledWith("vault-1");

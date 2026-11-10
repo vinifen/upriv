@@ -26,5 +26,9 @@ export function startDataFolderExport(
   destination: DataFolderExportDestination,
 ): void {
   if (!dataFolderExportReady(controls, destination)) return;
-  controls.onStart(destination.folder.path.trim(), dataFolderZipNameFromInput(destination.zipName));
+  controls.onStart(
+    destination.folder.path.trim(),
+    dataFolderZipNameFromInput(destination.zipName),
+    destination.includeBackups,
+  );
 }

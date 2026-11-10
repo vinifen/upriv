@@ -9,6 +9,7 @@ export {
   SettingsField,
   SettingsFormGrid,
   DisplayNameFieldError,
+  BackupFolderChoices,
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
   VaultSettingsDangerZoneSection,

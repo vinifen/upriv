@@ -12,8 +12,10 @@ export interface DataFolderExportControls {
   written: VaultPathWriteResult | null;
   /** The Data folder window opened or closed: its saved line goes. */
   clearWritten: () => void;
+  /** How many vaults keep backups outside the data folder, which no copy holds. */
+  outsideBackups: number;
   /** True when the export of `<name>.zip` started and took the folder. */
-  onStart: (destDir: string, name: string) => boolean;
+  onStart: (destDir: string, name: string, includeBackups: boolean) => boolean;
   onStop: () => void;
 }
 
@@ -29,4 +31,7 @@ export interface DataFolderExportDestination {
   setZipName: (name: string) => void;
   /** A fresh `upriv-<UTC stamp>`: when the window opens and after each export. */
   resetZipName: () => void;
+  /** Starts on. Off leaves each vault's backups out of the copy. */
+  includeBackups: boolean;
+  setIncludeBackups: (include: boolean) => void;
 }

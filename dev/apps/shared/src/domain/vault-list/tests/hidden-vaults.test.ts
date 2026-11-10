@@ -135,6 +135,7 @@ describe("hidden vaults", () => {
           linux: { place: "custom", path: "/data/workspace" },
         },
         workspaceSystem: "linux",
+        backups: settings.backups,
         lastOpenedVault: "",
         paths: {
           logsDir: "/data/.upriv/logs",

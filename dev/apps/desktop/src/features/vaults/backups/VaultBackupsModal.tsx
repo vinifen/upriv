@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
+import { RevealPathButton } from "@/components/RevealPathButton";
 import { Button, ElapsedTime, IconButton, JobStopButton, Modal, Toast } from "@/components/ui";
 import {
   backupDeleteConfirmPhrase,
@@ -8,9 +9,18 @@ import {
   backupEntryKey,
   backupExportFilename,
   backupExportRowKey,
+  backupFolderStatusI18nKey,
+  backupListSections,
+  backupSectionSelection,
   formatBytes,
+  fileNameOfPath,
   formatBackupDate,
   matchesBackupDeleteConfirmation,
+  toggleBackupSection,
+  type BackupListSection,
+  type BackupLocation,
+  type BackupSectionSelection,
+  type ChosenBackupFolder,
   type VaultBackupEntry,
   type VaultListItem,
 } from "@upriv/shared";
@@ -19,7 +29,7 @@ import { useErrorToast } from "@/hooks/useErrorToast";
 import type { ExportFolder } from "@/hooks/useExportFolder";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
 import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
-import { settingsControlClass } from "@/components/settings";
+import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import {
   useBackupExportStep,
   useVaultBackups,
@@ -43,7 +53,12 @@ interface VaultBackupsModalProps {
   /** Bumped when that job finishes so the open list reloads. */
   listRefreshToken: number;
   onClose: () => void;
-  onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
+  onCreateVaultFromBackup?: (
+    stamp: string,
+    fileName: string,
+    saved?: boolean,
+    location?: BackupLocation,
+  ) => void;
   /** The folder a backup export writes into, kept by the vault list for the next one. */
   exportFolder: ExportFolder;
   /** The backup export in flight, of any vault. Survives closing the modal. */
@@ -76,15 +91,20 @@ export function VaultBackupsModal({
   const { toast, dismiss, showError, errorText } = useErrorToast();
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
-  const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
-    backupService,
-    vaultId,
-    open,
-    listRefreshToken,
-  );
+  const {
+    backups,
+    chosen,
+    deleteBackups,
+    promoteToSave,
+    resetBackups,
+    reuseFolder,
+    isLoading,
+    isBusy,
+    error,
+  } = useVaultBackups(backupService, vaultId, open, listRefreshToken);
 
-  const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
+  const sections = useMemo(() => backupListSections(backups, vaultId ?? ""), [backups, vaultId]);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
@@ -106,7 +126,6 @@ export function VaultBackupsModal({
   });
   const shownExport = exportJob !== null && exportJob.vaultId === vaultId ? exportJob : null;
   const exportingKeys = useMemo(() => new Set(shownExport?.keys), [shownExport?.keys]);
-  const allSelected = backups.length > 0 && rowKeys.every((key) => selected.has(key));
   const someSelected = selected.size > 0;
   /** A single backup has nothing to multi-select: row actions cover it. */
   const selectable = backups.length > 1;
@@ -158,12 +177,8 @@ export function VaultBackupsModal({
     });
   };
 
-  const toggleSelectAll = () => {
-    if (allSelected) {
-      setSelected(new Set());
-      return;
-    }
-    setSelected(new Set(rowKeys));
+  const toggleSection = (keys: readonly string[]) => {
+    setSelected((current) => toggleBackupSection(current, keys));
   };
 
   const beginDelete = (stamps: string[]) => {
@@ -245,6 +260,33 @@ export function VaultBackupsModal({
     shownExport && runningRowKey === null ? shownExport : null,
   );
   const selectedKeys = rowKeys.filter((key) => selected.has(key));
+  const selectionBar =
+    deleteTargets === null && someSelected ? (
+      <BackupSelectionBar
+        selectedCount={selected.size}
+        promoteCount={selectedStandardKeys.length}
+        promoteDisabled={isBusy || selectedStandardKeys.some((key) => exportingKeys.has(key))}
+        onPromoteSelected={() => {
+          void promoteToSave(selectedStandardKeys).catch((err) => {
+            showError(err, "toast.backup_promote_failed");
+          });
+        }}
+        onExport={() => exportStep.begin(selectedKeys)}
+        deleteDisabled={selectedKeys.some((key) => exportingKeys.has(key))}
+        onDeleteSelected={() => beginDelete(selectedKeys)}
+      />
+    ) : null;
+  // The selection's actions and an export of several sit under the list, so
+  // choosing a row never moves the rows.
+  const footer =
+    listExportPanel || selectionBar ? (
+      <div className="space-y-3">
+        {listExportPanel ? (
+          <div className="rounded-xl bg-surface-container px-4 py-3">{listExportPanel}</div>
+        ) : null}
+        {selectionBar}
+      </div>
+    ) : undefined;
 
   return (
     <Modal
@@ -255,6 +297,7 @@ export function VaultBackupsModal({
       onClose={handleClose}
       panelClassName="max-w-2xl"
       bodyScroll={false}
+      footer={footer}
     >
       <p className="mb-4 text-sm text-on-surface-variant">{t("modal.backup.hint")}</p>
 
@@ -268,58 +311,11 @@ export function VaultBackupsModal({
         </p>
       ) : (
         <>
-          {deleteTargets === null && selectable ? (
-            <BackupListToolbar
-              allSelected={allSelected}
-              someSelected={someSelected}
-              selectedCount={selected.size}
-              onToggleSelectAll={toggleSelectAll}
-              promoteCount={selectedStandardKeys.length}
-              promoteDisabled={isBusy || selectedStandardKeys.some((key) => exportingKeys.has(key))}
-              onPromoteSelected={() => {
-                void promoteToSave(selectedStandardKeys).catch((err) => {
-                  showError(err, "toast.backup_promote_failed");
-                });
-              }}
-              onExport={() => exportStep.begin(selectedKeys)}
-              deleteDisabled={selectedKeys.some((key) => exportingKeys.has(key))}
-              onDeleteSelected={() => beginDelete(Array.from(selected))}
-            />
-          ) : null}
-
-          {listExportPanel ? (
-            <div className="mb-3 rounded-xl bg-surface-container px-4 py-3">{listExportPanel}</div>
-          ) : null}
-
-          {/* The one scroller: the hint, toolbar, and export stay put above it. */}
-          <div className="modal-scroll-pane min-h-0 flex-1 space-y-5 overflow-y-auto pr-0.5">
-            <BackupSection
-              title={t("modal.backup.section.saves")}
-              help={t("modal.backup.section.saves_help")}
-              action={
-                saveJob ? (
-                  <span className="shrink-0">
-                    <JobStopButton
-                      size="sm"
-                      stoppingSince={saveJob.stoppingSince}
-                      stoppable={saveJob.progress?.stoppable ?? true}
-                      onStop={onStopSave}
-                    />
-                  </span>
-                ) : (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="shrink-0"
-                    disabled={!canSaveNow || isBusy || deleteTargets !== null}
-                    onClick={onSaveNow}
-                  >
-                    {t("modal.backup.backup_now")}
-                  </Button>
-                )
-              }
-              notice={
-                saveJob ? (
+          {/* The one scroller: the hint stays put above it. */}
+          <div className="modal-scroll-pane min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5">
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                {saveJob ? (
                   <p className="flex items-baseline gap-2 text-xs text-on-surface-variant">
                     <span>
                       {saveJob.startedAt === null
@@ -334,44 +330,75 @@ export function VaultBackupsModal({
                   <p className="text-xs text-on-surface-variant">
                     {t("modal.backup.backup_now_blocked")}
                   </p>
-                )
-              }
-              emptyLabel={t("modal.backup.saves_empty")}
-              entries={savedBackups}
-              locale={locale}
-              vaultId={vault?.id ?? ""}
-              selected={selected}
-              selectionDisabled={deleteTargets !== null}
-              exportingKeys={exportingKeys}
-              rowExportPanel={rowExportPanel}
-              onToggleSelected={selectable ? toggleSelected : undefined}
-              onExport={(key) => exportStep.begin([key])}
-              onDelete={(stamp) => beginDelete([stamp])}
-              onCreateVaultFromBackup={onCreateVaultFromBackup}
-            />
-            <BackupSection
-              title={t("modal.backup.section.standard")}
-              help={t("modal.backup.section.standard_help")}
-              emptyLabel={t("modal.backup.standard_empty")}
-              entries={standardBackups}
-              locale={locale}
-              vaultId={vault?.id ?? ""}
-              selected={selected}
-              selectionDisabled={deleteTargets !== null}
-              exportingKeys={exportingKeys}
-              rowExportPanel={rowExportPanel}
-              onToggleSelected={selectable ? toggleSelected : undefined}
-              onExport={(key) => exportStep.begin([key])}
-              onDelete={(stamp) => beginDelete([stamp])}
-              onCreateVaultFromBackup={onCreateVaultFromBackup}
-              onPromoteToSave={handlePromoteToSave}
-            />
+                )}
+              </div>
+              {saveJob ? (
+                <span className="shrink-0">
+                  <JobStopButton
+                    size="sm"
+                    stoppingSince={saveJob.stoppingSince}
+                    stoppable={saveJob.progress?.stoppable ?? true}
+                    onStop={onStopSave}
+                  />
+                </span>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={!canSaveNow || isBusy || deleteTargets !== null}
+                  onClick={onSaveNow}
+                >
+                  {t("modal.backup.backup_now")}
+                </Button>
+              )}
+            </div>
+
+            {chosen && chosen.status !== "ok" ? (
+              <ChosenFolderProblem
+                chosen={chosen}
+                busy={isBusy}
+                onRetry={() => void resetBackups().catch(() => undefined)}
+                onReuse={() => {
+                  void reuseFolder().catch((err) => {
+                    showError(err, "error.unexpected");
+                  });
+                }}
+              />
+            ) : null}
+
+            {backups.length === 0 ? (
+              <p className="rounded-xl bg-surface-container px-4 py-6 text-center text-xs text-on-surface-variant">
+                {t("modal.backup.empty")}
+              </p>
+            ) : null}
+
+            {sections.map((section) => (
+              <BackupSection
+                key={section.id}
+                section={section}
+                selection={backupSectionSelection(section.keys, selected)}
+                onToggleSection={selectable ? () => toggleSection(section.keys) : undefined}
+                locale={locale}
+                vaultId={vault.id}
+                selected={selected}
+                selectionDisabled={deleteTargets !== null}
+                exportingKeys={exportingKeys}
+                rowExportPanel={rowExportPanel}
+                onToggleSelected={selectable ? toggleSelected : undefined}
+                onExport={(key) => exportStep.begin([key])}
+                onDelete={(stamp) => beginDelete([stamp])}
+                onCreateVaultFromBackup={onCreateVaultFromBackup}
+                onPromoteToSave={handlePromoteToSave}
+              />
+            ))}
           </div>
         </>
       )}
 
       {deleteTargets !== null ? (
         <div ref={confirmRef} className="mt-4 space-y-3 rounded-xl bg-surface-container px-4 py-4">
+          <DeleteTargetsSentence targets={deleteTargets} />
           <p className="text-sm text-on-surface-variant">
             {deleteCount === 1
               ? t("modal.backup.delete_confirm_one")
@@ -409,15 +436,75 @@ export function VaultBackupsModal({
   );
 }
 
+/** Stands in for the names in the translated sentence, so each name can be its own span. */
+const NAMES_SLOT = "\u0000";
+
+/**
+ * "These 2 backups will be deleted: a.zip, b.zip." A name moves to the next
+ * line whole rather than breaking at its hyphen.
+ */
+function DeleteTargetsSentence({ targets }: { targets: readonly string[] }) {
+  const { t } = useTranslation();
+  const sentence =
+    targets.length === 1
+      ? t("modal.backup.delete_list_one", { name: NAMES_SLOT })
+      : t("modal.backup.delete_list", { count: String(targets.length), names: NAMES_SLOT });
+  const [before, after = ""] = sentence.split(NAMES_SLOT);
+  return (
+    <p className="max-h-32 overflow-y-auto text-sm text-on-surface-variant">
+      {before}
+      {targets.map((key, index) => (
+        <span key={key}>
+          {index > 0 ? ", " : null}
+          <span className="inline-block max-w-full break-all">{fileNameOfPath(key)}</span>
+        </span>
+      ))}
+      {after}
+    </p>
+  );
+}
+
+/** A chosen folder that fails is no section: it has nothing to list. */
+function ChosenFolderProblem({
+  chosen,
+  busy,
+  onRetry,
+  onReuse,
+}: {
+  chosen: ChosenBackupFolder;
+  busy: boolean;
+  onRetry: () => void;
+  onReuse: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="rounded-xl border border-outline-variant/30 bg-surface-container px-4 py-3">
+      <p className="text-sm text-on-surface" role="alert">
+        {t(backupFolderStatusI18nKey(chosen.status))}
+      </p>
+      <p className="mt-0.5 truncate font-mono text-xs text-on-surface-variant" title={chosen.path}>
+        {chosen.path}
+      </p>
+      <p className="mt-1 text-xs text-on-surface-variant">{t("modal.backup.folder.falls_back")}</p>
+      <div className="mt-2 flex flex-wrap justify-end gap-2">
+        {chosen.status === "missing" ? (
+          <Button variant="ghost" size="sm" disabled={busy} onClick={onReuse}>
+            {t("modal.backup.folder.reuse")}
+          </Button>
+        ) : null}
+        <Button variant="secondary" size="sm" disabled={busy} onClick={onRetry}>
+          {t("action.retry")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 interface BackupSectionProps {
-  title: string;
-  help: string;
-  /** Beside the title, e.g. Back up now. */
-  action?: ReactNode;
-  /** Under the help text, e.g. why the action is unavailable. */
-  notice?: ReactNode;
-  emptyLabel: string;
-  entries: VaultBackupEntry[];
+  section: BackupListSection;
+  selection: BackupSectionSelection;
+  /** Absent while there is a single backup: row actions cover it. */
+  onToggleSection?: () => void;
   locale: string;
   vaultId: string;
   selected: Set<string>;
@@ -429,17 +516,24 @@ interface BackupSectionProps {
   onToggleSelected?: (stamp: string) => void;
   onExport: (stamp: string) => void;
   onDelete: (stamp: string) => void;
-  onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
+  onCreateVaultFromBackup?: (
+    stamp: string,
+    fileName: string,
+    saved?: boolean,
+    location?: BackupLocation,
+  ) => void;
   onPromoteToSave?: (stamp: string) => void;
 }
 
+/**
+ * Every backup in one folder, as a collapsible card like the settings
+ * sections: its Saves, then its Standard backups. Its box selects or clears
+ * every backup in the folder.
+ */
 function BackupSection({
-  title,
-  help,
-  action,
-  notice,
-  emptyLabel,
-  entries,
+  section,
+  selection,
+  onToggleSection,
   locale,
   vaultId,
   selected,
@@ -452,107 +546,133 @@ function BackupSection({
   onCreateVaultFromBackup,
   onPromoteToSave,
 }: BackupSectionProps) {
+  const { t } = useTranslation();
+  const title = t(
+    section.location === "chosen" ? "modal.backup.group.chosen" : "modal.backup.group.data_folder",
+  );
+  const selectLabel = t("modal.backup.select_section", { section: title });
   return (
-    <section className="space-y-2">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-medium text-on-surface">{title}</h3>
-          <p className="mt-0.5 text-xs leading-relaxed text-on-surface-variant">{help}</p>
-          {notice ? <div className="mt-1">{notice}</div> : null}
+    <VaultSettingsSection
+      title={title}
+      defaultOpen
+      aside={
+        <>
+          <span className="text-xs tabular-nums text-on-surface-variant" aria-hidden>
+            {section.keys.length}
+          </span>
+          {onToggleSection ? (
+            <input
+              type="checkbox"
+              aria-label={selectLabel}
+              title={selectLabel}
+              checked={selection === "all"}
+              ref={(node) => {
+                if (node) node.indeterminate = selection === "some";
+              }}
+              disabled={selectionDisabled}
+              onChange={onToggleSection}
+              className={[backupCheckboxClass, "disabled:opacity-40"].join(" ")}
+            />
+          ) : null}
+        </>
+      }
+    >
+      {section.folder ? (
+        <div className="flex min-w-0 items-center gap-1">
+          <p
+            className="min-w-0 flex-1 truncate font-mono text-[11px] text-on-surface-variant/80"
+            title={section.folder}
+          >
+            {section.folder}
+          </p>
+          <RevealPathButton path={section.folder} row />
         </div>
-        {action}
+      ) : null}
+      <div className="mt-2 space-y-4">
+        {section.groups.map((group) => (
+          <div key={group.saved ? "saves" : "standard"} className="space-y-2">
+            <div className="min-w-0">
+              <h4 className="text-sm font-medium text-on-surface">
+                {t(group.saved ? "modal.backup.section.saves" : "modal.backup.section.standard")}
+              </h4>
+              <p className="mt-0.5 text-xs leading-relaxed text-on-surface-variant">
+                {t(
+                  group.saved
+                    ? "modal.backup.section.saves_help"
+                    : "modal.backup.section.standard_help",
+                )}
+              </p>
+            </div>
+            <ul className="space-y-2">
+              {group.entries.map((entry, index) => {
+                const key = group.keys[index];
+                const fileName = backupEntryFileName(entry, vaultId);
+                return (
+                  <BackupRow
+                    key={key}
+                    entry={entry}
+                    locale={locale}
+                    fileName={fileName}
+                    checked={Boolean(onToggleSelected) && selected.has(key)}
+                    selectionDisabled={selectionDisabled}
+                    exporting={exportingKeys.has(key)}
+                    exportPanel={rowExportPanel(key)}
+                    onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
+                    onExport={() => onExport(key)}
+                    onDelete={() => onDelete(key)}
+                    onCreateVaultFromBackup={
+                      onCreateVaultFromBackup
+                        ? () =>
+                            onCreateVaultFromBackup(
+                              entry.stamp,
+                              fileName,
+                              Boolean(entry.saved),
+                              entry.location,
+                            )
+                        : undefined
+                    }
+                    onPromoteToSave={
+                      onPromoteToSave && !group.saved ? () => onPromoteToSave(key) : undefined
+                    }
+                  />
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </div>
-      {entries.length === 0 ? (
-        <p className="rounded-xl bg-surface-container px-4 py-6 text-center text-xs text-on-surface-variant">
-          {emptyLabel}
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {entries.map((entry) => {
-            const key = backupEntryKey(entry, vaultId);
-            const fileName = backupEntryFileName(entry, vaultId);
-            return (
-              <BackupRow
-                key={key}
-                entry={entry}
-                locale={locale}
-                fileName={fileName}
-                checked={Boolean(onToggleSelected) && selected.has(key)}
-                selectionDisabled={selectionDisabled}
-                exporting={exportingKeys.has(key)}
-                exportPanel={rowExportPanel(key)}
-                onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
-                onExport={() => onExport(key)}
-                onDelete={() => onDelete(key)}
-                onCreateVaultFromBackup={
-                  onCreateVaultFromBackup
-                    ? () => onCreateVaultFromBackup(entry.stamp, fileName, Boolean(entry.saved))
-                    : undefined
-                }
-                onPromoteToSave={onPromoteToSave ? () => onPromoteToSave(key) : undefined}
-              />
-            );
-          })}
-        </ul>
-      )}
-    </section>
+    </VaultSettingsSection>
   );
 }
 
-interface BackupListToolbarProps {
-  allSelected: boolean;
-  someSelected: boolean;
+interface BackupSelectionBarProps {
   selectedCount: number;
   /** Selected standard backups that "Save" would promote. */
   promoteCount: number;
   promoteDisabled: boolean;
-  onToggleSelectAll: () => void;
   onPromoteSelected: () => void;
   onExport: () => void;
   deleteDisabled: boolean;
   onDeleteSelected: () => void;
 }
 
-function BackupListToolbar({
-  allSelected,
-  someSelected,
+/** What to do with the backups chosen in any section. Shown only while some are. */
+function BackupSelectionBar({
   selectedCount,
   promoteCount,
   promoteDisabled,
-  onToggleSelectAll,
   onPromoteSelected,
   onExport,
   deleteDisabled,
   onDeleteSelected,
-}: BackupListToolbarProps) {
+}: BackupSelectionBarProps) {
   const { t } = useTranslation();
-  const selectAllId = useId();
-
   return (
-    <div className="mb-2 flex min-h-14 flex-wrap items-center gap-2 pl-4 pr-2 sm:flex-nowrap sm:pl-4 sm:pr-3">
-      <label
-        htmlFor={selectAllId}
-        className="flex min-w-0 flex-1 cursor-pointer select-none items-center gap-3"
-      >
-        <input
-          id={selectAllId}
-          type="checkbox"
-          checked={allSelected}
-          ref={(node) => {
-            if (node) node.indeterminate = someSelected && !allSelected;
-          }}
-          onChange={onToggleSelectAll}
-          className={backupCheckboxClass}
-        />
-        <span className="text-sm text-on-surface-variant">{t("modal.backup.select_all")}</span>
-      </label>
-
-      <div className="flex shrink-0 items-center gap-1 sm:ml-auto">
-        {someSelected ? (
-          <span className="pr-1 text-xs tabular-nums text-on-surface-variant">
-            {t("modal.backup.selected_count", { count: String(selectedCount) })}
-          </span>
-        ) : null}
+    <div className="flex min-h-12 flex-wrap items-center gap-2 rounded-xl bg-surface-container py-1.5 pl-4 pr-2 sm:flex-nowrap sm:pr-3">
+      <span className="min-w-0 flex-1 text-sm tabular-nums text-on-surface" role="status">
+        {t("modal.backup.selected_count", { count: String(selectedCount) })}
+      </span>
+      <div className="flex shrink-0 items-center gap-1">
         {promoteCount > 0 ? (
           <Button
             variant="secondary"
@@ -564,29 +684,25 @@ function BackupListToolbar({
             {t("modal.backup.promote_to_save")}
           </Button>
         ) : null}
-        {someSelected ? (
-          <IconButton
-            label={t("modal.backup.export_selected")}
-            size="row"
-            variant="row-action"
-            className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
-            onClick={onExport}
-          >
-            <Icon name="download" size={18} />
-          </IconButton>
-        ) : null}
-        {someSelected ? (
-          <IconButton
-            label={t("modal.backup.delete_selected")}
-            size="row"
-            variant="row-action"
-            disabled={deleteDisabled}
-            className="-mr-1 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
-            onClick={onDeleteSelected}
-          >
-            <Icon name="trash" size={18} />
-          </IconButton>
-        ) : null}
+        <IconButton
+          label={t("modal.backup.export_selected")}
+          size="row"
+          variant="row-action"
+          className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+          onClick={onExport}
+        >
+          <Icon name="download" size={18} />
+        </IconButton>
+        <IconButton
+          label={t("modal.backup.delete_selected")}
+          size="row"
+          variant="row-action"
+          disabled={deleteDisabled}
+          className="-mr-1 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
+          onClick={onDeleteSelected}
+        >
+          <Icon name="trash" size={18} />
+        </IconButton>
       </div>
     </div>
   );
@@ -640,8 +756,8 @@ function BackupRow({
     <li
       className={[
         "rounded-xl border border-transparent transition-colors",
-        "bg-surface-container",
-        checked ? "border-accent/40" : "hover:bg-surface-container-high/80",
+        "bg-surface-container-high/50",
+        checked ? "border-accent/40" : "hover:bg-surface-container-high",
       ]
         .filter(Boolean)
         .join(" ")}

@@ -23,6 +23,16 @@ function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
   return { status: async () => null, cancel: vi.fn(async () => undefined) };
 }
 
+/** A security service whose rebuild is never asked for here. */
+function security(change: Partial<VaultSecurityService>): VaultSecurityService {
+  return {
+    changePassword: vi.fn(),
+    changeKdfPreset: vi.fn(),
+    rebuildIndex: vi.fn(),
+    ...change,
+  };
+}
+
 function events() {
   return {
     onChanged: vi.fn(),
@@ -35,19 +45,16 @@ function events() {
 describe("useVaultRewrapJob", () => {
   it("sends the password change as a job and reports it changed", async () => {
     const run = deferred();
-    const security: VaultSecurityService = {
-      changePassword: vi.fn(() => run.promise),
-      changeKdfPreset: vi.fn(),
-    };
+    const service = security({ changePassword: vi.fn(() => run.promise) });
     const on = events();
-    const { result } = renderHook(() => useVaultRewrapJob(security, jobs(), on));
+    const { result } = renderHook(() => useVaultRewrapJob(service, jobs(), on));
 
     act(() => {
       expect(result.current.changePassword("notes", "old", "new")).toBe(true);
     });
     const job = result.current.job;
     expect(job).toMatchObject({ vaultId: "notes", kind: "password", nextPreset: null });
-    expect(security.changePassword).toHaveBeenCalledWith("notes", {
+    expect(service.changePassword).toHaveBeenCalledWith("notes", {
       currentPassword: "old",
       newPassword: "new",
       job: job?.id,
@@ -63,11 +70,11 @@ describe("useVaultRewrapJob", () => {
   });
 
   it("refuses a second change while one runs", () => {
-    const security: VaultSecurityService = {
+    const service = security({
       changePassword: vi.fn(() => new Promise<void>(() => undefined)),
       changeKdfPreset: vi.fn(() => new Promise<void>(() => undefined)),
-    };
-    const { result } = renderHook(() => useVaultRewrapJob(security, jobs(), events()));
+    });
+    const { result } = renderHook(() => useVaultRewrapJob(service, jobs(), events()));
 
     act(() => {
       expect(result.current.changePassword("notes", "old", "new")).toBe(true);
@@ -75,18 +82,15 @@ describe("useVaultRewrapJob", () => {
     act(() => {
       expect(result.current.changeKdf("other", "pw", "1gib")).toBe(false);
     });
-    expect(security.changeKdfPreset).not.toHaveBeenCalled();
+    expect(service.changeKdfPreset).not.toHaveBeenCalled();
   });
 
   it("stops through job_cancel and reports a stop, not a failure", async () => {
     const run = deferred();
-    const security: VaultSecurityService = {
-      changePassword: vi.fn(),
-      changeKdfPreset: vi.fn(() => run.promise),
-    };
+    const change = security({ changeKdfPreset: vi.fn(() => run.promise) });
     const service = jobs();
     const on = events();
-    const { result } = renderHook(() => useVaultRewrapJob(security, service, on));
+    const { result } = renderHook(() => useVaultRewrapJob(change, service, on));
 
     act(() => {
       result.current.changeKdf("notes", "pw", "1gib");
@@ -107,15 +111,14 @@ describe("useVaultRewrapJob", () => {
   });
 
   it("keeps running when core refuses the stop in the header write", async () => {
-    const security: VaultSecurityService = {
+    const change = security({
       changePassword: vi.fn(() => new Promise<void>(() => undefined)),
-      changeKdfPreset: vi.fn(),
-    };
+    });
     const refused = new RpcError(JOB_ERROR_CODES.NOT_STOPPABLE, "finishing");
     const service = jobs();
     service.cancel.mockRejectedValueOnce(refused);
     const on = events();
-    const { result } = renderHook(() => useVaultRewrapJob(security, service, on));
+    const { result } = renderHook(() => useVaultRewrapJob(change, service, on));
 
     act(() => {
       result.current.changePassword("notes", "old", "new");

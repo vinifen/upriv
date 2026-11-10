@@ -13,6 +13,8 @@ interface SettingsAccordionSectionProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   tone?: "default" | "danger";
+  /** End of the header, outside the expand control, so its controls never toggle the section. */
+  aside?: ReactNode;
   children: ReactNode;
 }
 
@@ -47,6 +49,7 @@ export function SettingsAccordionSection({
   open: openProp,
   onOpenChange,
   tone = "default",
+  aside,
   children,
 }: SettingsAccordionSectionProps) {
   const { colors, typography, theme } = useTheme();
@@ -71,26 +74,29 @@ export function SettingsAccordionSection({
         },
       ]}
     >
-      <Pressable
-        onPress={toggle}
-        style={styles.header}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-      >
-        <SectionChevron
-          open={open}
-          color={tone === "danger" ? colors.onErrorContainer : colors.onSurfaceVariant}
-        />
-        <Text
-          style={[
-            typography.caption,
-            styles.title,
-            { color: tone === "danger" ? colors.onErrorContainer : colors.onSurface },
-          ]}
+      <View style={styles.headerRow}>
+        <Pressable
+          onPress={toggle}
+          style={styles.header}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
         >
-          {title}
-        </Text>
-      </Pressable>
+          <SectionChevron
+            open={open}
+            color={tone === "danger" ? colors.onErrorContainer : colors.onSurfaceVariant}
+          />
+          <Text
+            style={[
+              typography.caption,
+              styles.title,
+              { color: tone === "danger" ? colors.onErrorContainer : colors.onSurface },
+            ]}
+          >
+            {title}
+          </Text>
+        </Pressable>
+        {aside ? <View style={styles.aside}>{aside}</View> : null}
+      </View>
       <Collapse open={open}>
         <View style={styles.body}>{children}</View>
       </Collapse>
@@ -103,7 +109,13 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     overflow: "visible",
   },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   header: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
@@ -115,6 +127,12 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.6,
     fontWeight: "600",
+  },
+  aside: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingRight: spacing.md,
   },
   body: {
     paddingHorizontal: spacing.md,

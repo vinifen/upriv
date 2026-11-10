@@ -377,6 +377,29 @@ describe("validateCreateVaultStep", () => {
       ),
     ).toContain("group_name_empty");
   });
+
+  it("names what is wrong with a chosen backup folder", () => {
+    const withFolder = (path: string) => {
+      const draft = createVaultDraftFixture();
+      return {
+        ...draft,
+        backup: { ...draft.backup, linux: { place: "custom" as const, path } },
+      };
+    };
+    expect(validateCreateVaultStep("general", withFolder(""), [])).toContain("backup_folder_empty");
+    expect(validateCreateVaultStep("general", withFolder("usb"), [])).toContain(
+      "backup_folder_not_absolute",
+    );
+    expect(
+      validateCreateVaultStep("general", withFolder("/data/.upriv/x"), [], [], "/data"),
+    ).toContain("backup_folder_reserved");
+    expect(validateCreateVaultStep("general", withFolder("/mnt/usb"), [], [], "/data")).toEqual([]);
+  });
+
+  it("has nothing to check while backups follow the app default", () => {
+    const draft = createVaultDraftFixture();
+    expect(validateCreateVaultStep("general", draft, [])).toEqual([]);
+  });
 });
 
 describe("canSubmitCreateVault", () => {

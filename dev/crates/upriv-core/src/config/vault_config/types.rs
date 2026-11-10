@@ -1,6 +1,13 @@
 //! Per-vault `vaults/<id>/config.toml` types (aligned with TS `VaultSettingsConfig`).
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+
+use crate::error::Result;
+use crate::paths::{
+    validate_workspace_global_path, VaultBackupFolderRow, VaultBackupPlace, WorkspaceSystem,
+};
 
 /// Storage mode from `[storage] mode` (TS `StorageMode`).
 ///
@@ -98,6 +105,13 @@ pub struct VaultBackupSection {
     /// every close.
     #[serde(default = "default_true")]
     pub skip_unchanged: bool,
+    /// Where backups go on each desktop system.
+    #[serde(default)]
+    pub linux: VaultBackupFolderRow,
+    #[serde(default)]
+    pub windows: VaultBackupFolderRow,
+    #[serde(default)]
+    pub macos: VaultBackupFolderRow,
 }
 
 impl Default for VaultBackupSection {
@@ -107,7 +121,32 @@ impl Default for VaultBackupSection {
             mode: VaultBackupMode::KeepLast,
             keep_last: 1,
             skip_unchanged: true,
+            linux: VaultBackupFolderRow::default(),
+            windows: VaultBackupFolderRow::default(),
+            macos: VaultBackupFolderRow::default(),
         }
+    }
+}
+
+impl VaultBackupSection {
+    /// This system's row. Phones have none.
+    pub fn folder_row(&self, system: WorkspaceSystem) -> Option<&VaultBackupFolderRow> {
+        match system {
+            WorkspaceSystem::Linux => Some(&self.linux),
+            WorkspaceSystem::Windows => Some(&self.windows),
+            WorkspaceSystem::Macos => Some(&self.macos),
+            WorkspaceSystem::Android | WorkspaceSystem::Ios => None,
+        }
+    }
+
+    /// Check every `custom` row. A kept path on another `place` is not in use.
+    pub fn validate_folders(&self, vault_root: Option<&Path>) -> Result<()> {
+        for row in [&self.linux, &self.windows, &self.macos] {
+            if row.place == VaultBackupPlace::Custom {
+                validate_workspace_global_path(&row.path, vault_root)?;
+            }
+        }
+        Ok(())
     }
 }
 

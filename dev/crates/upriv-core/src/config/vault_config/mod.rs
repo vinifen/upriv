@@ -594,6 +594,27 @@ path = "relative/mount"
     }
 
     #[test]
+    fn load_keeps_a_backup_path_that_does_not_validate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_dir = vault_dir_under_root(tmp.path());
+        crate::host_fs::write(
+            vault_dir.join("config.toml"),
+            r#"
+[vault]
+id = "notes"
+display_name = "Notes"
+[backup.linux]
+place = "custom"
+path = "relative/backups"
+"#,
+        )
+        .unwrap();
+        let cfg = load_vault_config(&vault_dir).expect("a backup path never fails a load");
+        assert_eq!(cfg.backup.linux.path, "relative/backups");
+        assert!(cfg.backup.validate_folders(None).is_err());
+    }
+
+    #[test]
     fn serialize_rejects_relative_mount() {
         let cfg = VaultConfig {
             vault: VaultIdentitySection {
@@ -642,6 +663,11 @@ path = "relative/mount"
                 mode: VaultBackupMode::KeepAll,
                 keep_last: 5,
                 skip_unchanged: false,
+                linux: crate::paths::VaultBackupFolderRow {
+                    place: crate::paths::VaultBackupPlace::Custom,
+                    path: "/mnt/backups".into(),
+                },
+                ..VaultBackupSection::default()
             },
             security: VaultSecuritySection {
                 wipe_passes: 2,
@@ -675,6 +701,7 @@ path = "relative/mount"
             "[file_manager]",
             "[seven_zip]",
             "[mount.linux]",
+            "[backup.linux]",
         ] {
             assert!(raw.contains(section), "missing {section} in:\n{raw}");
         }

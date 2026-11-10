@@ -592,7 +592,7 @@ fn is_reserved_upriv_workspace_path_lexical(candidate: &Path, vault_root: &Path)
 
 /// Lexical prefix match with ASCII casefold on `Normal` components (parity with TS
 /// `toLowerCase()` when canonicalize is unavailable — Windows/macOS volumes).
-fn paths_equal_or_under_casefold(candidate: &Path, prefix: &Path) -> bool {
+pub(crate) fn paths_equal_or_under_casefold(candidate: &Path, prefix: &Path) -> bool {
     let c: Vec<_> = candidate.components().collect();
     let p: Vec<_> = prefix.components().collect();
     if c.len() < p.len() {
