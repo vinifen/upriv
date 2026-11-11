@@ -5,6 +5,7 @@ export {
   type UseCreateVaultWizardOptions,
 } from "./useCreateVaultWizard";
 export { useElapsed, type Elapsed } from "./useElapsed";
+export { usePasswordWeakness } from "./usePasswordWeakness";
 export { disarmRowButton, useArmedRowButton, useRowArming } from "./useRowArming";
 export { useOperationLimit } from "./useOperationLimit";
 export { useIntegerDraft, type UseIntegerDraftOptions } from "./useIntegerDraft";
@@ -30,6 +31,7 @@ export {
   type UseBackupExportStepOptions,
 } from "./useBackupExportStep";
 export { useVaultBackups } from "./useVaultBackups";
+export { useBackupFolderCheck, type BackupFolderCheck } from "./useBackupFolderCheck";
 export {
   usePlainRemoveJob,
   type PlainRemoveJob,
@@ -40,6 +42,12 @@ export {
   type VaultBackupJob,
   type VaultBackupJobEvents,
 } from "./useVaultBackupJob";
+export {
+  useVaultRebuildJob,
+  type VaultRebuildJob,
+  type VaultRebuildJobEvents,
+  type VaultRebuildTarget,
+} from "./useVaultRebuildJob";
 export {
   useVaultRewrapJob,
   type VaultRewrapJob,

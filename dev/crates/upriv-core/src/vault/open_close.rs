@@ -27,14 +27,16 @@ use crate::session::{
 use crate::store::{
     content_hash_hex, content_hash_with_index, flush_index_parts, index_logical_hash, open_store,
     pack_blob_waste, settle_held, BlobPackMode, ChunkBlobMutation, HeldSources, OpenedStore,
-    Sealed,
+    RecordsDue, Sealed,
 };
 
 use super::backup::{
-    backup_on_close, backup_stamp_present, backup_zips_newest_first, discard_unfinished_backups,
+    backup_on_close, backup_zips_newest_first, discard_unfinished_backups, last_backup_is_kept,
     list_backups, promote_backup_save,
 };
-use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
+use super::persistence::{
+    load_vault_persistence, save_vault_persistence, update_vault_persistence, VaultPersistence,
+};
 use crate::failure::classify_write_failure;
 
 /// How often quit looks for closes still running on other threads.
@@ -70,11 +72,12 @@ pub(crate) fn settle_opened(vault_dir: &Path, opened: &mut OpenedStore) -> Resul
         &mut opened.index,
         HeldSources {
             other_copy: opened.other_copy.as_ref(),
+            record_key: &opened.record_key,
             backup_zips: &backup_zips,
         },
     );
     if changed || opened.other_copy.is_some() {
-        flush_index_parts(&store, &opened.header, &opened.index_key, &opened.index)?;
+        flush_index_parts(&store, &opened.header, &opened.index_key, &mut opened.index)?;
         opened.other_copy = None;
     }
     Ok(())
@@ -487,6 +490,9 @@ pub struct CloseVaultOutcome {
     pub backup_failed: bool,
     /// `disk_full`, `permission`, or `other` when the close backup was not written.
     pub backup_failure: Option<&'static str>,
+    /// Why the close backup went to the data folder and not to the chosen one
+    /// ([`super::backup_folder::BackupFolderStatus::as_str`]).
+    pub backup_fallback: Option<&'static str>,
     /// What happened to a plaintext vault's folder.
     pub plain: Option<super::plain::PlainCloseSummary>,
 }
@@ -497,11 +503,103 @@ fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
     match list_backups(root, vault_id) {
         Ok(entries) => match entries.first() {
             Some(entry) if entry.saved => true,
-            Some(entry) => promote_backup_save(root, vault_id, &entry.stamp).is_ok(),
+            Some(entry) => promote_backup_save(root, vault_id, &entry.key()).is_ok(),
             None => false,
         },
         Err(_) => false,
     }
+}
+
+/// A close backup is due: what the close decided while it still held the tree.
+struct BackupDue {
+    /// The tree's contents id, when an unchanged vault may skip its zip.
+    logical_hash: Option<String>,
+    /// This machine's last backup: its contents id and its stamp.
+    last_hash: Option<String>,
+    last_stamp: Option<String>,
+}
+
+/// How the backup of a close that sealed ended.
+#[derive(Default)]
+struct CloseBackupReport {
+    failure: Option<&'static str>,
+    fallback: Option<&'static str>,
+}
+
+/// Write the close backup. A backup is ciphertext and needs no key, so a close
+/// runs it after the keys are gone and the folder is released: however slow or
+/// stuck the drive, the vault is already locked. Close now ends it, and a
+/// failure never fails the close.
+fn write_close_backup(
+    root: &VaultRoot,
+    vault_id: &str,
+    vault_dir: &Path,
+    closing: &ClosingGuard,
+    due: BackupDue,
+) -> CloseBackupReport {
+    let unchanged = due.logical_hash.is_some() && due.logical_hash == due.last_hash;
+    let already_backed_up = unchanged
+        && due
+            .last_stamp
+            .as_deref()
+            .is_some_and(|stamp| last_backup_is_kept(root, vault_id, stamp));
+    if already_backed_up {
+        return CloseBackupReport::default();
+    }
+    closing.set_phase(ClosePhase::Backup);
+    match backup_on_close(root, vault_id, closing.backup_job()) {
+        Ok(Some(written)) => {
+            if let Some(hash) = due.logical_hash {
+                let recorded = update_vault_persistence(vault_dir, vault_id, |persistence| {
+                    let record = persistence.this_host_record_mut();
+                    record.index_hash = Some(hash);
+                    record.stamp = Some(written.stamp.clone());
+                });
+                if recorded.is_err() {
+                    log_event(
+                        LogLevel::Warn,
+                        "vault_backup_unrecorded",
+                        &[("id", vault_id)],
+                    );
+                }
+            }
+            CloseBackupReport {
+                failure: None,
+                fallback: written.fell_back.map(|status| status.as_str()),
+            }
+        }
+        // Close now ended it; the next normal close writes it.
+        Ok(None) | Err(UprivError::JobCancelled) => CloseBackupReport::default(),
+        Err(error) => {
+            let class = classify_write_failure(&error);
+            let os = class.os.map(|code| code.to_string());
+            let mut fields = vec![
+                ("id", vault_id),
+                ("reason", class.reason),
+                ("kind", class.kind),
+            ];
+            if let Some(code) = os.as_deref() {
+                fields.push(("os", code));
+            }
+            log_event(LogLevel::Warn, "vault_backup_on_close_failed", &fields);
+            CloseBackupReport {
+                failure: Some(class.reason),
+                fallback: None,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs on the closing thread just before a close writes its backup.
+    static AT_CLOSE_BACKUP: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn at_close_backup(run: impl FnOnce() + 'static) {
+    AT_CLOSE_BACKUP.with(|slot| *slot.borrow_mut() = Some(Box::new(run)));
 }
 
 /// Where the close of one vault stands, read without waiting on it.
@@ -551,7 +649,7 @@ fn close_vault_inner(
     kind: CloseKind,
 ) -> Result<CloseVaultOutcome> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
-    let closing = ClosingGuard::enter(&vault_dir)?;
+    let closing = ClosingGuard::enter(&vault_dir);
     let hurry = Arc::clone(closing.hurry());
     if kind.immediate() {
         hurry.store(true, Ordering::Relaxed);
@@ -569,8 +667,6 @@ fn close_vault_inner(
         }
     }
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-    let mut backup_failed = false;
-    let mut backup_failure: Option<&'static str> = None;
     let mut backup_pinned = false;
     let persist = (|| {
         // Only blobs this session left dead bytes in. Every other blob was
@@ -609,7 +705,7 @@ fn close_vault_inner(
         };
         let packed_ok = if packed.created.is_empty() {
             false
-        } else if packed.sync_before_index().is_ok() {
+        } else if packed.sync_before_index(&session.records()).is_ok() {
             true
         } else {
             packed.restore_packed_nodes(&mut session.index);
@@ -631,7 +727,8 @@ fn close_vault_inner(
                 packed.discard_created();
             }
         };
-        let copied = match super::fs::sync_staged(&mut session) {
+        // The close records every blob written after its last record.
+        let copied = match super::fs::sync_staged(&mut session, RecordsDue::All) {
             Ok(copied) => copied,
             Err(error) => {
                 super::fs::settle_staged_layout(&mut session, layout, None);
@@ -641,16 +738,20 @@ fn close_vault_inner(
         };
         // Before the seal, so the digests of files written in order are stored.
         session.index.settle_digest_streams();
-        let (sealed_index, sealed) =
-            match flush_index_parts(&store, &session.header, &session.index_key, &session.index) {
-                Ok(sealed) => sealed,
-                Err(error) => {
-                    super::fs::undo_copy(&mut session, copied);
-                    super::fs::settle_staged_layout(&mut session, layout, None);
-                    undo_pack(&mut session);
-                    return Err(error);
-                }
-            };
+        let (sealed_index, sealed) = match flush_index_parts(
+            &store,
+            &session.header,
+            &session.index_key,
+            &mut session.index,
+        ) {
+            Ok(sealed) => sealed,
+            Err(error) => {
+                super::fs::undo_copy(&mut session, copied);
+                super::fs::settle_staged_layout(&mut session, layout, None);
+                undo_pack(&mut session);
+                return Err(error);
+            }
+        };
         super::fs::settle_staged_layout(&mut session, layout, Some(sealed));
         super::fs::release_copied(&mut session, sealed, copied);
         session.staged_blobs.clear();
@@ -682,12 +783,12 @@ fn close_vault_inner(
         let logical_hash =
             (skip_when_unchanged && !skip_backup).then(|| index_logical_hash(&session.index));
         let previous = load_vault_persistence(&vault_dir).ok().flatten();
-        let previous_backup = previous
-            .as_ref()
-            .and_then(|saved| saved.backed_up_index_hash.clone());
-        let previous_stamp = previous
-            .as_ref()
-            .and_then(|saved| saved.backed_up_stamp.clone());
+        let this_machine = previous.as_ref().and_then(|saved| saved.this_host_record());
+        let due = BackupDue {
+            logical_hash,
+            last_hash: this_machine.and_then(|record| record.index_hash.clone()),
+            last_stamp: this_machine.and_then(|record| record.stamp.clone()),
+        };
         // A config whose mount does not validate still names the vault.
         let display_name = match config {
             Some(config) => config.vault.display_name,
@@ -695,65 +796,32 @@ fn close_vault_inner(
                 .map(|c| c.vault.display_name)
                 .unwrap_or_else(|_| session.vault_id.clone()),
         };
-        let mut persistence =
-            VaultPersistence::closed(session.vault_id.clone(), display_name, Some(hash));
-        persistence.backed_up_index_hash = previous_backup.clone();
-        persistence.backed_up_stamp = previous_stamp.clone();
+        // Only what a close decides changes: the record of the vault's backups stays.
+        let mut persistence = previous.unwrap_or_else(|| {
+            VaultPersistence::closed(session.vault_id.clone(), String::new(), None)
+        });
+        persistence.mark_closed(session.vault_id.clone(), display_name, hash);
         save_vault_persistence(&vault_dir, &persistence)?;
         if pin_backup {
             backup_pinned = pin_newest_backup(root, vault_id);
         }
-        if !skip_backup && !backups_off {
-            let already_backed_up = logical_hash.as_ref().is_some_and(|hash| {
-                previous_backup.as_deref() == Some(hash.as_str())
-                    && previous_stamp
-                        .as_deref()
-                        .is_some_and(|stamp| backup_stamp_present(root, vault_id, stamp))
-            });
-            if !already_backed_up {
-                closing.set_phase(ClosePhase::Backup);
-                match backup_on_close(root, vault_id, closing.backup_job()) {
-                    Ok(Some(stamp)) => {
-                        if let Some(hash) = logical_hash {
-                            persistence.backed_up_index_hash = Some(hash);
-                            persistence.backed_up_stamp = Some(stamp);
-                            save_vault_persistence(&vault_dir, &persistence)?;
-                        }
-                    }
-                    // Close now ended it; the next normal close writes it.
-                    Ok(None) | Err(UprivError::JobCancelled) => {}
-                    Err(error) => {
-                        backup_failed = true;
-                        let class = classify_write_failure(&error);
-                        backup_failure = Some(class.reason);
-                        let os = class.os.map(|code| code.to_string());
-                        let mut fields = vec![
-                            ("id", vault_id),
-                            ("reason", class.reason),
-                            ("kind", class.kind),
-                        ];
-                        if let Some(code) = os.as_deref() {
-                            fields.push(("os", code));
-                        }
-                        log_event(LogLevel::Warn, "vault_backup_on_close_failed", &fields);
-                    }
-                }
-            }
-        }
-        Ok(())
+        Ok((!skip_backup && !backups_off).then_some(due))
     })();
-    if let Err(error) = persist {
-        if kind.quitting() {
-            // Quit must exit. Drop the session and its mount; do not put them
-            // back. A plaintext folder stays recorded for recovery.
-            let mount = session.mount.take();
-            drop(session);
-            discard_mount(mount);
+    let backup_due = match persist {
+        Ok(due) => due,
+        Err(error) => {
+            if kind.quitting() {
+                // Quit must exit. Drop the session and its mount; do not put them
+                // back. A plaintext folder stays recorded for recovery.
+                let mount = session.mount.take();
+                drop(session);
+                discard_mount(mount);
+                return Err(error);
+            }
+            reinsert_after_failed_close(session, &vault_dir, vault_id);
             return Err(error);
         }
-        reinsert_after_failed_close(session, &vault_dir, vault_id);
-        return Err(error);
-    }
+    };
     // Keep the mount until the close is recorded. Dropping it first and then
     // failing the state write would reinsert an open session with no mount.
     let mount = session.mount.take();
@@ -780,16 +848,32 @@ fn close_vault_inner(
             &hurry,
         )
     });
+    // The keys go now. The lock stays until the zip is done, and so does the
+    // closing mark, so nothing can open, export, or change this vault under it.
+    let lock = session.lock.take();
     drop(session);
     discard_mount(mount);
+    #[cfg(test)]
+    AT_CLOSE_BACKUP.with(|slot| {
+        if let Some(run) = slot.borrow_mut().take() {
+            run();
+        }
+    });
+    let report = match backup_due {
+        // Close now may have come during the steps above.
+        Some(due) if !hurried() => write_close_backup(root, vault_id, &vault_dir, &closing, due),
+        _ => CloseBackupReport::default(),
+    };
+    drop(lock);
     log_event(
         LogLevel::Info,
         "vault_closed",
         &[("id", vault_id), ("reason", kind.reason())],
     );
     Ok(CloseVaultOutcome {
-        backup_failed,
-        backup_failure,
+        backup_failed: report.failure.is_some(),
+        backup_failure: report.failure,
+        backup_fallback: report.fallback,
         plain,
     })
 }
@@ -896,7 +980,7 @@ pub(crate) fn delete_failed_import(root: &VaultRoot, vault_id: &str) -> Result<(
         drop(take_session(&dir)?);
     }
     if dir.host_is_dir() {
-        super::delete::delete_vault(root, vault_id)?;
+        super::delete::delete_vault(root, vault_id, false)?;
     }
     super::unfinished::forget_import(root, vault_id);
     Ok(())
@@ -1017,6 +1101,7 @@ mode = "encrypted_dir"
         let job = crate::test_support::test_job_id;
         let saved = crate::vault::save_backup_now(&root, "notes", &job())
             .unwrap()
+            .entry
             .stamp;
         let previous = acquire_vault_lock(root.runtime_lock_path("notes").unwrap()).unwrap();
 
@@ -1055,9 +1140,9 @@ mode = "encrypted_dir"
             "notes",
             &job()
         )));
-        assert!(locked(crate::vault::delete_vault(&root, "notes")));
+        assert!(locked(crate::vault::delete_vault(&root, "notes", false)));
         assert!(matches!(
-            crate::vault::export_data_folder(&root, out.path(), "copy", &job()),
+            crate::vault::export_data_folder(&root, out.path(), "copy", true, &job()),
             Err(UprivError::DataFolderBusy)
         ));
         assert_eq!(crate::host_fs::read_dir(out.path()).unwrap().count(), 0);
@@ -1079,7 +1164,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
-        let _held = PreparingGuard::enter(&vault_dir).unwrap();
+        let _held = PreparingGuard::enter(&vault_dir);
         let err = open_vault(&root, "notes", b"pass-word-ok").unwrap_err();
         assert!(matches!(err, UprivError::VaultBusy));
     }
@@ -1132,6 +1217,91 @@ mode = "encrypted_dir"
         let second = list_backups(&root, "notes").unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].file_name, first[0].file_name);
+    }
+
+    #[test]
+    fn a_close_writes_its_backup_with_the_vault_already_closed_and_still_held() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
+
+        let seen = std::rc::Rc::new(std::cell::Cell::new(false));
+        let reported = std::rc::Rc::clone(&seen);
+        let at = root.clone();
+        at_close_backup(move || {
+            let dir = at.vault_dir("notes").unwrap();
+            assert!(!is_vault_open_at(&dir));
+            assert!(is_vault_closing_at(&dir), "nothing can touch it yet");
+            assert!(
+                !crate::runtime_state::dirty_close_ids(&at)
+                    .unwrap_or_default()
+                    .contains(&"notes".to_string()),
+                "a crash from here on is no dirty close"
+            );
+            assert!(
+                acquire_vault_lock(at.runtime_lock_path("notes").unwrap()).is_err(),
+                "the lock outlives the keys"
+            );
+            reported.set(true);
+        });
+        close_vault(&root, "notes").unwrap();
+        assert!(seen.get(), "the close reached its backup");
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
+        assert!(
+            acquire_vault_lock(root.runtime_lock_path("notes").unwrap()).is_ok(),
+            "the lock goes when the close ends"
+        );
+    }
+
+    #[test]
+    fn close_now_during_the_last_steps_writes_no_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let at = root.clone();
+        at_close_backup(move || {
+            assert!(hurry_close(&at, "notes").unwrap());
+        });
+        let outcome = close_vault(&root, "notes").unwrap();
+        assert!(!outcome.backup_failed);
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_close_keeps_the_record_of_the_backups_it_did_not_touch() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 3;
+        config.backup.skip_unchanged = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        update_vault_persistence(&vault_dir, "notes", |persistence| {
+            persistence.backup_folder_id = Some("earlier-name".into());
+        })
+        .unwrap();
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes").unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes").unwrap();
+
+        let saved = load_vault_persistence(&vault_dir).unwrap().unwrap();
+        assert_eq!(saved.backup_folder_id.as_deref(), Some("earlier-name"));
+        assert_eq!(saved.backups_written.len(), 2);
+        assert_eq!(saved.persistence, "closed");
     }
 
     #[test]
@@ -1221,7 +1391,7 @@ mode = "encrypted_dir"
         .unwrap();
         assert!(!hurry_close(&root, "notes").unwrap());
         let vault_dir = root.vault_dir("notes").unwrap();
-        let closing = ClosingGuard::enter(&vault_dir).unwrap();
+        let closing = ClosingGuard::enter(&vault_dir);
         assert!(hurry_close(&root, "notes").unwrap());
         assert!(closing.hurry().load(Ordering::Relaxed));
     }
@@ -1241,7 +1411,7 @@ mode = "encrypted_dir"
         assert_eq!(close_state(&root, "notes").unwrap(), CloseState::Open);
         {
             let vault_dir = root.vault_dir("notes").unwrap();
-            let closing = ClosingGuard::enter(&vault_dir).unwrap();
+            let closing = ClosingGuard::enter(&vault_dir);
             assert_eq!(
                 close_state(&root, "notes").unwrap(),
                 CloseState::Closing(ClosePhase::Flush)
@@ -1267,7 +1437,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
-        let closing = ClosingGuard::enter(&vault_dir).unwrap();
+        let closing = ClosingGuard::enter(&vault_dir);
         let ending = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
             let hurried = closing.hurry().load(Ordering::Relaxed);
@@ -1950,9 +2120,8 @@ mode = "encrypted_dir"
                     continue;
                 }
                 let mut bytes = std::fs::read(&path).unwrap();
-                assert!(!bytes.is_empty());
-                let last = bytes.len() - 1;
-                bytes[last] ^= 0xff;
+                // Past the nonce, inside the blob's first chunk.
+                bytes[30] ^= 0xff;
                 std::fs::write(&path, bytes).unwrap();
                 flipped = true;
                 break;

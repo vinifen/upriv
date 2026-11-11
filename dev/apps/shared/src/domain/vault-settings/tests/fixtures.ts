@@ -1,5 +1,6 @@
 import type { StorageMode } from "../../vault";
 import { vaultWorkspace } from "../../workspace";
+import { vaultBackupFolders } from "../../backups/folders";
 import type { VaultSettingsConfig } from "..";
 
 /** Minimal valid `VaultSettingsConfig` for domain tests. */
@@ -23,7 +24,13 @@ export function vaultSettingsFixture(
     },
     storage: { mode: storageMode, plain_files: "chosen" },
     mount: vaultWorkspace(),
-    backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
+    backup: {
+      enabled: true,
+      mode: "keep_last",
+      keep_last: 1,
+      skip_unchanged: true,
+      ...vaultBackupFolders(),
+    },
     security: {
       wipe_passes: 1,
       wipe_pattern: "random",

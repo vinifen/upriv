@@ -15,6 +15,7 @@ beforeEach(() => {
     addEventListener: () => {},
     removeEventListener: () => {},
   })) as unknown as typeof window.matchMedia;
+  Element.prototype.scrollIntoView = () => {};
 });
 
 afterEach(cleanup);
@@ -182,10 +183,13 @@ describe("FileManagerDialogs set-aside data", () => {
     expect(fm.showToast).toHaveBeenCalledWith("Put back as /report.txt.");
   });
 
-  it("deletes a file or the pieces only from the footer's question", async () => {
+  /** The question's own Delete: the last one, below the list. */
+  const confirmDelete = () => screen.getAllByRole("button", { name: "Delete" }).at(-1)!;
+
+  it("deletes a file or the pieces only from the question below the list", async () => {
     const { held } = renderHeld();
     // A double click on the row's Delete only asks.
-    const rowDelete = await screen.findByRole("button", { name: "Delete" });
+    const [rowDelete] = await screen.findAllByRole("button", { name: "Delete" });
     fireEvent.click(rowDelete);
     fireEvent.click(rowDelete);
     expect(held.remove).not.toHaveBeenCalled();
@@ -193,16 +197,35 @@ describe("FileManagerDialogs set-aside data", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByText("Delete “report.txt” for good?")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    const [, footerDelete] = screen.getAllByRole("button", { name: "Delete" });
-    fireEvent.click(footerDelete);
+    fireEvent.click(rowDelete);
+    fireEvent.click(confirmDelete());
     expect(held.remove).toHaveBeenCalledWith(["report"]);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete pieces" }));
     expect(screen.getByText("Delete 1 piece(s), 2.0 KB, for good?")).toBeTruthy();
     expect(held.remove).toHaveBeenCalledTimes(1);
-    const [, piecesDelete] = screen.getAllByRole("button", { name: "Delete" });
-    fireEvent.click(piecesDelete);
+    fireEvent.click(confirmDelete());
     expect(held.remove).toHaveBeenLastCalledWith(["piece"]);
+  });
+
+  it("puts back or deletes every chosen item at once", async () => {
+    const { fm, held } = renderHeld();
+    const selectAll = await screen.findByLabelText("Select all");
+    fireEvent.click(selectAll);
+    expect(screen.getByText("2 selected")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    expect(screen.getByText("Delete 2 item(s), 2.3 KB, for good?")).toBeTruthy();
+    expect(held.remove).not.toHaveBeenCalled();
+    fireEvent.click(confirmDelete());
+    expect(held.remove).toHaveBeenCalledWith(["report", "piece"]);
+    await act(async () => undefined);
+
+    // A piece cannot go back: Put back takes the file only.
+    fireEvent.click(screen.getByLabelText("Select all"));
+    fireEvent.click(screen.getByRole("button", { name: "Put back selected" }));
+    await act(async () => undefined);
+    expect(held.restore).toHaveBeenCalledWith(["report"]);
+    expect(fm.showToast).toHaveBeenCalledWith("Put back as /report.txt.");
   });
 });

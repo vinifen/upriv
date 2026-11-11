@@ -117,6 +117,15 @@ pub fn save_vault_config_checked(
         if moves_folder {
             crate::vault::ensure_no_leftover(root, vault_id)?;
         }
+        let backup_folders_changed = before.backup.linux != after.backup.linux
+            || before.backup.windows != after.backup.windows
+            || before.backup.macos != after.backup.macos;
+        if backup_folders_changed {
+            after.backup.validate_folders(Some(root.root()))?;
+        }
+        if backup_folders_changed || before.mount != after.mount {
+            crate::vault::refuse_vault_backup_overlap(root, vault_id, after)?;
+        }
         let mut stored = after.clone();
         stored.security.password_changed_at = before.security.password_changed_at.clone();
         crate::config::save_vault_config(vault_dir, &stored)?;
@@ -162,6 +171,7 @@ mod plain_files_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::{VaultBackupFolderRow, VaultBackupPlace};
     use crate::session::{with_unlock_lock, with_vault_dir_lock, PreparingGuard};
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
@@ -242,6 +252,52 @@ mode = "encrypted_dir"
     }
 
     #[test]
+    fn a_new_backup_folder_must_be_a_usable_path() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let cfg = sample_config("notes", "Notes");
+        create_vault(&root, cfg, b"pass-word-ok", KdfUnlockPreset::M32).expect("create");
+        let dir = root.vault_dir("notes").unwrap();
+        let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
+        after.backup.linux = VaultBackupFolderRow {
+            place: VaultBackupPlace::Custom,
+            path: "relative/folder".into(),
+        };
+        assert!(matches!(
+            save_vault_config_checked(&root, "notes", &after),
+            Err(UprivError::WorkspacePathInvalid { .. })
+        ));
+
+        after.backup.linux.path = root.root().join(".upriv/mine").display().to_string();
+        assert!(matches!(
+            save_vault_config_checked(&root, "notes", &after),
+            Err(UprivError::WorkspacePathReserved(_))
+        ));
+        let saved = crate::config::load_vault_config_raw(&dir).unwrap();
+        assert_eq!(saved.backup.linux.place, VaultBackupPlace::Inherit);
+    }
+
+    #[test]
+    fn a_saved_backup_folder_that_went_bad_never_blocks_another_field() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let cfg = sample_config("notes", "Notes");
+        create_vault(&root, cfg, b"pass-word-ok", KdfUnlockPreset::M32).expect("create");
+        let dir = root.vault_dir("notes").unwrap();
+        let mut stored = crate::config::load_vault_config_raw(&dir).unwrap();
+        stored.backup.linux = VaultBackupFolderRow {
+            place: VaultBackupPlace::Custom,
+            path: "relative/folder".into(),
+        };
+        crate::config::save_vault_config(&dir, &stored).unwrap();
+
+        stored.vault.note = "still saves".into();
+        save_vault_config_checked(&root, "notes", &stored).expect("a note saves");
+
+        let saved = crate::config::load_vault_config_raw(&dir).unwrap();
+        assert_eq!(saved.vault.note, "still saves");
+        assert_eq!(saved.backup.linux.path, "relative/folder");
+    }
+
+    #[test]
     fn closed_session_allows_note_save() {
         let (_tmp, root) = vault_root_with(&[]);
         let cfg = sample_config("notes", "Notes");
@@ -276,7 +332,7 @@ mode = "encrypted_dir"
             std::process::id(),
             std::thread::current().id()
         ));
-        let _guard = crate::session::ClosingGuard::enter(&dir).unwrap();
+        let _guard = crate::session::ClosingGuard::enter(&dir);
         let before = sample_config("x", "X");
         let mut after = before.clone();
         after.storage.mode = crate::config::VaultStorageMode::UprivPlain;

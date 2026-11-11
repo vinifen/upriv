@@ -1,4 +1,5 @@
 import { appWorkspace, normalizeWorkspaceTable } from "../workspace";
+import { appBackupFolders, normalizeAppBackupFolders } from "../backups/folders";
 import {
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
@@ -74,6 +75,7 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       last_opened_vault: "",
     },
     workspace: appWorkspace(),
+    backups: appBackupFolders(),
   };
 }
 
@@ -122,6 +124,7 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
         typeof config.app.last_opened_vault === "string" ? config.app.last_opened_vault.trim() : "",
     },
     workspace: normalizeWorkspaceTable(config.workspace, "app"),
+    backups: normalizeAppBackupFolders(config.backups),
   };
 
   if (normalized.app.vault_root_mode !== "default_root") return normalized;

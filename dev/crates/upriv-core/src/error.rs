@@ -152,6 +152,22 @@ pub enum UprivError {
         problem: crate::store::FileProblem,
     },
 
+    /// Neither index file of this vault opens, though its header does: the
+    /// tree is lost and the data is not. The vault can be rebuilt from the
+    /// records its blobs carry, or made again from a backup. `detail` says
+    /// why the primary file was refused.
+    #[error("vault index unreadable: {detail}")]
+    VaultIndexUnreadable { detail: String },
+
+    /// A rebuild was asked for a vault whose index opens: there is nothing to
+    /// rebuild, and a rebuild would only lose what the index alone holds.
+    #[error("the vault index opens, so there is nothing to rebuild")]
+    VaultIndexReadable,
+
+    /// The safety zip a rebuild writes first does not fit on the drive.
+    #[error("rebuild needs {needed} bytes for its safety zip, {available} free")]
+    VaultRebuildSpaceShort { needed: u64, available: u64 },
+
     /// `runtime/<id>.lock` is held by a live process (this host or another).
     #[error("vault locked: {0}")]
     VaultLocked(PathBuf),
@@ -171,11 +187,13 @@ pub enum UprivError {
     #[error("import source unreadable: {0}")]
     ImportSourceUnreadable(PathBuf),
 
-    /// This vault must be closed first (export, or password / unlock-RAM rewrap).
+    /// This vault must be closed first (export, password / unlock-RAM rewrap,
+    /// or the rebuild of a lost index).
     #[error("close this vault first")]
     VaultMustBeClosed,
 
-    /// Export, password change, or unlock-RAM change already holds this vault.
+    /// Export, password change, unlock-RAM change, or a rebuild already holds
+    /// this vault.
     #[error("vault is busy")]
     VaultBusy,
 

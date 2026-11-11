@@ -43,6 +43,7 @@ function controls(patch: Partial<DataFolderExportControls> = {}): DataFolderExpo
     job: null,
     written: null,
     clearWritten: vi.fn(),
+    outsideBackups: 0,
     onStart: vi.fn(() => true),
     onStop: vi.fn(),
     ...patch,
@@ -191,7 +192,7 @@ describe("VaultRootDataFolderModal export choice", () => {
     act(() => {
       footerButton("modal.data_folder_export.confirm")?.click();
     });
-    expect(exportControls.onStart).toHaveBeenCalledWith("/media/usb", "trip copy");
+    expect(exportControls.onStart).toHaveBeenCalledWith("/media/usb", "trip copy", true);
   });
 
   it("goes from the name to the folder picker on Enter, then exports", async () => {
@@ -216,7 +217,7 @@ describe("VaultRootDataFolderModal export choice", () => {
     expect(folderInput().value).toBe("/media/usb");
 
     fireEvent.keyDown(nameInput(), { key: "Enter" });
-    expect(exportControls.onStart).toHaveBeenCalledWith("/media/usb", "trip copy");
+    expect(exportControls.onStart).toHaveBeenCalledWith("/media/usb", "trip copy", true);
     expect(pickFolder).toHaveBeenCalledOnce();
   });
 

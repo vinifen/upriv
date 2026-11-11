@@ -1,6 +1,7 @@
 import type { EmbeddedSettingsSnapshot, EmbeddedVaultSettings } from "./applyEmbeddedVaultSettings";
 import {
   applyEmbeddedVaultSettings,
+  applyImportVaultName,
   revertEmbeddedVaultSettings,
 } from "./applyEmbeddedVaultSettings";
 import { createEmptyCreateVaultDraft, createVaultDraftEqual } from "./defaults";
@@ -27,7 +28,6 @@ export interface CreateVaultWizardContext {
 interface CarriedSettings {
   embedded: EmbeddedVaultSettings;
   snapshot: EmbeddedSettingsSnapshot;
-  existingDisplayNames: readonly string[];
   /** The draft right after they went in. `null` while they are not in it. */
   applied: CreateVaultDraft | null;
 }
@@ -43,7 +43,12 @@ export interface CreateVaultWizardState {
   submitAttempted: boolean;
   testingPassword: boolean;
   discardConfirmOpen: boolean;
+  /** The footer says what is wrong with the new password; the next press on Create creates. */
+  weaknessNoticeOpen: boolean;
 }
+
+/** Nothing in the footer. Any edit, step change, or close clears it. */
+const NOTHING_IN_FOOTER = { discardConfirmOpen: false, weaknessNoticeOpen: false } as const;
 
 export type CreateVaultWizardAction =
   | { type: "opened"; draft: CreateVaultDraft; step: CreateVaultStepId }
@@ -60,7 +65,13 @@ export type CreateVaultWizardAction =
       type: "embeddedSettings";
       embedded: EmbeddedVaultSettings;
       snapshot: EmbeddedSettingsSnapshot;
-      existingDisplayNames?: readonly string[];
+    }
+  /** The file names its vault: the name field takes it unless edited since `snapshot`. */
+  | {
+      type: "vaultNamed";
+      vaultName: string;
+      snapshot: EmbeddedSettingsSnapshot;
+      existingDisplayNames: readonly string[];
     }
   | {
       type: "zipClassified";
@@ -70,7 +81,8 @@ export type CreateVaultWizardAction =
       carriesWorkspace?: boolean;
     }
   | { type: "discardConfirmRequested" }
-  | { type: "discardConfirmDismissed" }
+  | { type: "weaknessNoticeRequested" }
+  | { type: "footerMessageDismissed" }
   | { type: "draftDiscarded" }
   | { type: "closed" };
 
@@ -86,7 +98,7 @@ export function createVaultWizardInitialState(
     attemptedSteps: new Set(),
     submitAttempted: false,
     testingPassword: false,
-    discardConfirmOpen: false,
+    ...NOTHING_IN_FOOTER,
   };
 }
 
@@ -110,12 +122,7 @@ function settleCarriedSettings(
   if (!carried) return { carried, draft };
   const wanted = importUsesCarriedSettings(draft);
   if (wanted && !carried.applied) {
-    const applied = applyEmbeddedVaultSettings(
-      draft,
-      carried.embedded,
-      carried.snapshot,
-      carried.existingDisplayNames,
-    );
+    const applied = applyEmbeddedVaultSettings(draft, carried.embedded, carried.snapshot);
     return { carried: { ...carried, applied }, draft: applied };
   }
   if (!wanted && carried.applied) {
@@ -158,7 +165,7 @@ export function createVaultWizardReducer(
         attemptedSteps: new Set(),
         submitAttempted: false,
         testingPassword: false,
-        discardConfirmOpen: false,
+        ...NOTHING_IN_FOOTER,
       };
 
     case "draftPatched": {
@@ -168,23 +175,23 @@ export function createVaultWizardReducer(
           ...state,
           carried: null,
           draft: forgetChosenFile(state.carried, draft),
-          discardConfirmOpen: false,
+          ...NOTHING_IN_FOOTER,
         };
       }
       return {
         ...state,
         ...settleCarriedSettings(state.carried, draft),
-        discardConfirmOpen: false,
+        ...NOTHING_IN_FOOTER,
       };
     }
 
     case "stepSelected":
-      return { ...state, currentStep: action.step, discardConfirmOpen: false };
+      return { ...state, currentStep: action.step, ...NOTHING_IN_FOOTER };
 
     case "backRequested": {
       const previous = stepAt(-1, state.currentStep);
       if (!previous) return state;
-      return { ...state, currentStep: previous, discardConfirmOpen: false };
+      return { ...state, currentStep: previous, ...NOTHING_IN_FOOTER };
     }
 
     case "nextRequested": {
@@ -199,7 +206,7 @@ export function createVaultWizardReducer(
       if (errors.length > 0) return { ...state, attemptedSteps };
       const next = stepAt(1, state.currentStep);
       if (!next) return { ...state, attemptedSteps };
-      return { ...state, attemptedSteps, currentStep: next, discardConfirmOpen: false };
+      return { ...state, attemptedSteps, currentStep: next, ...NOTHING_IN_FOOTER };
     }
 
     case "submitRequested":
@@ -215,8 +222,8 @@ export function createVaultWizardReducer(
     case "importPasswordTestStopped":
       return { ...state, testingPassword: false };
 
-    // Leaves `discardConfirmOpen` alone: an async probe answering is not the
-    // user answering the close prompt they opened while it was in flight.
+    // Leaves the footer alone: an async probe answering is not the user
+    // answering the close prompt they opened while it was in flight.
     case "importPasswordTestFinished":
       return {
         ...state,
@@ -250,7 +257,6 @@ export function createVaultWizardReducer(
         {
           embedded: action.embedded,
           snapshot: action.snapshot,
-          existingDisplayNames: action.existingDisplayNames ?? [],
           applied: null,
         },
         { ...state.draft, importCarriesSettings: true },
@@ -261,14 +267,29 @@ export function createVaultWizardReducer(
       return { ...state, ...settled, baseline };
     }
 
-    case "discardConfirmRequested":
-      return { ...state, discardConfirmOpen: true };
+    case "vaultNamed": {
+      const draft = applyImportVaultName(
+        state.draft,
+        action.vaultName,
+        action.snapshot,
+        action.existingDisplayNames,
+      );
+      if (draft === state.draft) return state;
+      const baseline = createVaultDraftEqual(state.draft, state.baseline) ? draft : state.baseline;
+      return { ...state, draft, baseline };
+    }
 
-    case "discardConfirmDismissed":
-      return { ...state, discardConfirmOpen: false };
+    case "discardConfirmRequested":
+      return { ...state, ...NOTHING_IN_FOOTER, discardConfirmOpen: true };
+
+    case "weaknessNoticeRequested":
+      return { ...state, ...NOTHING_IN_FOOTER, weaknessNoticeOpen: true };
+
+    case "footerMessageDismissed":
+      return { ...state, ...NOTHING_IN_FOOTER };
 
     case "draftDiscarded":
-      return { ...state, draft: state.baseline, discardConfirmOpen: false };
+      return { ...state, draft: state.baseline, ...NOTHING_IN_FOOTER };
 
     // Secrets must not outlive the dialog; the rest of the draft is reset on the next `opened`.
     case "closed":
@@ -283,7 +304,7 @@ export function createVaultWizardReducer(
           passwordProbeUnavailable: false,
         },
         testingPassword: false,
-        discardConfirmOpen: false,
+        ...NOTHING_IN_FOOTER,
         submitAttempted: false,
       };
 
@@ -298,7 +319,7 @@ export type CreateVaultCloseIntent = "dismiss-confirm" | "ask-confirm" | "close"
 export function resolveCreateVaultCloseIntent(
   state: CreateVaultWizardState,
 ): CreateVaultCloseIntent {
-  if (state.discardConfirmOpen) return "dismiss-confirm";
+  if (state.discardConfirmOpen || state.weaknessNoticeOpen) return "dismiss-confirm";
   if (!createVaultDraftEqual(state.draft, state.baseline)) return "ask-confirm";
   return "close";
 }

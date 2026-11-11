@@ -5,6 +5,7 @@ import {
   appWorkspace,
   type BackupService,
   type VaultBackupEntry,
+  type VaultBackupListing,
   type VaultDiskUsage,
   type VaultLifecycleService,
   type VaultListItem,
@@ -39,7 +40,7 @@ const backup: VaultBackupEntry = {
 };
 
 function renderInfo() {
-  const backups = deferred<VaultBackupEntry[]>();
+  const backups = deferred<VaultBackupListing>();
   const diskUsage = deferred<VaultDiskUsage | null>();
   const vaultService = {
     getSettings: async () => null,
@@ -85,7 +86,7 @@ describe("useVaultInfoData", () => {
     const { result, backups, diskUsage } = renderInfo();
     await waitFor(() => expect(result.current.snapshot).not.toBeNull());
 
-    await act(async () => backups.resolve([backup]));
+    await act(async () => backups.resolve({ backups: [backup], chosen: null }));
     expect(result.current.snapshot?.backups).toEqual([backup]);
     expect(result.current.snapshot?.runtime.storeBytes).toBe("measuring");
 

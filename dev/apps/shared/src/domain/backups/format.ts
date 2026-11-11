@@ -1,4 +1,5 @@
 import { formatIsoDate } from "../format/datetime";
+import type { BackupLocation } from "./types";
 
 export function formatBackupDate(iso: string, locale: string): string {
   return formatIsoDate(iso, locale);
@@ -21,20 +22,22 @@ export function backupEntryFileName(
 
 /**
  * Locator for one zip. A pin lives under `saves/` and can share its file name
- * with the copy in `backups/`.
+ * with the copy beside it, and a zip in the chosen folder is under `chosen/`.
+ * A key is never a path.
  */
 export function backupEntryKey(
-  entry: { stamp: string; fileName?: string; saved?: boolean },
+  entry: { stamp: string; fileName?: string; saved?: boolean; location?: BackupLocation },
   vaultId: string,
 ): string {
   const name = backupEntryFileName(entry, vaultId);
-  return entry.saved ? `saves/${name}` : name;
+  const place = entry.location === "chosen" ? "chosen/" : "";
+  return `${place}${entry.saved ? "saves/" : ""}${name}`;
 }
 
 /**
  * The file an export of the backups `keys` (`backupEntryKey`) writes into its
  * folder: one keeps its own name, several go into `upriv-backups-<id>.zip`.
- * While that name is taken core adds the next free `number` (`{name} 2.zip`,
+ * While that name is taken core adds the next free `number` (`{name}-2.zip`,
  * `export_backups`).
  */
 export function backupExportFilename(keys: readonly string[], vaultId: string, number = 1): string {
@@ -42,7 +45,7 @@ export function backupExportFilename(keys: readonly string[], vaultId: string, n
     keys.length === 1
       ? keys[0].slice(keys[0].lastIndexOf("/") + 1).replace(/\.zip$/, "")
       : `upriv-backups-${vaultId.trim()}`;
-  return number > 1 ? `${stem} ${number}.zip` : `${stem}.zip`;
+  return number > 1 ? `${stem}-${number}.zip` : `${stem}.zip`;
 }
 
 /**

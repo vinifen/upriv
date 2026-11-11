@@ -11,6 +11,7 @@ import {
   vaultRootUprivOpenPath,
   vaultStoreDisplayPaths,
   type AppSettingsConfig,
+  type ChosenBackupFolder,
   type VaultBackupEntry,
   type VaultGroup,
   type VaultInfoSnapshot,
@@ -50,6 +51,7 @@ interface SlowVaultInfo {
   vaultId: string;
   /** `null` while the list is read. */
   backups: VaultBackupEntry[] | null;
+  chosenBackups: ChosenBackupFolder | null;
   storeBytes: VaultRuntimeStats["storeBytes"];
   heldBytes: VaultRuntimeStats["heldBytes"];
 }
@@ -108,7 +110,13 @@ export function useVaultInfoData({
     setSlow((prev) =>
       prev?.vaultId === current.id
         ? prev
-        : { vaultId: current.id, backups: null, storeBytes: "measuring", heldBytes: "measuring" },
+        : {
+            vaultId: current.id,
+            backups: null,
+            chosenBackups: null,
+            storeBytes: "measuring",
+            heldBytes: "measuring",
+          },
     );
 
     const fail = (error: unknown) => {
@@ -123,7 +131,12 @@ export function useVaultInfoData({
       if (cancelled) return;
       setSlow((prev) => (prev?.vaultId === current.id ? { ...prev, ...patch } : prev));
     };
-    void backupService.listBackups(current.id).then((backups) => patchSlow({ backups }), fail);
+    void backupService
+      .listBackups(current.id)
+      .then(
+        (listing) => patchSlow({ backups: listing.backups, chosenBackups: listing.chosen }),
+        fail,
+      );
     void vaultService
       .diskUsage(current.id)
       .catch(() => null)
@@ -167,6 +180,7 @@ export function useVaultInfoData({
           groupName,
           groupHidden,
           backups: null,
+          chosenBackups: null,
           runtime,
           passwordInSession,
           workspacePath,

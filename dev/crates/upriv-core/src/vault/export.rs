@@ -1,10 +1,14 @@
 //! Portable export: `.zip` of `store/` (ciphertext). `.7z` is Plan B. A
 //! plain-text `.zip` takes the data out readable, not encrypted at all.
 //!
-//! An export writes `{display_name}.zip`, `{display_name}.7z`, or
-//! the same `{display_name}.zip` for a plain-text one, into the folder the person
-//! chose. It never replaces a file already using that name: it takes the next free number
-//! instead (`{display_name} 2.zip`) and logs `vault_export_numbered`. Each
+//! An export writes `{display_name}-upriv.zip`, `{display_name}-sevenzip.7z`,
+//! or `{display_name}-plain-text.zip` into the folder the person chose. Each
+//! holds its package (`super::package`): one folder named like the file,
+//! holding one folder named after the vault's id. An import names the vault
+//! from the settings the file carries, so the file can be renamed. It never
+//! replaces a file already using that name: it takes the next free number
+//! instead (`{display_name}-upriv-2.zip`, with the package folder named the
+//! same) and logs `vault_export_numbered`. Each
 //! export runs as a job the UI can stop by its id (`job_cancel`); a stopped or
 //! failed export removes the file it was writing, overwriting a plain-text one
 //! first, and returns the error ([`UprivError::JobCancelled`] for a stop).
@@ -18,7 +22,7 @@ use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use crate::logging::{log_event, LogLevel};
-use crate::paths::{seven_zip_outer_folder, vault_export_file_stem, VaultRoot};
+use crate::paths::VaultRoot;
 use crate::runtime_state::{refuse_if_held_elsewhere, UnfinishedWork};
 use crate::session::{
     check_unlock_allowed, ensure_vault_session_closed, is_vault_closing_at, is_vault_open_at,
@@ -34,14 +38,15 @@ use super::embedded_settings::snapshot_settings_bytes;
 use super::export_folder::{
     check_export_folder, ExportedFile, NumberedExportName, NumberedExportTarget,
 };
-use super::partial::{wipe_partial, PartialWork};
+use super::package::{export_stem, Package, PackageKind};
+use super::partial::{wipe_partial_behind, PartialWork};
 use super::plain_zip::write_plain_zip;
 use super::seven_zip_pack::{
     pack_logical_seven_zip_to_writer, plan_seven_zip_pack, ArchiveLayout, LogicalSource,
     PackLimits, ReadableExport,
 };
 use super::wipe::WipeOptions;
-use super::zip_io::zip_store_with_config_to_path;
+use super::zip_io::{zip_store_with_config_to_path, PacedFile, StoreEnvelope};
 
 fn closed_vault_paths(root: &VaultRoot, vault_id: &str) -> Result<(PathBuf, PathBuf)> {
     let vault_dir = root.vault_dir(vault_id)?;
@@ -116,8 +121,9 @@ fn unlock_closed_store<T>(
 }
 
 /// Zip of `store/` plus `README.md` and `config.toml` (no zip password),
-/// written into `dest_dir` as `{display_name}.zip` by the job `job_id`. This
-/// vault must be closed.
+/// written into `dest_dir` as `{display_name}-upriv.zip` by the job `job_id`,
+/// in its package (`{display_name}-upriv/{vault_id}/`). This vault must be
+/// closed.
 pub fn export_store_zip(
     root: &VaultRoot,
     vault_id: &str,
@@ -125,9 +131,9 @@ pub fn export_store_zip(
     job_id: &str,
 ) -> Result<ExportedFile> {
     let written = Job::run(job_id, JobKind::VaultExport, Some(vault_id), |job| {
-        let (_, target) = export_target(root, vault_id, dest_dir, "zip")?;
+        let plan = export_target(root, vault_id, dest_dir, PackageKind::Store)?;
         let hold = hold_closed_vault(root, vault_id)?;
-        target.write(
+        plan.target.write(
             root,
             job,
             UnfinishedWork::VaultExport,
@@ -138,6 +144,7 @@ pub fn export_store_zip(
                     let settings = snapshot_settings_bytes(&hold.vault_dir, &hold.store)?;
                     zip_store_with_config_to_path(
                         &hold.store,
+                        &StoreEnvelope::export(plan.package.clone()),
                         &settings,
                         &utc_filename_stamp(),
                         partial,
@@ -151,24 +158,37 @@ pub fn export_store_zip(
     written
 }
 
-/// This vault's settings and where its export would go in `dest_dir`.
+/// Where an export of this vault as `kind` goes in `dest_dir`, and the
+/// package it holds, named like that free file name.
+struct ExportPlan {
+    config: VaultConfig,
+    target: NumberedExportTarget,
+    package: Package,
+}
+
 fn export_target(
     root: &VaultRoot,
     vault_id: &str,
     dest_dir: &Path,
-    extension: &str,
-) -> Result<(VaultConfig, NumberedExportTarget)> {
+    kind: PackageKind,
+) -> Result<ExportPlan> {
+    // The id as its folder in `vaults/` has it, which also names the package's vault folder.
+    let vault_id = crate::paths::vault_id_component(vault_id)?;
     let vault_dir = root.vault_dir(vault_id)?;
     if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let config = load_vault_config(&vault_dir)?;
     check_export_folder(root, dest_dir)?;
-    let name = NumberedExportName::new(
-        &vault_export_file_stem(&config.vault.display_name),
-        extension,
-    );
-    Ok((config, NumberedExportTarget::new(dest_dir, name)?))
+    let display_name = &config.vault.display_name;
+    let name = NumberedExportName::new(&export_stem(display_name, kind), kind.extension());
+    let target = NumberedExportTarget::new(dest_dir, name)?;
+    let package = Package::new(&target.stem(), vault_id);
+    Ok(ExportPlan {
+        config,
+        target,
+        package,
+    })
 }
 
 /// `vault_export_numbered` when the name was taken and the file got a number.
@@ -199,15 +219,15 @@ fn pack_logical_seven_zip_to_path(
     let plan = plan_seven_zip_pack(
         index,
         opts,
-        layout.outer,
+        layout.vault_folder,
         is_reserved_logical,
         PackLimits::current(),
     )?;
-    let file = crate::host_fs::File::create(dest)?;
+    let file = PacedFile::new(crate::host_fs::File::create(dest)?);
     let (file, unreadable) =
         pack_logical_seven_zip_to_writer(file, source, archive_password, opts, layout, &plan, job)?;
     Ok(ReadableExport {
-        size: file.metadata()?.len(),
+        size: file.into_file().metadata()?.len(),
         unreadable,
     })
 }
@@ -253,9 +273,10 @@ fn with_logical_store<T>(
 }
 
 /// Logical `.7z` of vault files (never `.enc` blobs), written into `dest_dir`
-/// as `{display_name}.7z` by the job `job_id`, with `.upriv-config/` carrying
-/// what `include` asks for. Plaintext stays in RAM; the file is 7-Zip AES
-/// ciphertext. This vault must be closed; the password unlocks `store/` for
+/// as `{display_name}-sevenzip.7z` by the job `job_id`, in its package
+/// (`{display_name}-sevenzip/{vault_id}/`), with `.upriv-config/` beside
+/// the vault folder carrying what `include` asks for. Plaintext stays in RAM;
+/// the file is 7-Zip AES ciphertext. This vault must be closed; the password unlocks `store/` for
 /// the read. Every file goes in: one whose data is missing or damaged keeps
 /// its readable parts, with zeros for the rest, and is named in
 /// [`ExportedFile::unreadable`].
@@ -270,10 +291,10 @@ pub fn export_logical_seven_zip(
 ) -> Result<ExportedFile> {
     let mut unreadable = Vec::new();
     let written = Job::run(job_id, JobKind::VaultExport, Some(vault_id), |job| {
-        let (config, target) = export_target(root, vault_id, dest_dir, "7z")?;
-        let opts = options.cloned().unwrap_or(config.seven_zip);
-        let outer = seven_zip_outer_folder(&config.vault.display_name);
-        target.write(
+        let plan = export_target(root, vault_id, dest_dir, PackageKind::SevenZip)?;
+        let opts = options.cloned().unwrap_or(plan.config.seven_zip);
+        let vault_folder = plan.package.root();
+        plan.target.write(
             root,
             job,
             UnfinishedWork::VaultExport,
@@ -286,7 +307,8 @@ pub fn export_logical_seven_zip(
                     |vault_dir, source, index| {
                         let config_files = config_folder_files(vault_dir, source, index, include)?;
                         let layout = ArchiveLayout {
-                            outer: &outer,
+                            package_folder: &plan.package.outer,
+                            vault_folder: &vault_folder,
                             config_files: &config_files,
                         };
                         let packed = pack_logical_seven_zip_to_path(
@@ -311,11 +333,13 @@ pub fn export_logical_seven_zip(
     written
 }
 
-/// Readable `.zip` of vault files at its root, written into `dest_dir`
-/// as `{display_name}.zip` by the job `job_id`, with `.upriv-config/`
-/// carrying what `include` asks for. **Not encrypted:** anyone who gets the
-/// file reads the vault. This vault must be closed; the password unlocks
-/// `store/` for the read. A stop or a failure overwrites the unfinished file.
+/// Readable `.zip` of vault files, written into `dest_dir` as
+/// `{display_name}-plain-text.zip` by the job `job_id`, in its package
+/// (`{display_name}-plain-text/{vault_id}/`), with `.upriv-config/` beside
+/// the vault folder carrying what `include` asks for. **Not encrypted:**
+/// anyone who gets the file reads the vault. This vault must be closed; the password unlocks
+/// `store/` for the read. A stop or a failure answers at once and overwrites
+/// the unfinished file behind it ([`wipe_partial_behind`]).
 /// Every file goes in: one whose data is missing or damaged keeps its
 /// readable parts, with zeros for the rest, and is named in
 /// [`ExportedFile::unreadable`].
@@ -329,9 +353,9 @@ pub fn export_plain_zip(
 ) -> Result<ExportedFile> {
     let mut unreadable = Vec::new();
     let written = Job::run(job_id, JobKind::VaultExport, Some(vault_id), |job| {
-        let (config, target) = export_target(root, vault_id, dest_dir, "zip")?;
-        let wipe = WipeOptions::from_vault_config(&config);
-        target.write_clearing(
+        let plan = export_target(root, vault_id, dest_dir, PackageKind::PlainText)?;
+        let wipe = WipeOptions::from_vault_config(&plan.config);
+        plan.target.write_clearing(
             root,
             job,
             UnfinishedWork::PlainExport,
@@ -339,12 +363,21 @@ pub fn export_plain_zip(
             |partial| {
                 with_logical_store(root, vault_id, password, |vault_dir, source, index| {
                     let config_files = config_folder_files(vault_dir, source, index, include)?;
-                    let written = write_plain_zip(source, index, &config_files, partial, job)?;
+                    let written =
+                        write_plain_zip(source, index, &plan.package, &config_files, partial, job)?;
                     unreadable = written.unreadable;
                     Ok(written.size)
                 })
             },
-            |partial| wipe_partial(partial, PartialWork::VaultExport, &wipe),
+            // The stop answers now; the record goes once the wipe is done. A
+            // file never made, such as after a wrong password, needs none.
+            |partial| {
+                if !partial.host_exists() {
+                    return true;
+                }
+                wipe_partial_behind(root, partial, PartialWork::VaultExport, wipe);
+                false
+            },
         )
     });
     let written = written.map(|file| ExportedFile { unreadable, ..file });
@@ -457,7 +490,7 @@ mod tests {
         let (_tmp, root) = notes_root();
         let out = tempfile::tempdir().unwrap();
         let zip = export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
-        assert_eq!(zip.path, out.path().join("My notes.zip"));
+        assert_eq!(zip.path, out.path().join("My notes-upriv.zip"));
         assert_eq!(zip.number, 1);
         let seven = export_logical_seven_zip(
             &root,
@@ -469,24 +502,61 @@ mod tests {
             &test_job_id(),
         )
         .unwrap();
-        assert_eq!(seven.path, out.path().join("My notes.7z"));
-        assert_eq!(entry_names(out.path()), ["My notes.7z", "My notes.zip"]);
+        assert_eq!(seven.path, out.path().join("My notes-sevenzip.7z"));
+        // An id with spaces around it names the same vault folder.
+        let padded = export_store_zip(&root, " notes ", out.path(), &test_job_id()).unwrap();
+        let members = zip_members(&padded.path);
+        assert_eq!(members[1], "My notes-upriv-2/notes/");
+        crate::host_fs::remove_file(&padded.path).unwrap();
+        let plain = export_plain_zip(
+            &root,
+            "notes",
+            b"pass-word-ok",
+            EVERYTHING,
+            out.path(),
+            &test_job_id(),
+        )
+        .unwrap();
+        assert_eq!(plain.path, out.path().join("My notes-plain-text.zip"));
+        assert_eq!(
+            entry_names(out.path()),
+            [
+                "My notes-plain-text.zip",
+                "My notes-sevenzip.7z",
+                "My notes-upriv.zip"
+            ]
+        );
+    }
+
+    /// The members of the zip at `path`, in its order.
+    fn zip_members(path: &Path) -> Vec<String> {
+        let mut archive = zip::ZipArchive::new(crate::host_fs::File::open(path).unwrap()).unwrap();
+        (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .collect()
     }
 
     #[test]
     fn a_taken_name_gets_the_next_free_number_and_nothing_is_replaced() {
         let (_tmp, root) = notes_root();
         let out = tempfile::tempdir().unwrap();
-        let older = out.path().join("My notes.zip");
+        let older = out.path().join("My notes-upriv.zip");
         crate::host_fs::write(&older, b"older export").unwrap();
         let zip = export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
-        assert_eq!(zip.path, out.path().join("My notes 2.zip"));
+        assert_eq!(zip.path, out.path().join("My notes-upriv-2.zip"));
         assert_eq!(zip.number, 2);
         assert_eq!(crate::host_fs::read(&older).unwrap(), b"older export");
-        assert_eq!(&crate::host_fs::read(&zip.path).unwrap()[..2], b"PK");
+        // The package folder is named like the file; the vault folder is the
+        // vault's id.
+        let members = zip_members(&zip.path);
+        assert_eq!(
+            members[..2],
+            ["My notes-upriv-2/", "My notes-upriv-2/notes/"]
+        );
+        assert!(members.contains(&"My notes-upriv-2/notes/store/header/vault.header".into()));
 
         // A .7z still being written under the name holds it too.
-        let writing = out.path().join("My notes.7z.upriv-part");
+        let writing = out.path().join("My notes-sevenzip.7z.upriv-part");
         crate::host_fs::write(&writing, b"another export").unwrap();
         let seven = export_logical_seven_zip(
             &root,
@@ -498,15 +568,15 @@ mod tests {
             &test_job_id(),
         )
         .unwrap();
-        assert_eq!(seven.path, out.path().join("My notes 2.7z"));
+        assert_eq!(seven.path, out.path().join("My notes-sevenzip-2.7z"));
         assert_eq!(crate::host_fs::read(&writing).unwrap(), b"another export");
         assert_eq!(
             entry_names(out.path()),
             [
-                "My notes 2.7z",
-                "My notes 2.zip",
-                "My notes.7z.upriv-part",
-                "My notes.zip"
+                "My notes-sevenzip-2.7z",
+                "My notes-sevenzip.7z.upriv-part",
+                "My notes-upriv-2.zip",
+                "My notes-upriv.zip"
             ]
         );
     }
@@ -557,12 +627,47 @@ mod tests {
         }
     }
 
+    /// The package an export zip holds.
+    fn zip_package(bytes: &[u8]) -> Package {
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        Package::find_in_zip(archive.file_names()).expect("an export holds its package")
+    }
+
+    /// Each entry of an export zip's vault folder and its bytes, named as a
+    /// path under that folder (a folder ends with `/`).
     fn zip_bodies(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        zip_bodies_in(bytes, Package::inside)
+    }
+
+    /// Each file of the `.upriv-config/` beside an export zip's vault folder
+    /// and its bytes, named as a path under that folder.
+    fn config_bodies(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        zip_bodies_in(bytes, Package::config)
+    }
+
+    fn config_names(bytes: &[u8]) -> Vec<String> {
+        let mut names: Vec<String> = config_bodies(bytes).into_iter().map(|(n, _)| n).collect();
+        names.sort();
+        names
+    }
+
+    fn zip_bodies_in(
+        bytes: &[u8],
+        place: for<'a> fn(&Package, &'a str) -> Option<&'a str>,
+    ) -> Vec<(String, Vec<u8>)> {
+        let package = zip_package(bytes);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut entries = Vec::new();
         for index in 0..archive.len() {
             let mut file = archive.by_index(index).unwrap();
-            let name = file.name().to_string();
+            let Some(rest) = place(&package, file.name()) else {
+                continue;
+            };
+            let name = if file.is_dir() {
+                format!("{rest}/")
+            } else {
+                rest.to_string()
+            };
             let mut body = Vec::new();
             if !file.is_dir() {
                 std::io::Read::read_to_end(&mut file, &mut body).unwrap();
@@ -649,10 +754,10 @@ mode = "encrypted_dir"
         let bytes = store_zip(&root, "notes").unwrap();
         let on_disk = store_zip(&root, "notes").unwrap();
         assert_same_store_payload(&bytes, &on_disk);
-        let embedded = crate::vault::read_zip_config_toml(std::io::Cursor::new(bytes))
-            .unwrap()
-            .expect("config.toml");
-        let parsed = crate::vault::parse_embedded_settings(&embedded).unwrap();
+        // The export's vault folder names the vault.
+        let carried = crate::vault::read_import_zip_bytes_settings(&bytes).unwrap();
+        assert_eq!(carried.vault_name.as_deref(), Some("Notes"));
+        let parsed = carried.settings.expect("config.toml");
         assert_eq!(parsed.config.vault.display_name, "Notes");
         assert_eq!(parsed.unlock_preset, Some(KdfUnlockPreset::M32));
         let readme = super::super::zip_io::read_zip_root_entry(
@@ -683,12 +788,16 @@ mode = "encrypted_dir"
                 &test_job_id(),
             )
         };
-        for attempt in 0..5 {
-            assert!(
-                matches!(export(b"not-the-password"), Err(UprivError::WrongPassword)),
-                "attempt {attempt}"
-            );
+        // Four failures already counted; the export's own wrong password is
+        // the fifth, so the block that follows comes from it. Few real unlocks
+        // keep the five inside the limit's window under a busy test run.
+        for _ in 0..4 {
+            crate::session::record_unlock_failure(&notes).unwrap();
         }
+        assert!(matches!(
+            export(b"not-the-password"),
+            Err(UprivError::WrongPassword)
+        ));
         assert!(matches!(
             export(b"pass-word-ok"),
             Err(UprivError::VaultUnlockBlocked { .. })
@@ -939,25 +1048,35 @@ mode = "encrypted_dir"
         let (_tmp, root) = vault_with_a_layout();
         let zip = plain_zip(&root, "notes", EVERYTHING).unwrap();
         assert_eq!(
-            zip_names(&zip),
-            [
-                ".upriv-config/README.md",
-                ".upriv-config/config.toml",
-                ".upriv-config/workspace.json",
-                "docs/",
-                "docs/hi.txt",
-                "empty/",
-            ]
+            zip_package(&zip),
+            Package::new("My notes-plain-text", "notes")
         );
+        // The vault folder holds the vault's files; what the export carries
+        // about the vault sits beside it.
+        assert_eq!(zip_names(&zip), ["docs/", "docs/hi.txt", "empty/"]);
+        assert_eq!(
+            config_names(&zip),
+            ["README.md", "config.toml", "workspace.json"]
+        );
+        let names: Vec<String> = zip::ZipArchive::new(std::io::Cursor::new(zip.as_slice()))
+            .unwrap()
+            .file_names()
+            .map(str::to_string)
+            .collect();
+        assert!(names.contains(&"My notes-plain-text/.upriv-config/config.toml".to_string()));
         let bodies = zip_bodies(&zip);
+        let configs = config_bodies(&zip);
         let body = |name: &str| {
-            let found = bodies.iter().find(|(entry, _)| entry == name);
+            let found = bodies
+                .iter()
+                .chain(&configs)
+                .find(|(entry, _)| entry == name);
             found.expect("entry").1.clone()
         };
         assert_eq!(body("docs/hi.txt"), b"hello-export");
-        assert_eq!(body(".upriv-config/workspace.json"), LAYOUT);
-        let settings = body(".upriv-config/config.toml");
-        let parsed = crate::vault::parse_embedded_settings(&settings).unwrap();
+        assert_eq!(body("workspace.json"), LAYOUT);
+        let settings = body("config.toml");
+        let parsed = crate::vault::embedded_settings::parse_embedded_settings(&settings).unwrap();
         assert_eq!(parsed.config.vault.display_name, "My notes");
         assert_eq!(parsed.unlock_preset, Some(KdfUnlockPreset::M32));
     }
@@ -965,17 +1084,16 @@ mode = "encrypted_dir"
     #[test]
     fn with_the_toggles_off_an_export_holds_only_the_vault_files() {
         let (_tmp, root) = vault_with_a_layout();
-        assert_eq!(
-            zip_names(&plain_zip(&root, "notes", VAULT_FILES_ONLY).unwrap()),
-            ["docs/", "docs/hi.txt", "empty/"]
-        );
+        let bare = plain_zip(&root, "notes", VAULT_FILES_ONLY).unwrap();
+        assert_eq!(zip_names(&bare), ["docs/", "docs/hi.txt", "empty/"]);
+        assert!(config_names(&bare).is_empty());
         let only_settings = ExportInclude {
             workspace: false,
             settings: true,
         };
-        let names = zip_names(&plain_zip(&root, "notes", only_settings).unwrap());
-        assert!(names.contains(&".upriv-config/config.toml".to_string()));
-        assert!(!names.iter().any(|name| name.ends_with("workspace.json")));
+        let zip = plain_zip(&root, "notes", only_settings).unwrap();
+        assert_eq!(zip_names(&zip), ["docs/", "docs/hi.txt", "empty/"]);
+        assert_eq!(config_names(&zip), ["README.md", "config.toml"]);
     }
 
     #[test]
@@ -985,9 +1103,12 @@ mode = "encrypted_dir"
             workspace: true,
             settings: false,
         };
+        // An empty vault is its package's two folders.
+        let zip = plain_zip(&root, "notes", only_layout).unwrap();
+        assert_eq!(zip_names(&zip), Vec::<String>::new());
         assert_eq!(
-            zip_names(&plain_zip(&root, "notes", only_layout).unwrap()),
-            Vec::<String>::new()
+            zip_package(&zip),
+            Package::new("My notes-plain-text", "notes")
         );
     }
 
@@ -1007,10 +1128,14 @@ mode = "encrypted_dir"
             .unwrap()
         };
         let first = export();
-        assert_eq!(first.path, out.path().join("My notes.zip"));
-        assert_eq!(export().path, out.path().join("My notes 2.zip"));
+        assert_eq!(first.path, out.path().join("My notes-plain-text.zip"));
+        let second = export();
+        assert_eq!(second.path, out.path().join("My notes-plain-text-2.zip"));
+        let package = zip_package(&crate::host_fs::read(&second.path).unwrap());
+        assert_eq!(package, Package::new("My notes-plain-text-2", "notes"));
+        // The encrypted export has a name of its own.
         let encrypted = export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
-        assert_eq!(encrypted.path, out.path().join("My notes 3.zip"));
+        assert_eq!(encrypted.path, out.path().join("My notes-upriv.zip"));
     }
 
     #[cfg(unix)]
@@ -1049,12 +1174,16 @@ mode = "encrypted_dir"
             )
         };
         assert!(matches!(export(b""), Err(UprivError::WrongPassword)));
-        for attempt in 0..5 {
-            assert!(
-                matches!(export(b"not-the-password"), Err(UprivError::WrongPassword)),
-                "attempt {attempt}"
-            );
+        // Four failures already counted; the export's own wrong password is
+        // the fifth, so the block that follows comes from it. Few real unlocks
+        // keep the five inside the limit's window under a busy test run.
+        for _ in 0..4 {
+            crate::session::record_unlock_failure(&notes).unwrap();
         }
+        assert!(matches!(
+            export(b"not-the-password"),
+            Err(UprivError::WrongPassword)
+        ));
         assert!(matches!(
             export(b"pass-word-ok"),
             Err(UprivError::VaultUnlockBlocked { .. })
@@ -1090,8 +1219,8 @@ mode = "encrypted_dir"
         let (_tmp, root) = notes_root();
         let blob = two_files(&root);
         let mut bytes = crate::host_fs::read(&blob).unwrap();
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0x01;
+        // Past the nonce, inside the blob's one chunk.
+        bytes[30] ^= 0x01;
         crate::host_fs::write(&blob, &bytes).unwrap();
 
         let out = tempfile::tempdir().unwrap();
@@ -1152,6 +1281,8 @@ mode = "encrypted_dir"
             &test_job_id(),
         )
         .is_err());
+        // The failure answered at once; the wipe behind it finishes the job.
+        crate::vault::wait_for_partial_wipes();
         assert!(entry_names(out.path()).is_empty());
         let state = crate::runtime_state::load_runtime_state(&root).unwrap();
         assert!(state.unfinished_files.is_empty());
@@ -1179,6 +1310,81 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
     }
 
+    /// A vault with `files` files of `size` bytes no coder can shrink.
+    fn vault_of_noise(files: usize, size: usize) -> (tempfile::TempDir, VaultRoot) {
+        let (tmp, root) = notes_root();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        for file in 0..files {
+            let body: Vec<u8> = (0..size)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                })
+                .collect();
+            fs_write_file(&root, "notes", &format!("/noise-{file}.bin"), &body).unwrap();
+        }
+        close_vault(&root, "notes").unwrap();
+        (tmp, root)
+    }
+
+    #[test]
+    fn a_stop_in_the_middle_of_any_export_ends_it_and_leaves_the_vault_usable() {
+        let (_tmp, root) = vault_of_noise(6, 4 * 1024 * 1024);
+        for format in ["zip", "7z", "plain"] {
+            let out = tempfile::tempdir().unwrap();
+            let id = test_job_id();
+            // Stop the export once it has written something.
+            let stopper = {
+                let id = id.clone();
+                std::thread::spawn(move || {
+                    let started = std::time::Instant::now();
+                    while started.elapsed() < std::time::Duration::from_secs(60) {
+                        if crate::session::job_status(&id).is_some_and(|s| s.bytes_done > 0) {
+                            cancel_job(&id).unwrap();
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                })
+            };
+            let started = std::time::Instant::now();
+            let written = match format {
+                "zip" => export_store_zip(&root, "notes", out.path(), &id),
+                "7z" => export_logical_seven_zip(
+                    &root,
+                    "notes",
+                    b"pass-word-ok",
+                    None,
+                    EVERYTHING,
+                    out.path(),
+                    &id,
+                ),
+                _ => export_plain_zip(&root, "notes", b"pass-word-ok", EVERYTHING, out.path(), &id),
+            };
+            stopper.join().unwrap();
+            assert!(
+                matches!(written, Err(UprivError::JobCancelled)),
+                "{format}: {written:?}"
+            );
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "{format} took {:?} to stop",
+                started.elapsed()
+            );
+            // A plain-text file is overwritten behind the stop.
+            crate::vault::wait_for_partial_wipes();
+            assert!(entry_names(out.path()).is_empty(), "{format} left a file");
+            let state = crate::runtime_state::load_runtime_state(&root).unwrap();
+            assert!(state.unfinished_files.is_empty(), "{format} left a record");
+            // Nothing the export held stays held.
+            open_vault(&root, "notes", b"pass-word-ok").unwrap();
+            close_vault(&root, "notes").unwrap();
+        }
+    }
+
     #[test]
     fn a_stop_while_the_zip_is_written_ends_it() {
         let (tmp, root) = vault_with_a_layout();
@@ -1195,6 +1401,7 @@ mode = "encrypted_dir"
                 content_key: &opened.content_key,
             },
             &opened.index,
+            &Package::new("Notes-plain-text", "Notes"),
             &[],
             &dest,
             &job,
@@ -1223,10 +1430,14 @@ mode = "encrypted_dir"
             Some("My notes".to_string())
         );
         assert!(probe.workspace);
+        // The new vault takes the name as it was typed, which the settings hold.
+        assert_eq!(probe.vault_name.as_deref(), Some("My notes"));
         let bare = probe_import_zip_bytes(&plain_zip(&root, "notes", VAULT_FILES_ONLY).unwrap());
         let bare = bare.unwrap();
         assert!(bare.settings.is_none());
         assert!(!bare.workspace);
+        // With none, the vault folder: the id of the vault it came from.
+        assert_eq!(bare.vault_name.as_deref(), Some("notes"));
     }
 
     #[test]
@@ -1353,15 +1564,27 @@ mode = "encrypted_dir"
     fn a_seven_zip_test_reads_the_settings_without_a_vault_file() {
         let (_tmp, root) = vault_with_a_layout();
         let bytes = seven_zip(&root, "notes", b"pass-word-ok").unwrap();
-        let settings = probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id())
-            .unwrap()
-            .expect("settings");
+        let probe = probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id()).unwrap();
+        // The settings it carries name the vault.
+        assert_eq!(probe.vault_name, "My notes");
+        let settings = probe.settings.expect("settings");
         assert_eq!(settings.config.vault.display_name, "My notes");
         assert_eq!(settings.unlock_preset, Some(KdfUnlockPreset::M32));
         assert!(matches!(
             probe_logical_seven_zip(&bytes, b"not-the-password", &test_job_id()),
             Err(UprivError::WrongPassword)
         ));
+    }
+
+    #[test]
+    fn a_seven_zip_of_root_files_finds_its_vault_folder_from_every_member() {
+        // No folder in the vault: the settings beside the vault folder are the
+        // archive's first member, and they do not name that folder.
+        let (_tmp, root) = notes_root();
+        let bytes = seven_zip(&root, "notes", b"pass-word-ok").unwrap();
+        let probe = probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id()).unwrap();
+        assert_eq!(probe.vault_name, "My notes");
+        assert!(probe.settings.is_some());
     }
 
     #[test]
@@ -1391,6 +1614,7 @@ mode = "encrypted_dir"
             assert!(
                 probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id())
                     .unwrap()
+                    .settings
                     .is_some()
             );
             assert!(matches!(
@@ -1422,6 +1646,7 @@ mode = "encrypted_dir"
         assert!(
             probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id())
                 .unwrap()
+                .settings
                 .is_some()
         );
         let id = import_logical_seven_zip(
@@ -1476,11 +1701,11 @@ mode = "encrypted_dir"
         )
         .unwrap();
         let bytes = crate::host_fs::read(&file.path).unwrap();
-        assert!(
-            probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id())
-                .unwrap()
-                .is_none()
-        );
+        // With no settings carried, the vault folder names it: the id of the
+        // vault it came from.
+        let probe = probe_logical_seven_zip(&bytes, b"pass-word-ok", &test_job_id()).unwrap();
+        assert!(probe.settings.is_none());
+        assert_eq!(probe.vault_name, "notes");
         let id = import_logical_seven_zip(
             &root,
             sample_config("copy", "Copy"),
@@ -1521,7 +1746,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
-        let _held = PreparingGuard::enter(&vault_dir).unwrap();
+        let _held = PreparingGuard::enter(&vault_dir);
         let err = store_zip(&root, "notes").unwrap_err();
         assert!(matches!(err, UprivError::VaultBusy));
     }
@@ -1635,12 +1860,110 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             &VaultSevenZipSection::default(),
             ArchiveLayout {
-                outer: "Notes",
+                package_folder: "Notes-sevenzip",
+                vault_folder: "Notes-sevenzip/Notes",
                 config_files: &[],
             },
             &dest,
             &job,
         );
         assert!(matches!(job.settle(packed), Err(UprivError::JobCancelled)));
+    }
+
+    /// Export timings on this machine, by format, beside a decrypt of the
+    /// same files and a plain write of as many bytes. Needs about 3 GiB free
+    /// in the temp dir:
+    /// `cargo test --release -p upriv-core --lib export_cost_report -- --ignored --nocapture`
+    /// With `TMPDIR=/dev/shm` the vault is in RAM; `UPRIV_EXPORT_COST_OUT`
+    /// then puts only the exports on the drive under test.
+    #[test]
+    #[ignore]
+    fn export_cost_report() {
+        use std::io::Write;
+        let (_tmp, root) = notes_root();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let piece: Vec<u8> = (0..4 * 1024 * 1024).map(|i| (i * 7 % 251) as u8).collect();
+        for file in 0..8 {
+            for at in 0..16u64 {
+                let path = format!("/big{file}.bin");
+                crate::vault::fs_write_range(&root, "notes", &path, at * 4 * 1024 * 1024, &piece)
+                    .unwrap();
+            }
+        }
+        fs_mkdir(&root, "notes", "/small").unwrap();
+        for i in 0..2000 {
+            fs_write_file(&root, "notes", &format!("/small/{i}.txt"), &piece[..4096]).unwrap();
+        }
+        close_vault(&root, "notes").unwrap();
+        let out = match std::env::var_os("UPRIV_EXPORT_COST_OUT") {
+            Some(dir) => tempfile::tempdir_in(dir),
+            None => tempfile::tempdir(),
+        }
+        .unwrap();
+        let timed = |label: &str, run: &dyn Fn()| {
+            let started = std::time::Instant::now();
+            run();
+            eprintln!("{label}: {:?}", started.elapsed());
+        };
+
+        timed("decrypt only", &|| {
+            let mut bytes = 0u64;
+            with_logical_store(&root, "notes", b"pass-word-ok", |_, source, index| {
+                for node in super::super::seven_zip_pack::export_file_nodes(
+                    index,
+                    &crate::store::is_reserved_logical,
+                ) {
+                    crate::store::read_file_chunks_keeping(
+                        source.store_dir,
+                        source.header,
+                        source.content_key,
+                        node,
+                        |chunk| {
+                            bytes += chunk.len() as u64;
+                            Ok(())
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+            eprintln!("  {bytes} bytes");
+        });
+        timed("write and fsync 520 MiB", &|| {
+            let path = out.path().join("raw.bin");
+            let mut file = std::fs::File::create(&path).unwrap();
+            for _ in 0..130 {
+                file.write_all(&piece).unwrap();
+            }
+            file.sync_all().unwrap();
+            std::fs::remove_file(path).unwrap();
+        });
+        timed("store zip", &|| {
+            export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
+        });
+        timed("plain-text zip", &|| {
+            export_plain_zip(
+                &root,
+                "notes",
+                b"pass-word-ok",
+                EVERYTHING,
+                out.path(),
+                &test_job_id(),
+            )
+            .unwrap();
+        });
+        timed(".7z", &|| {
+            export_logical_seven_zip(
+                &root,
+                "notes",
+                b"pass-word-ok",
+                None,
+                EVERYTHING,
+                out.path(),
+                &test_job_id(),
+            )
+            .unwrap();
+        });
+        crate::vault::wait_for_partial_wipes();
     }
 }

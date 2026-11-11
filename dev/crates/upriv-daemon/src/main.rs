@@ -9,7 +9,8 @@
 //!   whose vault the core of an app that went away still holds first waits
 //!   on an `upriv-open-wait` thread of its own, so it holds no lane.
 //! - `upriv-fs-io`: close, delete, and the quit (`app_shutdown`).
-//! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header commit).
+//! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header
+//!   commit), and the rebuild of a lost index (pinned copy plus index seal).
 //! - `upriv-pack`: zip and `.7z` import, vault and backup export. One at a time.
 //! - `upriv-data-folder`: the zip of the whole data folder, and a phone's copy
 //!   of its private data folder. Work it refuses on the other lanes answers at
@@ -111,8 +112,13 @@ fn log_stderr(message: std::fmt::Arguments<'_>) {
 }
 
 fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> WireOut {
-    panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params)))
-        .unwrap_or_else(|_| internal_error_response(id))
+    let name = method.clone();
+    panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params))).unwrap_or_else(
+        |_| {
+            upriv_core::session::log_request_panic(&name);
+            internal_error_response(id)
+        },
+    )
 }
 
 fn spawn_worker_pool(
@@ -185,8 +191,11 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
+    // A panic inside this hook would abort the process, and the app may be
+    // gone already: [`log_stderr`] never panics.
     panic::set_hook(Box::new(|info| {
-        eprintln!("[upriv-daemon] panic: {info}");
+        upriv_core::session::note_panic(info.location());
+        log_stderr(format_args!("panic: {info}"));
     }));
     // Pin distribution once after spawn env is in place (Electron sets UPRIV_*).
     let _ = upriv_core::init_app_distribution();
@@ -199,6 +208,8 @@ fn run() -> io::Result<()> {
     let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
     let (data_folder_tx, data_folder_join) =
         spawn_named_worker("upriv-data-folder", Arc::clone(&stdout));
+    let (backup_folder_tx, backup_folder_join) =
+        spawn_named_worker("upriv-backup-folder", Arc::clone(&stdout));
     let import_count = upriv_core::import_slots();
     let (import_tx, import_joins) =
         spawn_worker_pool(import_count, "upriv-import", Arc::clone(&stdout));
@@ -327,6 +338,7 @@ fn run() -> io::Result<()> {
                         HeavyLane::Pack => &pack_tx,
                         HeavyLane::Import => &import_tx,
                         HeavyLane::DataFolder => &data_folder_tx,
+                        HeavyLane::BackupFolder => &backup_folder_tx,
                     };
                     if tx.send(HeavyJob::Request { id, method, params }).is_err() {
                         let _ = write_out(&stdout, &internal_error_response(id));
@@ -376,6 +388,11 @@ fn run() -> io::Result<()> {
     if let Err(error) = data_folder_join.join() {
         log_stderr(format_args!("data-folder worker join panicked: {error:?}"));
     }
+    // A call stuck on a dead drive must not hold the core open: this worker is
+    // left to the process exit rather than joined.
+    let _ = backup_folder_tx.send(HeavyJob::Shutdown);
+    drop(backup_folder_tx);
+    drop(backup_folder_join);
     for _ in 0..import_joins.len() {
         let _ = import_tx.send(HeavyJob::Shutdown);
     }
@@ -385,6 +402,11 @@ fn run() -> io::Result<()> {
             log_stderr(format_args!("import worker join panicked: {error:?}"));
         }
     }
+    // A plain-text wipe still running ends before the core exits: one a job
+    // the quit stopped began after `app_shutdown` answered, and after Close
+    // now any other. Electron stops the core once its grace runs out, and the
+    // next launch finishes what is left.
+    upriv_core::wait_for_partial_wipes();
 
     upriv_core::logging::flush_logging_session();
     Ok(())

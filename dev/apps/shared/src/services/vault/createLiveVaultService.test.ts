@@ -77,7 +77,7 @@ describe("createLiveVaultService", () => {
     forgetVaultSettings("notes");
     const config = { vault: { id: "notes", display_name: "Notes" } } as never;
     const saveSettings = vi.fn(async () => undefined);
-    const deleteVault = vi.fn(async () => undefined);
+    const deleteVault = vi.fn(async () => ({ outside: "none" as const, folder: null }));
     const service = createLiveVaultService({
       listVaults: vi.fn(async () => []),
       createVault: vi.fn(),

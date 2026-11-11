@@ -19,6 +19,7 @@ export {
   type ModalTitleClusterProps,
 } from "./Modal";
 export { PasswordInput, type PasswordInputProps } from "./PasswordInput";
+export { PasswordWeaknessNotice } from "./PasswordWeaknessNotice";
 export { Switch, SwitchRow, type SwitchProps, type SwitchRowProps } from "./Switch";
 export { Toast, type ToastProps } from "./Toast";
 export { Select, type SelectOption, type SelectOptionTone } from "./Select";

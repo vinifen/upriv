@@ -6,11 +6,13 @@ import type { VaultSecurityService } from "./VaultSecurityService";
 
 /**
  * Expo Go only. Reports success without rewriting `store/`. Live desktop and
- * native factories call `vault_change_password` / `vault_change_kdf`.
+ * native factories call `vault_change_password` / `vault_change_kdf` /
+ * `vault_rebuild`. A mock vault's index always opens, so a rebuild is refused.
  */
 const MOCK_WRONG_PASSWORD = "wrong";
 const MOCK_CHANGE_PASSWORD_MS = 700;
 const MOCK_CHANGE_KDF_MS = 900;
+const MOCK_REBUILD_MS = 500;
 
 function rejectWrongPassword(password: string): void {
   if (password.trim() === MOCK_WRONG_PASSWORD) {
@@ -36,6 +38,11 @@ export function createMockVaultSecurityService(
       await delayMs(MOCK_CHANGE_KDF_MS);
       rejectWrongPassword(input.currentPassword);
       setMockVaultUnlockPreset(vaultId, input.nextPreset);
+    },
+    async rebuildIndex(_vaultId, input) {
+      await delayMs(MOCK_REBUILD_MS);
+      rejectWrongPassword(input.password);
+      throw new RpcError(VAULT_ERROR_CODES.INDEX_READABLE, "mock: the index opens");
     },
   };
 }

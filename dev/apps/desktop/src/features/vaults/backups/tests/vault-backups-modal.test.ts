@@ -29,7 +29,12 @@ const PLAIN_KEY = "20260101000000-notes.zip";
 // The same service objects on every render, as the app's context gives them.
 const services = vi.hoisted(() => ({
   vaultRoot: {} as { pickFolder?: unknown },
-  backups: { listBackups: async (): Promise<unknown[]> => [] },
+  backups: {
+    listBackups: async (): Promise<{ backups: unknown[]; chosen: unknown }> => ({
+      backups: [],
+      chosen: null,
+    }),
+  },
   toast: {
     toast: null,
     dismiss: () => {},
@@ -38,10 +43,19 @@ const services = vi.hoisted(() => ({
   },
 }));
 services.vaultRoot.pickFolder = pickFolder;
-services.backups.listBackups = async () => [PIN, PLAIN];
+services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
+
+/** Every translation asked for with params, so a test can read what a sentence names. */
+const listParams = vi.hoisted(() => [] as { key: string; params: Record<string, string> }[]);
 
 vi.mock("@/i18n", () => ({
-  useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
+  useTranslation: () => ({
+    t: (key: string, params?: Record<string, string>) => {
+      if (params) listParams.push({ key, params });
+      return key;
+    },
+    locale: "en",
+  }),
 }));
 vi.mock("@/hooks/useErrorToast", () => ({ useErrorToast: () => services.toast }));
 vi.mock("@/platform/services", () => ({
@@ -120,6 +134,17 @@ function job(keys: readonly string[], overrides: Partial<BackupExportJob> = {}):
   };
 }
 
+/** Each section's select-all box, in page order. */
+function sectionBoxes(): HTMLInputElement[] {
+  return screen.getAllByLabelText<HTMLInputElement>("modal.backup.select_section");
+}
+
+function rowBox(entry: VaultBackupEntry): HTMLInputElement {
+  const box = row(entry).querySelector<HTMLInputElement>('input[type="checkbox"]');
+  if (!box) throw new Error(`no checkbox for ${entry.stamp}`);
+  return box;
+}
+
 /** `second` comes after `first` in the page. */
 function follows(first: Element, second: Element): boolean {
   return Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -180,18 +205,16 @@ describe("VaultBackupsModal export", () => {
     await waitFor(() => expect(onExport).toHaveBeenLastCalledWith([PIN_KEY], "/media/other"));
   });
 
-  it("puts the step for several above the Saves list, under the toolbar", async () => {
+  it("puts the step for several under the list, above the selection bar", async () => {
     pickFolder.mockResolvedValue(null);
     const onExport = await show();
 
-    fireEvent.click(screen.getByLabelText("modal.backup.select_all"));
+    for (const box of sectionBoxes()) fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "modal.backup.export_selected" }));
 
     const title = await screen.findByText("modal.backup.export_count");
-    const toolbar = screen.getByLabelText("modal.backup.select_all");
-    const saves = screen.getByText("modal.backup.section.saves");
-    expect(follows(toolbar, title)).toBe(true);
-    expect(follows(title, saves)).toBe(true);
+    expect(follows(row(PLAIN), title)).toBe(true);
+    expect(follows(title, screen.getByText("modal.backup.selected_count"))).toBe(true);
     expect(within(row(PIN)).queryByLabelText("modal.export_folder.label")).toBeNull();
 
     await waitFor(() => expect(pickFolder).toHaveBeenCalledOnce());
@@ -216,12 +239,11 @@ describe("VaultBackupsModal export", () => {
     expect(onStopExport).toHaveBeenCalledOnce();
   });
 
-  it("shows the bar of several above the Saves list, under the toolbar", async () => {
+  it("shows the bar of several under the list", async () => {
     await show({ exportJob: job([PIN_KEY, PLAIN_KEY]) });
 
     const bar = screen.getByRole("progressbar");
-    expect(follows(screen.getByLabelText("modal.backup.select_all"), bar)).toBe(true);
-    expect(follows(bar, screen.getByText("modal.backup.section.saves"))).toBe(true);
+    expect(follows(row(PLAIN), bar)).toBe(true);
     expect(within(row(PIN)).queryByRole("progressbar")).toBeNull();
     expect(screen.getByRole("button", { name: "modal.backup.export_stop" })).toBeDefined();
   });
@@ -261,5 +283,191 @@ describe("VaultBackupsModal export", () => {
     });
 
     expect(rowButton(PLAIN, "modal.backup.export_stop").disabled).toBe(true);
+  });
+});
+
+describe("VaultBackupsModal sections", () => {
+  it("shows no selection bar until a backup is chosen", async () => {
+    await show();
+    expect(screen.queryByText("modal.backup.selected_count")).toBeNull();
+
+    fireEvent.click(rowBox(PIN));
+    expect(screen.getByText("modal.backup.selected_count")).toBeDefined();
+  });
+
+  it("selects and clears only its own folder, its pins included", async () => {
+    const onDrive: VaultBackupEntry = {
+      ...PLAIN,
+      stamp: "20260103000000",
+      fileName: "20260103000000-notes.zip",
+      location: "chosen",
+      path: "/mnt/drive/upriv-notes-backups/20260103000000-notes.zip",
+    };
+    services.backups.listBackups = async () => ({ backups: [PIN, PLAIN, onDrive], chosen: null });
+    try {
+      await show();
+      const [dataFolder, chosen] = sectionBoxes();
+
+      fireEvent.click(dataFolder);
+      expect(rowBox(PIN).checked).toBe(true);
+      expect(rowBox(PLAIN).checked).toBe(true);
+      expect(rowBox(onDrive).checked).toBe(false);
+      expect(chosen.checked).toBe(false);
+
+      fireEvent.click(chosen);
+      expect(rowBox(onDrive).checked).toBe(true);
+
+      fireEvent.click(dataFolder);
+      expect(rowBox(PIN).checked).toBe(false);
+      expect(rowBox(PLAIN).checked).toBe(false);
+      expect(rowBox(onDrive).checked).toBe(true);
+    } finally {
+      services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
+    }
+  });
+
+  it("lists a folder's pins before its other backups, under their own heading", async () => {
+    await show();
+    const saves = screen.getByText("modal.backup.section.saves");
+    const standard = screen.getByText("modal.backup.section.standard");
+    expect(follows(saves, row(PIN))).toBe(true);
+    expect(follows(row(PIN), standard)).toBe(true);
+    expect(follows(standard, row(PLAIN))).toBe(true);
+  });
+
+  it("shows a folder partly chosen, and takes the rest on its box", async () => {
+    services.backups.listBackups = async () => ({
+      backups: [
+        PIN,
+        PLAIN,
+        { ...PLAIN, stamp: "20260100000000", fileName: "20260100000000-notes.zip" },
+      ],
+      chosen: null,
+    });
+    try {
+      await show();
+      const [box] = sectionBoxes();
+      fireEvent.click(rowBox(PLAIN));
+      expect(box.indeterminate).toBe(true);
+
+      fireEvent.click(box);
+      expect(box.checked).toBe(true);
+      expect(box.indeterminate).toBe(false);
+    } finally {
+      services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
+    }
+  });
+
+  it("collapses from its header, and its box never toggles it", async () => {
+    await show();
+    const header = screen.getByRole("button", { name: "modal.backup.group.data_folder" });
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(sectionBoxes()[0]);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("has no select-all for a single backup", async () => {
+    services.backups.listBackups = async () => ({ backups: [PLAIN], chosen: null });
+    try {
+      await show();
+      expect(screen.queryAllByLabelText("modal.backup.select_section")).toEqual([]);
+    } finally {
+      services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
+    }
+  });
+});
+
+describe("VaultBackupsModal delete", () => {
+  it("names each backup it will delete in one sentence", async () => {
+    await show();
+    fireEvent.click(sectionBoxes()[0]);
+    fireEvent.click(screen.getByRole("button", { name: "modal.backup.delete_selected" }));
+
+    expect(listParams.some((entry) => entry.key === "modal.backup.delete_list")).toBe(true);
+    const names = screen
+      .getAllByText(/-notes\.zip$/)
+      .filter((node) => node.tagName === "SPAN" && node.className.includes("inline-block"));
+    expect(names.map((node) => node.textContent)).toEqual([PIN.fileName, PLAIN.fileName]);
+    expect(names[0].parentElement?.parentElement?.textContent).toBe(
+      `modal.backup.delete_list${PIN.fileName}, ${PLAIN.fileName}`,
+    );
+  });
+
+  it("gives a row no button to open its folder", async () => {
+    await show();
+    expect(
+      within(row(PLAIN)).queryByRole("button", { name: "modal.file_manager.context.open_system" }),
+    ).toBeNull();
+  });
+});
+
+describe("VaultBackupsModal places", () => {
+  const ON_DRIVE: VaultBackupEntry = {
+    stamp: "20260103000000",
+    fileName: "20260103000000-notes.zip",
+    createdAt: "2026-01-03T00:00:00.000Z",
+    sizeBytes: 4096,
+    location: "chosen",
+    path: "/mnt/drive/upriv-notes-backups/20260103000000-notes.zip",
+  };
+  const original = services.backups.listBackups;
+
+  afterEach(() => {
+    services.backups.listBackups = original;
+  });
+
+  function listing(backups: VaultBackupEntry[], chosen: unknown = null) {
+    services.backups.listBackups = async () => ({ backups, chosen });
+  }
+
+  it("shows a folder and a tier only when they hold backups", async () => {
+    listing([PLAIN]);
+    await show();
+
+    expect(screen.getByText("modal.backup.group.data_folder")).toBeTruthy();
+    expect(screen.queryByText("modal.backup.group.chosen")).toBeNull();
+    expect(screen.getByText("modal.backup.section.standard")).toBeTruthy();
+    expect(screen.queryByText("modal.backup.section.saves")).toBeNull();
+  });
+
+  it("puts each backup in its own place, with that folder in the section", async () => {
+    listing([ON_DRIVE, PLAIN]);
+    await show();
+
+    expect(screen.getByText("modal.backup.group.chosen")).toBeTruthy();
+    expect(screen.getByText("modal.backup.group.data_folder")).toBeTruthy();
+    const folder = screen.getByText("/mnt/drive/upriv-notes-backups");
+    expect(follows(folder, row(ON_DRIVE))).toBe(true);
+    expect(within(row(ON_DRIVE)).queryByText(ON_DRIVE.path ?? "")).toBeNull();
+  });
+
+  it("keeps Back up now and says so when there are no backups", async () => {
+    listing([]);
+    render(createElement(Harness, { onExport: () => {} }));
+
+    expect(await screen.findByText("modal.backup.empty")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "modal.backup.backup_now" })).toBeTruthy();
+    expect(screen.queryByText("modal.backup.group.data_folder")).toBeNull();
+  });
+
+  it("names a folder that fails on one line, with no section for it", async () => {
+    listing([PLAIN], { path: "/mnt/gone/upriv-notes-backups", status: "missing" });
+    await show();
+
+    expect(screen.getByText("modal.backup.folder.status.missing")).toBeTruthy();
+    expect(screen.getByText("/mnt/gone/upriv-notes-backups")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "modal.backup.folder.reuse" })).toBeTruthy();
+    expect(screen.queryByText("modal.backup.group.chosen")).toBeNull();
+  });
+
+  it("says nothing about a folder that works", async () => {
+    listing([ON_DRIVE, PLAIN], { path: "/mnt/drive/upriv-notes-backups", status: "ok" });
+    await show();
+
+    expect(screen.queryByRole("button", { name: "action.retry" })).toBeNull();
   });
 });

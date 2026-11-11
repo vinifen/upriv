@@ -6,9 +6,10 @@
 //! is complete. A file already using the name, or one still being written, is
 //! never replaced: the data-folder zip refuses that name (its window asks for
 //! another), and a vault or backup export takes the next free number
-//! (`Notes 2.zip`).
+//! (`Notes-upriv-2.zip`).
 
 use std::io::ErrorKind;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Result, UprivError};
@@ -78,8 +79,8 @@ impl ExportFile {
 /// Highest number a taken export name takes before the export gives up.
 const EXPORT_NAME_NUMBER_MAX: u32 = 9_999;
 
-/// An export file name that takes a number while it is taken: `Notes.zip`,
-/// then `Notes 2.zip`, `Notes 3.zip`, …
+/// An export file name that takes a number while it is taken:
+/// `Notes-upriv.zip`, then `Notes-upriv-2.zip`, `Notes-upriv-3.zip`, …
 pub(super) struct NumberedExportName {
     stem: String,
     extension: String,
@@ -93,13 +94,19 @@ impl NumberedExportName {
         }
     }
 
-    /// The name with `number` added; `1` is the name itself.
-    pub(super) fn file_name(&self, number: u32) -> String {
+    /// The name with `number` added, without its extension; `1` is the name
+    /// itself.
+    pub(super) fn stem(&self, number: u32) -> String {
         if number <= 1 {
-            format!("{}.{}", self.stem, self.extension)
+            self.stem.clone()
         } else {
-            format!("{} {number}.{}", self.stem, self.extension)
+            format!("{}-{number}", self.stem)
         }
+    }
+
+    /// [`Self::stem`] with the extension.
+    pub(super) fn file_name(&self, number: u32) -> String {
+        format!("{}.{}", self.stem(number), self.extension)
     }
 
     /// The first number from `from` with neither a file nor a partial under
@@ -141,7 +148,7 @@ pub struct ExportedFile {
     pub path: PathBuf,
     pub size: u64,
     /// `1` for the export's own name; higher when that name was taken and the
-    /// file got this number (`Notes 2.zip`).
+    /// file got this number (`Notes-upriv-2.zip`).
     pub number: u32,
     /// Logical paths of the files a `.7z` or plain-text `.zip` kept with zeros
     /// where their data was missing or damaged. Empty for a zip of `store/`
@@ -170,6 +177,14 @@ impl NumberedExportTarget {
         })
     }
 
+    /// The free name this export plans, without its extension: the package
+    /// folder inside it. A file that takes that name while the export is
+    /// written moves the export to the next number, and only the file name
+    /// changes.
+    pub(super) fn stem(&self) -> String {
+        self.name.stem(self.number)
+    }
+
     /// Write the export into its partial with `write`, then move it to its
     /// free name. The partial is recorded as `work` of `vault_id` before its
     /// first byte ([`record_file`]). On any failure it is removed; a failure
@@ -190,7 +205,8 @@ impl NumberedExportTarget {
 
     /// [`Self::write`], with `clear` deciding how a failure gets rid of the
     /// partial. `clear` returns false while the partial is still there, so its
-    /// record stays for the next launch.
+    /// record stays for the next launch. A panic clears the partial too, then
+    /// goes on up to the job, which logs it.
     pub(super) fn write_clearing(
         &self,
         root: &VaultRoot,
@@ -201,9 +217,11 @@ impl NumberedExportTarget {
         clear: impl FnOnce(&Path) -> bool,
     ) -> Result<ExportedFile> {
         record_file(root, work, vault_id, &self.partial, job)?;
-        let installed = (|| {
+        let installed = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let size = job.settle(write(&self.partial))?;
-            job.ensure_running()?;
+            // Every byte is in: the flush and the rename finish, and a stop
+            // from here on is refused rather than taken and then ignored.
+            job.final_step()?;
             let (path, number) = self.name.install(&self.dir, &self.partial, self.number)?;
             Ok(ExportedFile {
                 path,
@@ -211,7 +229,16 @@ impl NumberedExportTarget {
                 number,
                 unreadable: Vec::new(),
             })
-        })();
+        }));
+        let installed = match installed {
+            Ok(installed) => installed,
+            Err(panic) => {
+                if clear(&self.partial) {
+                    forget_file(root, &self.partial);
+                }
+                std::panic::resume_unwind(panic)
+            }
+        };
         let partial_gone = installed.is_ok() || clear(&self.partial);
         if partial_gone {
             forget_file(root, &self.partial);
@@ -298,33 +325,36 @@ mod tests {
     #[test]
     fn a_taken_name_takes_the_next_free_number() {
         let dir = tempfile::tempdir().unwrap();
-        let name = NumberedExportName::new("My notes", "zip");
-        assert_eq!(name.file_name(1), "My notes.zip");
-        assert_eq!(name.file_name(3), "My notes 3.zip");
+        let name = NumberedExportName::new("My notes-upriv", "zip");
+        assert_eq!(name.file_name(1), "My notes-upriv.zip");
+        assert_eq!(name.file_name(3), "My notes-upriv-3.zip");
+        assert_eq!(name.stem(3), "My notes-upriv-3");
         assert_eq!(name.first_free(dir.path(), 1).unwrap(), 1);
 
-        crate::host_fs::write(dir.path().join("My notes.zip"), b"older").unwrap();
+        crate::host_fs::write(dir.path().join("My notes-upriv.zip"), b"older").unwrap();
         // A copy still being written holds its name too.
-        crate::host_fs::write(dir.path().join("My notes 2.zip.upriv-part"), b"half").unwrap();
+        crate::host_fs::write(dir.path().join("My notes-upriv-2.zip.upriv-part"), b"half").unwrap();
         assert_eq!(name.first_free(dir.path(), 1).unwrap(), 3);
+        let target = NumberedExportTarget::new(dir.path(), name).unwrap();
+        assert_eq!(target.stem(), "My notes-upriv-3");
     }
 
     #[test]
     fn a_file_that_arrives_meanwhile_moves_the_export_to_the_next_number() {
         let dir = tempfile::tempdir().unwrap();
-        let name = NumberedExportName::new("My notes", "7z");
-        let partial = dir.path().join("My notes.7z.upriv-part");
+        let name = NumberedExportName::new("My notes-sevenzip", "7z");
+        let partial = dir.path().join("My notes-sevenzip.7z.upriv-part");
         crate::host_fs::write(&partial, b"export").unwrap();
-        crate::host_fs::write(dir.path().join("My notes.7z"), b"arrived").unwrap();
+        crate::host_fs::write(dir.path().join("My notes-sevenzip.7z"), b"arrived").unwrap();
 
         let (dest, number) = name.install(dir.path(), &partial, 1).unwrap();
         assert_eq!(
             (dest.clone(), number),
-            (dir.path().join("My notes 2.7z"), 2)
+            (dir.path().join("My notes-sevenzip-2.7z"), 2)
         );
         assert_eq!(crate::host_fs::read(&dest).unwrap(), b"export");
         assert_eq!(
-            crate::host_fs::read(dir.path().join("My notes.7z")).unwrap(),
+            crate::host_fs::read(dir.path().join("My notes-sevenzip.7z")).unwrap(),
             b"arrived"
         );
         assert!(!partial.host_exists());
@@ -338,5 +368,73 @@ mod tests {
         file.install().unwrap();
         assert_eq!(crate::host_fs::read(&file.dest).unwrap(), b"done");
         assert!(!file.partial.host_exists());
+    }
+
+    #[test]
+    fn the_flush_and_rename_are_the_last_step_and_refuse_a_stop() {
+        use crate::session::cancel_job;
+        use crate::test_support::test_job_id;
+
+        let (_tmp, root) = vault_root_with(&[]);
+        let dir = tempfile::tempdir().unwrap();
+        let target = |dir: &Path| {
+            NumberedExportTarget::new(dir, NumberedExportName::new("Notes-upriv", "zip")).unwrap()
+        };
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        let written = target(dir.path())
+            .write(&root, &job, UnfinishedWork::VaultExport, None, |partial| {
+                crate::host_fs::write(partial, b"export")?;
+                Ok(6)
+            })
+            .unwrap();
+        assert_eq!(written.path, dir.path().join("Notes-upriv.zip"));
+        assert!(matches!(cancel_job(&id), Err(UprivError::JobNotStoppable)));
+
+        // A stop that arrives while the bytes go in still ends the export.
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        let stopped =
+            target(dir.path()).write(&root, &job, UnfinishedWork::VaultExport, None, |partial| {
+                crate::host_fs::write(partial, b"half")?;
+                cancel_job(&id)?;
+                Ok(4)
+            });
+        assert!(matches!(stopped, Err(UprivError::JobCancelled)));
+        let names: Vec<String> = crate::host_fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Notes-upriv.zip"]);
+    }
+
+    #[test]
+    fn a_panic_in_the_write_still_clears_the_partial_and_its_record() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let dir = tempfile::tempdir().unwrap();
+        let target = NumberedExportTarget::new(
+            dir.path(),
+            NumberedExportName::new("Notes-plain-text", "zip"),
+        )
+        .unwrap();
+        let job = Job::start(&crate::test_support::test_job_id()).unwrap();
+        let panicked = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            target.write(
+                &root,
+                &job,
+                UnfinishedWork::PlainExport,
+                None,
+                |partial: &Path| -> Result<u64> {
+                    crate::host_fs::write(partial, b"readable")?;
+                    panic!("the export went wrong")
+                },
+            )
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(crate::host_fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(crate::runtime_state::load_runtime_state(&root)
+            .unwrap()
+            .unfinished_files
+            .is_empty());
     }
 }

@@ -1,7 +1,7 @@
 import { useId } from "react";
 import { ExportFolderField } from "@/components/ExportFolderField";
 import { SettingsField, settingsControlClass } from "@/components/settings";
-import { JobProgressBar } from "@/components/ui";
+import { JobProgressBar, SwitchRow } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   DATA_FOLDER_EXPORT_PROGRESS_COPY,
@@ -91,6 +91,19 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
             ) : null}
           </SettingsField>
           <ExportFolderField folder={destination.folder} />
+          <SwitchRow
+            checked={destination.includeBackups}
+            onChange={destination.setIncludeBackups}
+            label={t("modal.data_folder_export.include_backups")}
+            hint={t("modal.data_folder_export.include_backups_help")}
+          />
+          {controls.outsideBackups > 0 ? (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t("modal.data_folder_export.outside_backups", {
+                count: String(controls.outsideBackups),
+              })}
+            </p>
+          ) : null}
           {written ? (
             <p className="text-sm text-vault-open" role="status">
               {t("modal.data_folder_export.done", { name: fileNameOfPath(written.path) })}

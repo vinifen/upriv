@@ -151,6 +151,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
             last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
         },
         workspace: parsed.workspace,
+        backups: parsed.backups,
     };
 
     apply_alias_to_app_settings(&mut settings);
@@ -240,22 +241,44 @@ pub fn save_app_settings_session_with_alias_sync(
         setup_default_root_anchor()?
     };
 
-    match crate::paths::open_default_root_candidate(&target)? {
-        Some(_) => {}
-        None => {
-            return Err(UprivError::VaultRootNotFound(
-                target.join(VAULT_ROOT_SETTINGS_REL),
-            ));
-        }
-    }
+    let Some(root) = crate::paths::open_default_root_candidate(&target)? else {
+        return Err(UprivError::VaultRootNotFound(
+            target.join(VAULT_ROOT_SETTINGS_REL),
+        ));
+    };
+    refuse_unusable_backup_defaults(&root, settings)?;
     save_app_settings_with_alias_sync(&target, settings, sync_alias)?;
     Ok(true)
+}
+
+/// A changed backup folder must be a usable path, and no vault's backups may
+/// overlap any vault's file manager or plain-text folder. Values that did not
+/// change are not checked again, so a folder that went bad never blocks a save.
+fn refuse_unusable_backup_defaults(root: &VaultRoot, settings: &AppSettings) -> Result<()> {
+    let saved = load_app_settings_at(root.root())
+        .ok()
+        .map(|loaded| loaded.settings);
+    let backups_changed = saved
+        .as_ref()
+        .is_none_or(|saved| saved.backups != settings.backups);
+    if backups_changed {
+        settings.backups.validate(Some(root.root()))?;
+    }
+    let workspace_changed = saved
+        .as_ref()
+        .is_none_or(|saved| saved.workspace != settings.workspace);
+    if backups_changed || workspace_changed {
+        crate::vault::refuse_app_backup_overlap(root, &settings.workspace, &settings.backups)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths::{initialize_vault_root, write_vault_root_alias, ENV_LOCK};
+    use crate::paths::{
+        initialize_vault_root, write_vault_root_alias, BackupFolderRow, BackupPlace, ENV_LOCK,
+    };
 
     #[test]
     fn roundtrip_settings_toml() {
@@ -538,5 +561,37 @@ enabled = true
         );
 
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    fn custom_backups(path: &str) -> AppSettings {
+        let mut settings = AppSettings::default();
+        settings.backups.linux = BackupFolderRow {
+            place: BackupPlace::Custom,
+            path: path.into(),
+        };
+        settings
+    }
+
+    #[test]
+    fn a_new_default_backup_folder_must_be_a_usable_path() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        assert!(matches!(
+            refuse_unusable_backup_defaults(&root, &custom_backups("relative/folder")),
+            Err(UprivError::WorkspacePathInvalid { .. })
+        ));
+        let inside = root.root().join(".upriv/mine").display().to_string();
+        assert!(matches!(
+            refuse_unusable_backup_defaults(&root, &custom_backups(&inside)),
+            Err(UprivError::WorkspacePathReserved(_))
+        ));
+    }
+
+    #[test]
+    fn a_saved_default_backup_folder_that_went_bad_never_blocks_a_save() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let settings = custom_backups("relative/folder");
+        save_app_settings_with_alias_sync(root.root(), &settings, false).unwrap();
+
+        refuse_unusable_backup_defaults(&root, &settings).unwrap();
     }
 }

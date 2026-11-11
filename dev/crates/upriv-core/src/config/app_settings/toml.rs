@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UprivError};
-use crate::paths::{validate_workspace_table, VaultRootMode, VAULT_ROOT_SETTINGS_REL};
+use crate::paths::{
+    validate_workspace_table, BackupFolderTable, VaultRootMode, VAULT_ROOT_SETTINGS_REL,
+};
 
 use super::types::{
     AppSectionSettings, AppSettings, LoggingSettings, UiSettings, WorkspaceSettings,
@@ -24,6 +26,8 @@ pub(super) struct SettingsToml {
     pub(super) app: AppToml,
     #[serde(default)]
     pub(super) workspace: WorkspaceSettings,
+    #[serde(default)]
+    pub(super) backups: BackupFolderTable,
 }
 
 /// `[package]`: the settings format. The data-folder layout under `.upriv/` is fixed.
@@ -272,6 +276,7 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
             last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
         },
         workspace: parsed.workspace,
+        backups: parsed.backups,
     })
 }
 
@@ -308,6 +313,7 @@ pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
         },
         app: AppToml { last_opened_vault },
         workspace: settings.workspace.clone(),
+        backups: settings.backups.clone(),
     };
     let body = toml::to_string_pretty(&file).map_err(|error| {
         UprivError::Io(std::io::Error::other(format!(

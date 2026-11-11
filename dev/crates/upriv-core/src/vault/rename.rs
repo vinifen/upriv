@@ -578,7 +578,7 @@ mode = "encrypted_dir"
     fn rename_refuses_when_preparing() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("notes", "Notes", 1)]);
         let dir = root.vault_dir("notes").unwrap();
-        let _preparing = PreparingGuard::enter(&dir).expect("preparing");
+        let _preparing = PreparingGuard::enter(&dir);
         let err = rename_vault(&root, "notes", "Renamed").unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
     }

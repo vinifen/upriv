@@ -36,7 +36,7 @@ Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and
 6. **Fail safe** — never overwrite `store/` without verification; atomic writes. `.7z` is never kept at rest.
 7. **Session keys in RAM** — unlock asks for the password once. Lock flushes with those keys. Quit or reboot asks again.
 8. **Close = flush session into `store/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
-9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` folder → recovery until the user wipes it. The leftover is not the open session. Dead header → create from backup / store zip (Backups or New vault). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
+9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` folder → recovery until the user wipes it. The leftover is not the open session. Dead header → create from backup / store zip (Backups or New vault). Both index files dead → rebuild from the vault's own data, or create from backup (§7.4). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
 10. **Unified states** — `open` (runtime) | `closed` (rest).
 11. **Virtual mount** — in `encrypted_dir`, `workspace/` is not a data folder; I/O goes to encrypted `store/`.
 12. **Lockfile** — one open per vault at a time.
@@ -138,10 +138,11 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 **close (v1):**
 1. Use the open session keys in RAM. Lock does not ask for the password and does not rewrap `vault.header`.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
-3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>-<id>.zip` (no zip password). `skip_unchanged` (default on) skips that zip when vault files match the last backup still on disk. `.upriv-workspace.json` is not a change. Off writes a zip on every close.
+3. Decide on the backup, then remove the entry in `state.json` and take the vault lock.
 4. `upriv_plain`: save the folder into `store/`, wipe the files, and remove the folder. Lock starts immediately.
-5. Unmount the file manager folder; release `runtime/<id>.lock`; remove entry in `state.json`.
-6. `zeroize` password/keys in RAM.
+5. `zeroize` password/keys in RAM; unmount the file manager folder.
+6. If `[backup] enabled`: write a Stored zip of `store/` as `<stamp>-<id>.zip` to the vault's backup folder (§2.9, no zip password). `skip_unchanged` (default on) skips that zip when vault files match the last backup still on disk. `.upriv-workspace.json` is not a change. Off writes a zip on every close. A slow drive waits here with no key in RAM.
+7. Record the backup; release `runtime/<id>.lock`.
 
 **Reopen after reboot:** `open` against `store/`; edits from the last successful close are in the ciphertext tree.
 
@@ -164,7 +165,7 @@ Related: PRD **RF-05**, **RF-39**; checklist §12. Close does not take a passwor
 
 File: `.upriv/vaults/<id>/persistence.json` beside `config.toml` (outside `store/`).
 
-Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the last backup that finished (`backed_up_index_hash`, `backed_up_stamp`) for `skip_unchanged`. Canonical detail: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
+Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the record of the vault's backups: `backup_folder_id` (the id that names its chosen folder, kept across a rename), `backups_written` (the zips Upriv wrote, oldest first, the only ones automatic deletion touches), and `backup_hosts`, one record per host name with the chosen folder it last wrote to (`chosen_dir`) and its last finished backup (`index_hash`, `stamp`) for `skip_unchanged`. Canonical detail: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
 ```json
 {
@@ -172,8 +173,15 @@ Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the last bac
   "vault_id": "my-encrypted-notes",
   "display_name": "My encrypted notes",
   "content_hash": "sha256:…",
-  "backed_up_index_hash": "sha256:…",
-  "backed_up_stamp": "20260528140000",
+  "backup_folder_id": "my-encrypted-notes",
+  "backups_written": ["20260528140000-my-encrypted-notes.zip"],
+  "backup_hosts": {
+    "desk": {
+      "chosen_dir": "/mnt/usb/upriv-my-encrypted-notes-backups",
+      "index_hash": "sha256:…",
+      "stamp": "20260528140000"
+    }
+  },
   "last_close_ok_at": "2026-05-28T14:00:00.000Z",
   "persistence": "closed"
 }
@@ -186,8 +194,9 @@ Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the last bac
 | Condition | Action |
 |-----------|--------|
 | Dirty close / leftover `upriv_plain` workspace | `recovery` |
-| `content_hash` differs from header + sealed index | `recovery` (same session). Unlock still opens that `store/`; close records its hash. A missing hash or a read error while hashing does not select recovery |
-| Header/index unreadable | Create new vault from backup only |
+| `content_hash` differs from header + sealed index | `recovery` (same session). Unlock still opens that `store/`; close records its hash. Both index files gone under a header that is there counts as a difference. A missing hash or any other read error while hashing does not select recovery |
+| Header unreadable | Create new vault from backup only |
+| Both index files unreadable, header opens | `recovery`; the unlock offers the rebuild (§7.4), or a new vault from backup |
 | A file's data missing or failing its tag | That file is marked and kept; vault still opens (§7.1) |
 | Successful close | Update `content_hash` + `last_close_ok_at` |
 
@@ -343,11 +352,27 @@ Related: PRD **RF-52**.
 ### 2.9 Backups (UI)
 
 - Entry: **`action.backups`** button on vault row (PRD §3.7.2) → **modal** (not separate page).
-- List `backup/<id>/*.7z`: **name**, **date** (mtime or timestamp in filename), optional size.
+- **Backup folder** (`paths/backup_place.rs`, `vault/backup_folder.rs`): the data folder (`.upriv/vaults/<id>/backups/`) is the default and the fallback. `[backups.<os>]` in `settings.toml` is the app default (`data_folder` / `custom`); `[backup.<os>]` in `config.toml` follows it, picks the data folder, or names a folder of its own (`inherit` / `data_folder` / `custom`). Rows exist for Linux, Windows, and macOS, and a phone save carries them through unchanged. `path` stays when `place` changes. A vault's own folder resolves to `<path>/upriv-<folder id>-backups`, the app default to `<path>/upriv-backups/<folder id>`, and a path already ending in that name is not nested. Paths are validated on save (`save_vault_config_checked`, `refuse_unusable_backup_defaults`) only when they changed, and never on load.
+- **Where each zip goes:**
+
+  | Zip | First place | If that fails | Afterwards |
+  |-----|-------------|---------------|------------|
+  | Close | The resolved folder | The data folder, with a toast | Retention |
+  | Back up now | `saves/` of the resolved folder | `saves/` of the data folder, with a toast | Kept until the person deletes it |
+  | Password or unlock-RAM safety zip | The data folder | The chosen folder, only when the data folder has no room | Removed after the commit. A failed change keeps it, a stop removes it |
+  | Rebuild copy | `saves/` of the data folder | `saves/` of the chosen folder, only when the data folder has no room | Kept as a Save until the person deletes it |
+
+  Close now and Stop write no zip and never fall back.
+- **Folder check** (`check_chosen_folder`): a helper thread with `BACKUP_FOLDER_CHECK_LIMIT` (5 s) on the check only, one probe per folder at a time. Status `ok`, `missing`, `no_permission`, `no_room`, `file_too_large`, `not_responding`, `reserved`, or `other`. It runs when a path is typed, when settings, Backups, or Info open, and before each backup to a chosen folder; a write to the data folder runs none. Only Upriv's own subfolders are created: an unplugged drive never becomes a new folder on the local disk, and a subfolder this machine used that is gone is `missing` until `backup_folder_reuse`. A chosen folder never overlaps a vault's file manager or plain-text folder, either way round (`refuse_vault_backup_overlap`, `refuse_app_backup_overlap`).
+- **Writing:** a zip counts once it is read back in full, renamed with `rename_no_replace` (the next stamp on `AlreadyExists`), and its folder flushed; a flush the file system does not support (`ENOSYS`, `EINVAL`, `ENOTSUP`) counts as done. Cleanup comes after that point, and a failed delete is only logged and retried by the next backup.
+- **Retention:** `backups_written` in `persistence.json` lists the zips Upriv wrote, in write order, and is saved before each zip is written. Retention, listed-partial cleanup, and the delete switch touch only those names, so a person's files and zips from a restored copy are safe. A zip that cannot be checked does not count toward `keep_last`, and a name that is gone from a reachable folder leaves the list.
+- **Machines:** `persistence.json` holds one `BackupHostRecord` per host (`chosen_dir`, `index_hash`, `stamp`), so skip-unchanged and the unplugged-drive guard hold when a data folder moves between computers. An unchanged vault writes nothing while its drive is away.
+- **Listing** (`backup_listing`): every zip in the data folder and every zip in the chosen folder whose cleartext `store/header/vault.header` carries this vault's content identity. While this vault's header is dead, every zip there is listed.
+- **A backup stays where it was written.** Changing the folder moves nothing, and `toast.backup_folder_changed` says the older ones stay there.
+- Row: **name**, **date** (the stamp in the file name), and size.
 - Each modal row: **`action.delete`** (confirm with vault `id`), **`action.create_vault_from_backup`** (+ → create-vault wizard with backup path pre-filled), **`modal.backup.export`**.
-- **Export** (`backup_export`, § RPC surface): the row's export, or Export selected in the toolbar, opens the folder step in place. One backup grows its own row; several show above the Saves list, under the toolbar, and stay put while the list scrolls. With no folder kept the picker opens at once, and a folder from the picker starts the export (desktop: a cancelled pick leaves the field to type in). A kept or typed folder waits for Export (Enter on desktop), so the person sees where the file goes. The same place then shows the persistent progress bar (`useJobProgress`), the budget, and Stop export. `useBackupExportJob` is owned by the vault list: the export survives closing the window, which shows it again when it reopens, and the toast names the saved file. One backup export runs at a time; a second press answers `toast.backup_export_busy`. While it runs, the backups it reads cannot be deleted or saved (pinned).
+- **Export** (`backup_export`, § RPC surface): the row's export, or Export selected in the selection bar, opens the folder step in place. One backup grows its own row; several show in the window's footer, above the selection bar, and stay put while the list scrolls. With no folder kept the picker opens at once, and a folder from the picker starts the export (desktop: a cancelled pick leaves the field to type in). A kept or typed folder waits for Export (Enter on desktop), so the person sees where the file goes. The same place then shows the persistent progress bar (`useJobProgress`), the budget, and Stop export. `useBackupExportJob` is owned by the vault list: the export survives closing the window, which shows it again when it reopens, and the toast names the saved file. One backup export runs at a time; a second press answers `toast.backup_export_busy`. While it runs, the backups it reads cannot be deleted or saved (pinned).
 - **No in-place restore** — backups are snapshots for export or seeding a **new** vault import; the source vault is unchanged.
-- Backups are always `.7z` — direct plan B.
 
 Related: PRD **RF-56**, **RF-UI-05**.
 
@@ -445,7 +470,7 @@ Related: PRD **RF-41–RF-44**; tests §13.2 (`secure_wipe` mock verifies overwr
 
 ### 3.1 `.upriv/settings.toml` (marker + app settings)
 
-Single file at `.upriv/settings.toml`: format version, UI, logging, app, and workspace preferences. The layout under `.upriv/` is fixed in code (§3.4).
+Single file at `.upriv/settings.toml`: format version, UI, logging, app, workspace, and backup folder preferences. The layout under `.upriv/` is fixed in code (§3.4).
 
 ```toml
 [package]
@@ -476,6 +501,10 @@ enabled = true
 level = "info"
 entries_per_file = 1000
 keep_last_entries = 10000
+
+[backups.linux]          # also [backups.windows], [backups.macos]; phones have none
+place = "data_folder"    # or "custom"
+path = ""                # kept while place points elsewhere
 
 [app]
 last_opened_vault = "my-encrypted-notes"
@@ -563,7 +592,7 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 ├── persistence.json            # closed (+ vault_id, display_name)
 ├── store/                   # rest — header/ + index + chunks
 ├── held/                       # blobs no file names, set aside (§7.1); not in backups
-├── backups/                    # Stored zips of store/ (`<stamp>.zip`)
+├── backups/                    # Stored zips of store/ (`<stamp>-<id>.zip`), the default place and the fallback
 └── (optional) workspace leftovers only for dirty upriv_plain
 ```
 
@@ -584,13 +613,13 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 
 #### 3.2.1 `display_name` validation and export/import
 
-**Forbidden in `display_name`** (and therefore in `{display_name}.zip` / `{display_name}.7z` export names): `\ / : * ? " < > |`, ASCII controls, empty/whitespace-only, trailing space or `.`, reserved Windows stems (`CON`, `PRN`, …), length > 128. Accents and internal spaces are allowed.
+**Forbidden in `display_name`** (and therefore in export names such as `{display_name}-upriv.zip` and the package folder inside): `\ / : * ? " < > |`, ASCII controls, empty/whitespace-only, trailing space or `.`, reserved Windows stems (`CON`, `PRN`, …), length > 128. Accents and internal spaces are allowed.
 
 **`vault_id`:** always normalized slug (§3.2 table); generated from `display_name`; max 64 chars; collision suffix `-2`, …
 
-**Export** (save outside vault): `{display_name}.zip` (zip of encrypted `store/` or plain-text) or `{display_name}.7z`, written into the folder chosen in that export option; characters a system refuses become `_` in the file name; a file already using the name is never replaced: the export takes the next free number (`{display_name} 2.zip`); **do not** change source vault `display_name`.
+**Export** (save outside vault): `{display_name}-upriv.zip` (zip of encrypted `store/`), `{display_name}-plain-text.zip`, or `{display_name}-sevenzip.7z`, written into the folder chosen in that export option; characters a system refuses become `_` in the file and package folder names (`vault_folder_name`); a file already using the name is never replaced: the export takes the next free number (`{display_name}-upriv-2.zip`); **do not** change source vault `display_name`. Each export holds a **package** (`vault/package.rs`): one folder named like the file (number included), holding one folder named after the vault's id, which holds the vault: `My notes-upriv/my-notes/…`.
 
-**Import** (external `.zip` of `store/` or `.7z` → new vault): stem → proposed `display_name`; if invalid, dialog with `sanitize_minimal(stem)` pre-fill; user confirms. Name rules: PRD RF-15b.
+**Import** (external `.zip` or `.7z` → new vault): the name the file's settings hold, as the person typed it, or else the package's vault folder → proposed `display_name` (`vaultName` of `vault_import_probe`; a `.7z` answers it with its password test), and the name a backup zip's settings hold for a backup zip, so renaming the file changes nothing. A documents `.zip` or a folder proposes its own file or folder name, which the wizard seeds when it is chosen. If a name is taken, ` 2`, ` 3`, … is added; if invalid, the field asks for one. Name rules: PRD RF-15b.
 
 Example `.upriv/vaults/my-encrypted-notes/config.toml`:
 
@@ -607,6 +636,10 @@ enabled = true
 mode = "keep_last"
 keep_last = 1
 skip_unchanged = true   # default; off writes a zip on every close. Layout file is not a change.
+
+[backup.linux]          # also [backup.windows], [backup.macos]; phones have none
+place = "inherit"       # or "data_folder", "custom"
+path = ""               # kept while place points elsewhere
 
 [security]
 wipe_passes = 1                   # hidden default
@@ -687,7 +720,7 @@ User-facing metadata that is **not** sync state:
 | `password_hint` | 128 chars | `""` or omit key → no hint shown |
 | `note` | 10000 chars | `""` or omit key → no note |
 
-**Create-new wizard (not import):** password + confirm password (required); optional hint and note written to `[vault]` on first `config.toml` save.
+**Create-new wizard (not import):** password + confirm password (required); optional hint and note written to `[vault]` on first `config.toml` save. One line under the password says when it is objectively poor (§3.2.3b); any password is accepted.
 
 **Unlock UI:** if `password_hint` non-empty, show below password field (`unlock.password_hint_label`). Never pre-fill password.
 
@@ -699,14 +732,14 @@ Available in vault settings (**Security** / password area in UI; stored fields s
 
 | Step | Action |
 |------|--------|
-| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current; bytes exactly as typed) |
-| 2 | UI shows **`warning.password_change_backups`** — existing `backups/<stamp>-<id>.zip` keep the password from when each snapshot was created |
+| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current; bytes exactly as typed). One line under the new password says when it is objectively poor (§3.2.3b) |
+| 2 | UI shows **`warning.password_change_backups`** — existing backup zips keep the password from when each snapshot was created |
 | 3 | **`upriv-core`:** vault closed; verify the current password (same 5/60s unlock throttle as open). Same password is rejected |
-| 4 | Write one backup zip of the current body **before** any header byte changes. If that zip fails, leave `store/` unchanged |
+| 4 | Write one safety zip of the current body **before** any header byte changes, in the data folder (the chosen backup folder only when the data folder has no room). If that zip fails, leave `store/` unchanged |
 | 5 | New salt, same master key. Reseal the header wrap and the name index (both bind salt/`m`/`t`/`p`). Do not rewrite file blobs |
 | 6 | Commit order: new index copy, new header primary, new header copy, new index primary. A crash in the middle still opens with one of the two passwords |
 | 7 | Update `persistence` content hash. Set `[security] password_changed_at` (ISO 8601 UTC, millisecond precision) |
-| 8 | After the header commit succeeds, apply this vault's backup retention to standard zips. Disabled backups and `keep_all` do not delete zips. Pins under `backups/saves/` stay. A failed commit leaves the previous zips and the safety zip. Do not mark this safety zip as the close-backup stamp |
+| 8 | After the header commit succeeds, remove the safety zip. A failed commit keeps it and the previous zips, and a stop removes it. The safety zip is never the close-backup record and never counts toward retention |
 
 **Config after change:**
 
@@ -749,6 +782,28 @@ Related: PRD **RF-UI-17**, §1.6.
 **Modal UX (unlike note/backups modals):** explicit **Save** (enabled only when dirty) → confirm save; close with dirty draft → **discard all and close** confirm; backdrop/Esc while confirm open cancels close attempt.
 
 Related: PRD **RF-UI-04**, **RF-UI-15**.
+
+#### 3.2.3b Password weakness check
+
+Wherever a new vault password is typed (the create wizard from scratch and for an import that wraps files in a new store, `createVaultSetsPassword`; the new password of a change), one line under the field, in the error text color and opening with "Weak password:", says what is objectively wrong with it, and goes away once nothing is. Upriv does not rate passwords: there is no score, no levels, and no "strong". Create and Change password accept any password.
+
+| Part | Rule |
+|------|------|
+| Code | `@upriv/shared` `domain/password-weakness` (`findPasswordWeakness`, hook `usePasswordWeakness`, notice `PasswordWeaknessNotice`). Upriv's own code: no third-party package and no downloaded data. |
+| Reading | Composed and in lower case. Combining marks and joiners are not characters. The first 512 characters are read, so a huge paste cannot freeze a keystroke. The vault always uses the whole password. |
+| Idea | Every character counts unless something gives it away. What is left is added up: a digit is worth half, a Chinese character or a Korean syllable two, anything else one. The password is flagged when fewer than 8 are left, or when it has too few different characters: half its length, up to 8, which catches a few keys mashed over and over. |
+| Patterns (`predictable`) | What the password already said, forward or mirrored (`####`, `abcabc`, `dog12dog34`, `kq8xx8qk`). A steady run in any script with an order (`abcdef`, `987654`, `абвгд`). Numbers that count, with or without text between them (`123456789101112`, `abc9abc10abc11`, `1950 1951 1952`). A layout whose columns move by fixed steps (`a1b2c3`, `aabbcc`). Keys that keep moving the same way on QWERTY, QWERTZ, AZERTY, ЙЦУКЕН, or a number pad, in a straight line (`qwerty`, `1qaz`) or hopping between lines (`1q2w3e4r`, `qazwsxedc`, `qweasdzxc`). The first characters of a pattern still count. |
+| One word (`predictable`) | One word of up to 10 letters, with the capitals a word has (none, the first, or all), and everything else on one side of it: a number of up to 8 digits and at most two symbols (`Goddess1974!`, `Maria25121990`, `elizandra_1978#`, `123456christian`, `P@ki$tan2020!`). It is the shape most leaked passwords take and needs no word list, so it reads the same in any alphabet. Two words (`CasaAzul2024!`), any other mix of capitals (`RJMarta2024!`), something on both sides (`#Fernanda2023!`), and a longer number are left alone. |
+| Common words (`common`) | A short list in the code: the word for "password" in the languages people use most, and a few bases (`admin`, `iloveyou`). Common substitutes are read as letters (`p@ssw0rd`). It stays short on purpose: a longer list would be partial in every language. |
+| Public text (`public`) | The vault's name, hint, and note (plaintext in `config.toml`), whole and word by word, as far as a password is read (512 characters). |
+| Current password (`current`) | On a change, the current password, read the same way. The create wizard has none. |
+| Length (`too_short`) | Fewer than 12 characters, a Chinese character or a Korean syllable counting as two. |
+| Answer | When too little is left: `current` if the current password covered at least a third of the password, else `public` if the vault's own text did, else `common` if a common word covered any of it. Then `too_short`, then `predictable`. A good password that holds one of those words is left alone. |
+| Create | Pressing Create vault with a flagged password shows the same text in the wizard's footer, above the buttons and without moving them, and creates nothing yet, since the window closes on create. While it shows, the next press creates the vault. Back, another step, an edit, or a press anywhere in the step takes it down, and the next press on Create shows it again. A press in the notice's first `ROW_ROLE_GUARD_MS` is ignored, so the second half of a double click never answers it. |
+| Limits | A long single word passes when it has no number on it, or has more than 10 letters, since no list of words is shipped. So does a word off the short list with something on both sides (`#Dragon1990!`), and a quote or a lyric. |
+| Privacy | Runs in the UI on the value the field already holds and returns one of five names or `null`. Nothing of the password is kept, logged, or sent to core. |
+
+Related: PRD **RF-60**; i18n `password_weakness.*`.
 
 #### 3.2.4 Mutable config (design requirement)
 
@@ -910,16 +965,16 @@ Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via the `upri
 - Export progress counts the logical bytes the encoder has taken (`job_status`).
 - Every file goes in. A file whose data is missing or damaged keeps its readable chunks, with zeros of the same length for the rest, so its size and place stay; `vault_export` names it in `unreadable` (UI paths), and the toast lists it (`vaultExportToast`). The log counts them (`vault_export_kept_unreadable`) without names.
 - Members are decoded in RAM and written into `store/` through the logical file API. The archive file is read through a 1 MiB buffer. Never extract a decrypted tree under `workspace/` or OS temp.
-- One outer folder (sanitized display name). Vault files sit directly under it, including a user `config.toml`. The seed file and `.upriv-workspace.json` are skipped as vault files.
-- `.upriv-config/` under the outer folder carries `config.toml` and `workspace.json`, each only when its export toggle is on (both start on), with a `README.md` while either is there. It is the archive's first block, with its own salt and IV, also in a solid archive. The password test (`vault_import_probe`) reads only the first member: `config.toml` to its end, which also checks the password when file names are not encrypted, or else one byte. Import keeps `workspace.json` when `keepWorkspace` asks for it and sinks the rest of the folder. Any of it may be missing; a `config.toml` that cannot be parsed counts as missing.
+- The package: one folder named like the file, holding the vault folder (sanitized display name). Vault files sit directly in the vault folder, including a user `config.toml`. Anything outside it breaks the package and fails the import (`PackageWalk`). The seed file and `.upriv-workspace.json` are skipped as vault files. The password test answers the vault folder's name (`vaultName`).
+- `.upriv-config/` in the package folder, beside the vault folder, carries `config.toml` and `workspace.json`, each only when its export toggle is on (both start on), with a `README.md` while either is there. It is the archive's first block, with its own salt and IV, also in a solid archive. The password test (`vault_import_probe`) reads only the first member: `config.toml` to its end, which also checks the password when file names are not encrypted, or else one byte. Import keeps `workspace.json` when `keepWorkspace` asks for it and sinks the rest of the folder. Any of it may be missing; a `config.toml` that cannot be parsed counts as missing.
 - In the create wizard a `.7z` shows a switch for the layout and one for the settings, both on, because its contents are unknown before the password. While the settings switch is on and the password test has not passed, `createVaultSettingsLocked` locks the input fields a file can fill (name, note, hint, unlock RAM, backup, auto-close, order, hidden, storage, mount), with a notice to test the password and come back. Steps and sections stay open, the group fields stay usable, and Next walks past the locked name. The test fills those fields, and they can still be edited. Turning the switch off takes the file's values back out, and so does choosing another file (`revertEmbeddedVaultSettings`), keeping any edit made since.
-- The same import option examines a `.zip`. `store/header/vault.header` is the store-zip copy (`README.md` and `config.toml` sit beside `store/` and are not copied into the new vault). Any other `.zip` streams readable files into a new `store/`: ordinary documents, or a plain-text export, which `.upriv-config/` beside its files marks whatever else it holds. The probe reads that folder's `config.toml` and answers `settings`, `unlockPreset`, and `carriesWorkspace`. A symlink inside a `.zip` or a folder is not stored and not followed. A symlink chosen as the source path is refused. The rest of the import continues. Files are sealed in waves, so a crash keeps the last finished wave in `store/`.
+- The same import option examines a `.zip`. `store/header/vault.header` at the zip root (a backup) or in an export package's vault folder is the store-zip copy (`StoreEnvelope`; `README.md` and `config.toml` sit beside `store/` and are not copied into the new vault); a `store/` in one folder is neither and is refused as documents. Any other `.zip` streams readable files into a new `store/`: a plain-text export, whose package's vault folder is the vault root (the zip comment, or a `.upriv-config/` beside it, marks it whatever else it holds), or ordinary documents, which lose one shared top folder and carry no settings. The probe reads the export's `config.toml` and answers `settings`, `unlockPreset`, `carriesWorkspace`, and `vaultName` (the name those settings hold, or else the package's vault folder; for a backup zip, the name its settings hold). A symlink inside a `.zip` or a folder is not stored and not followed. A symlink chosen as the source path is refused. The rest of the import continues. Files are sealed in waves, so a crash keeps the last finished wave in `store/`.
 
 ### 5.1b Plain-text `.zip`
 
-- `vault_export` with `format: "plain_zip"` runs `export_plain_zip` (`vault/plain_zip.rs`): the same closed-vault hold, password check, and unlock limit as `.7z`, the same `.upriv-config/`, no outer folder (entries sit at the zip's root, and the comment `PLAIN_ZIP_COMMENT` tells import that root is the vault root), and no RAM check, because each file is decrypted one chunk at a time straight into a Stored zip. Progress counts the logical bytes written. A file whose data is missing or damaged goes in with zeros in those parts and is named in `unreadable`, as in §5.1.
-- The file is owner-only on Linux and macOS and named `{display_name}.zip`, so unpacking gives that folder with the files directly inside.
-- Before its first byte, `.upriv/state.json` records the `.upriv-part` (`plain_exports`: vault id, host, path, job, and the `content://` tree on a phone). A stop, failure, or timeout overwrites the file with the vault's `[security]` settings and removes it (`wipe_partial`). A crash leaves the record. `vault_plain_export_sweep`, which each vault list sends once per data folder, wipes every record of this host whose job is not running and whose path is a `.upriv-part`. It answers `folders`, the picked trees not mounted now: a phone mounts each one through `SafExportMount`, sweeps again, and lets the grant go. A file that cannot be reached keeps its record for the next launch.
+- `vault_export` with `format: "plain_zip"` runs `export_plain_zip` (`vault/plain_zip.rs`): the same closed-vault hold, password check, and unlock limit as `.7z`, the same `.upriv-config/`, the same package (its two folders are written first, so an empty vault is still one, and the comment `PLAIN_ZIP_COMMENT` tells import the vault folder is the vault root), and no RAM check, because each file is decrypted one chunk at a time straight into a Stored zip. Progress counts the logical bytes written. A file whose data is missing or damaged goes in with zeros in those parts and is named in `unreadable`, as in §5.1.
+- The file is owner-only on Linux and macOS and named `{display_name}-plain-text.zip`, so unpacking gives `{display_name}-plain-text/{vault_id}/` with the files directly inside.
+- Before its first byte, `.upriv/state.json` records the `.upriv-part` (`unfinished_files`: what wrote it, vault id, host, path, job, and the `content://` tree on a phone). A stop or a failure answers at once: the file is overwritten with the vault's `[security]` settings and removed on a thread of its own (`wipe_partial_behind`), and its record goes once the file is gone. A normal quit's `app_shutdown` waits for that wipe before it answers, as it waits for a close already running, and the desktop core waits again before it exits; Close now does not wait, and what the wipe has not reached keeps its record for the next launch. A panic in the export clears the file the same way. A file in a picked phone folder is wiped before the export ends, while that folder is mounted. A crash leaves the record. `vault_unfinished_sweep`, which each vault list sends once per data folder, wipes every plain-text record of this host whose job is not running, whose wipe is not already running, and whose path is a `.upriv-part`, on a thread of its own too. It answers `folders`, the picked trees not mounted now: a phone mounts each one through `SafExportMount`, sweeps again, and lets the grant go. A file that cannot be reached keeps its record for the next launch.
 - A successful export logs `vault_exported_plain_text` (`id`; no name or path).
 
 ### 5.2 What not to run
@@ -999,11 +1054,11 @@ The explorer tree carries the mark on each file (`FileTreeNode.problem`). The fi
 | Any other | Moves it to `vaults/<id>/held/`, beside `store/`, and records it in the sealed index (`held`) |
 | Held, and named by the tree again | Moves it back to `data/` |
 
-A newly held blob is matched with the indexes the vault still has: the index copy when it holds another tree (a seal that stopped after writing it; open leaves that copy as it is until the next seal), then each backup zip, newest first, whose header has the same content identity. The first file naming the blob's id whose first chunk opens is the file it holds. A blob that holds the app's own file (the file-manager layout) is deleted. Chunk AAD binds a version only an index records, so a blob no index names cannot be read: it stays an unnamed piece. When the records change, or the index copy held another tree, the unlock seals the index at once, so the records survive a crash and both index files match again, as a backup zip requires. A failed seal at a session open is logged (`vault_held_seal_failed`) and the open goes on.
+A newly held blob is matched with what the vault still has that names it: the index copy when it holds another tree (a seal that stopped after writing it; open leaves that copy as it is until the next seal), then the blob's own newest recovery record (§7.4), then each backup zip, newest first, whose header has the same content identity. The first file naming the blob's id whose first chunk opens is the file it holds. A blob that holds the app's own file (the file-manager layout) is deleted. Chunk AAD binds a version only an index or a record holds, so a blob none of them names cannot be read: it stays an unnamed piece. When the records change, or the index copy held another tree, the unlock seals the index at once, so the records survive a crash and both index files match again, as a backup zip requires. A failed seal at a session open is logged (`vault_held_seal_failed`) and the open goes on.
 
-The file manager shows a line under its toolbar while anything is set aside and a review window. Only the unlock sets data aside, so the list (`vault_fs_held`) is read when the vault opens, when the review window opens, and after each put back or delete, which return the tree revision. A file can be put back (`vault_fs_held_restore`): its blob moves into `data/` and the file returns at its path, its missing folders made again, or at a free name beside it (`name-2.ext`); when a file holds the path of one of its folders, it goes to the top of the vault. The seal that names it comes after the move is flushed, and a failed seal moves it back. A file or the pieces can be deleted for good (`vault_fs_held_delete`) once the window's footer asks and the person confirms, so a double click cannot delete (`useHeldReview`). Nothing else deletes what is held. Every move into or out of `held/` is flushed before the seal that records it. Files in `held/` that are not named like a blob are not the vault's and are left alone. Backups and store zips copy `store/` only, so they leave `held/` out, and their index copy holds the primary index, so a seal that stopped between the two files does not stop a backup; Export data folder copies it as it is, ciphertext. Vault Info shows its size (`vault_disk_usage`, `heldBytes`) while it holds anything.
+The file manager shows a line under its toolbar while anything is set aside and a review window. Only the unlock sets data aside, so the list (`vault_fs_held`) is read when the vault opens, when the review window opens, and after each put back or delete, which return the tree revision. A file can be put back (`vault_fs_held_restore`): its blob moves into `data/` and the file returns at its path, its missing folders made again, or at a free name beside it (`name-2.ext`); when a file holds the path of one of its folders, it goes to the top of the vault. The seal that names it comes after the move is flushed, and a failed seal moves it back. A file or a piece can be deleted for good (`vault_fs_held_delete`). The window is laid out like Backups: a files section and a pieces section (with Delete pieces), and once it holds more than one item, a checkbox on each row and Select all above them, with Put back and Delete for every chosen item beside the row's own buttons (`useHeldReview`). One call puts back or deletes every chosen item. A delete asks below the list (in the footer on a phone) and runs only once the person confirms, so a double click cannot delete, and a second press for an item already on its way is ignored (`useVaultHeld`). Nothing else deletes what is held. Every move into or out of `held/` is flushed before the seal that records it. Files in `held/` that are not named like a blob are not the vault's and are left alone. Backups and store zips copy `store/` only, so they leave `held/` out, and their index copy holds the primary index, so a seal that stopped between the two files does not stop a backup; Export data folder copies it as it is, ciphertext. Vault Info shows its size (`vault_disk_usage`, `heldBytes`) while it holds anything.
 
-An unreadable header or index (C) is not recovery: the vault does not open, and a new vault comes from a backup.
+A dead header: the vault does not open, and a new vault comes from a backup. Both index files dead or gone under a header the password opens: the row is recovery (a changed index file changes the content hash, and both files gone count as a different store), the open fails with `vault_index_unreadable`, which also turns the row to recovery, and the unlock window offers the rebuild (§7.4).
 
 ### 7.2 Actions
 
@@ -1011,7 +1066,8 @@ An unreadable header or index (C) is not recovery: the vault does not open, and 
 |--------|--------|
 | Unlock (A) | Opens the `store/` on disk with the password; the next close records its hash and clears recovery |
 | Remove the folder (D, `vault_plain_remove`) | Wipe the leftover plaintext folder after the user confirms and leave the vault closed; `store/` stays as last saved. Unlock refuses until then (`plain_leftover`). It is a job (`usePlainRemoveJob`, one at a time, on the pack lane so closes do not wait behind it): the window closes at once, the rest of the app stays usable, and the row shows `recovering` with its budget, sized from the folder's bytes. A stop or a timeout leaves the files not reached yet and the vault in recovery, and files that could not be wiped keep it there too (`toast.recovery_incomplete`) |
-| Create from backup (C) | Unpack `backups/<stamp>-<id>.zip` into a **new** vault — never overwrite the source |
+| Create from backup (C) | Unpack a backup zip into a **new** vault — never overwrite the source |
+| Rebuild from its own data (C, `vault_rebuild`) | Seal a new index from the recovery records of the vault's blobs (§7.4) |
 
 ### 7.3 Reopen after crash (no RAM session, `store/` still on disk)
 
@@ -1045,7 +1101,30 @@ Validate header + index (§2.2)
 - **Close** flushes the session into `store/` and leaves the vault closed.
 - Portable `.zip` / `.7z` export remains a separate user action, not rest layout.
 
-**Dead header/index:** create a **new** vault from a backup stamp or store zip.
+**Dead header:** create a **new** vault from a backup stamp or store zip. **Dead index:** rebuild it from the vault's own data (§7.4), or create a new vault from a backup.
+
+### 7.4 Recovery records and the rebuild
+
+Each blob carries recovery records after its chunks (`store::record`): its file's index entry (`VaultNode`, without the problem mark) with the vault's content identity, the save number of the seal it was written for (`VaultIndex::saves`, one more each seal), and when. Each is sealed with XChaCha20-Poly1305 under the record key (HKDF `upriv-record-key-v1`), AAD binding version, content identity, algorithm, `kind` `"record"`, the blob's file id, and `seq`, and is followed by a 20-byte footer (magic, `seq`, length, end of the previous footer), the only part readable without the key.
+
+| When | Who appends it |
+|------|----------------|
+| The seal that first names a blob: a whole-file write, the seed, a pack, the copy of a blob whose flush failed | `StagedBlobs::sync` (`RecordsDue::Made`), or `ChunkBlobMutation::sync_before_index`, before the flush |
+| An import, before the seal that names it | The import worker (`record_made_blob`, with the save number the next seal takes), before its own flush; the blob is then marked recorded (`ChunkBlobMutation::mark_recorded`). When that record fails, the seal writes it as above |
+| The close of a session that wrote to the blob, or cut it to fewer chunks, after its last record | `StagedBlobs::sync` with `RecordsDue::All` at close, Close now included |
+| Mid-session seals of a blob written in place or grown | None: a record lists every chunk, so one per batch of a large file copied through the mount would grow without end |
+
+A record that cannot be written is logged (`vault_blob_record_failed`, counts only) and the seal goes on. Records are never rewritten; a rename writes none. Chunk placement keeps off the blob's newest record, found from its last bytes when a write opens the blob and kept in the session (`SessionWrites::records`) once chunks follow it. The waste measure leaves the newest record out and counts older ones, so packing drops them. Opens, reads, writes, and exports never read records; set-aside naming (§7.1) reads a held blob's newest record, and the rebuild reads every blob's.
+
+**Rebuild (`vault_rebuild`).** A job on the rewrap lane (`upriv-rewrap`, desktop and Android), started only from the unlock window after `vault_index_unreadable`, with the password typed there (`useVaultRebuildJob`, owned by the vault list; the window closes and the row shows `recovering` with its elapsed time and Stop). On a closed vault with no plain-text leftover:
+
+1. Unlock the header under the open throttle; refuse with `vault_index_readable` when an index file opens.
+2. Pin a Stored copy of `store/` in `saves/` of the data folder, or of the chosen backup folder when the data folder has no room (`pin_before_rebuild`), after checking the drive has room (`vault_rebuild_space_short`, `details.needed` / `details.available`, shown in the toast). Its index files do not open, so the pair check of a backup is left out. Any other failure is `vault_backup_failed`.
+3. Name every blob in `data/` (`store::record::rebuild_tree`) from the newer of its own newest record (a blob whose last bytes are no record is searched whole) and the newest backup zip with the same content identity whose tree names it and whose first chunk opens from it (`held::name_from_backups`). The higher save number wins, the backup on a tie: a file renamed since its record takes its name from the backup, and a blob with no record still comes back. Order them by save number, then time, newest first.
+4. Place each file at its path with the folders above it; a path a newer file took, or one under a file, is left. Empty folders and empty files have no blob and do not come back.
+5. Seal both index files (the save count goes on from the highest one read), record the new content hash in `persistence.json` and drop each machine's backup record, and log `vault_rebuilt` with counts (`files`, `from_backups`, `left`, `unnamed`).
+
+No blob is moved, rewritten, or deleted. A blob nothing places stays in `data/`, and the next open sets it aside, named by its own record or a backup when one names it. A stop before the seal removes the pinned copy; the seal refuses a stop. The result (`VaultRebuild`: `files`, `setAside`) drives the toast (`toast.vault_rebuilt` / `toast.vault_rebuilt_set_aside`). Once the rebuild lands, the vault list opens the vault with the password the rebuild used (`openWithPassword`), so it is ready at once; the job holds that password only until it ends, and a failed open shows as any open's error. A rebuilt file holds what its record or backup names: as the last close, or the seal that made it, left it.
 
 Reference: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
@@ -1174,10 +1253,11 @@ No separate Welcome screen in v1; on first run the Gate asks for the data folder
 #### 8.2.3 Modal — backups
 
 - Title: `modal.backup.title` — `<id>`
-- Two tiers: **Saves** (`backups/saves/<stamp>-<id>.zip`, never auto-deleted) and **Standard** (`backups/<stamp>-<id>.zip`, rotated per `[backup]`). **Save** on a standard row → `backup_promote_save`.
+- Back up now and its status sit above the sections. Each folder is one collapsible section, the same card as the settings sections (`VaultSettingsSection` / `SettingsAccordionSection` with `aside`): the **Data folder**, then the **Chosen folder** (`backupListSections`). Inside it, under small headings, come its **Saves** (`saves/<stamp>-<id>.zip`, never auto-deleted) and then its **Standard** backups (`<stamp>-<id>.zip`, rotated per `[backup]`). A folder or a tier shows only when it holds a backup, and `modal.backup.empty` says so when none does. The section header holds its count and a select-all box that selects or clears every backup in that folder, pins included (`toggleBackupSection`, shown partly checked when some are chosen), outside the expand button; on desktop the section shows its folder with a button to open it. Selection spans sections: while anything is chosen, the window's footer shows the count with Save, Export, and Delete, so choosing a row never moves the rows. A chosen folder that fails is one status line (with Use this folder again for `missing`), not a section. **Save** on a standard row → `backup_promote`.
+- A phone lists the data folder's section only, with the same headings, empty rule, select-all, and footer, and no folder or open button.
 - Table/list: columns **Name**, **Date**, **Actions**
-- **Delete:** inline confirmation with `<input>` — prompt `modal.backup.delete_confirm_one` for one backup, `modal.backup.delete_confirm` for more; phrase = the vault's **current** display name (`Notes`), then a space and the count when two or more are chosen (`Notes 2`), even when backup file names carry an older id; button disabled until the trimmed input matches.
-- Suggested RPC methods: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
+- **Delete:** inline confirmation with `<input>`, under a sentence naming each backup it removes (`modal.backup.delete_list_one` / `modal.backup.delete_list`) — prompt `modal.backup.delete_confirm_one` for one backup, `modal.backup.delete_confirm` for more; phrase = the vault's **current** display name (`Notes`), then a space and the count when two or more are chosen (`Notes 2`), even when backup file names carry an older id; button disabled until the trimmed input matches.
+- RPC methods: `backup_list`, `backup_delete`, `backup_promote`, `backup_folder_check`, `backup_folder_reuse`. A row is addressed by its key (`backupEntryKey`): the file name, under `saves/` for a pin and `chosen/` for the chosen folder. A key is never a path.
 
 #### 8.2.4 Modal — vault settings
 
@@ -1228,20 +1308,22 @@ ui/
 | Data folder | `vault_root_resolve`, `vault_root_setup_default_root`, `vault_root_setup_path`, `vault_root_deactivate_alias`, `vault_root_read_alias`, `vault_root_default_root_status`, `vault_root_inspect_path`, `vault_root_suggested_custom_path`, `data_folder_export` |
 | Logs | `log_list`, `log_get`, `log_delete`, `log_event` |
 | Groups | `vault_group_list`, `vault_group_create`, `vault_group_update`, `vault_group_delete`, `vault_group_set_collapsed`, `vault_group_reorder`, `vault_group_reorder_grouped_vaults`, `vault_group_repair` |
-| Vaults | `vault_list`, `vault_create`, `vault_config_get`, `vault_config_save`, `vault_rename`, `vault_delete`, `vault_disk_usage`, `vault_change_password`, `vault_change_kdf` |
+| Vaults | `vault_list`, `vault_create`, `vault_config_get`, `vault_config_save`, `vault_rename`, `vault_delete`, `vault_disk_usage`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild` |
 | Open / close | `vault_open`, `vault_close`, `vault_close_phase`, `vault_close_hurry`, `vault_plain_confirm`, `vault_plain_destination`, `vault_plain_leftover`, `vault_plain_remove`, `vault_plain_sync`, `vault_plain_status`, `vault_plain_deletions`, `vault_plain_send`, `vault_plain_unsend` |
 | File manager | `vault_fs_list`, `vault_fs_held`, `vault_fs_held_restore`, `vault_fs_held_delete`, `vault_fs_revision`, `vault_fs_preview_fits`, `vault_fs_read`, `vault_fs_read_range`, `vault_fs_write`, `vault_fs_write_range`, `vault_fs_import_os_file`, `vault_fs_truncate`, `vault_fs_create_file`, `vault_fs_create_folder`, `vault_fs_ensure_folder`, `vault_fs_delete`, `vault_fs_rename`, `vault_fs_move`, `vault_fs_os_path` |
-| Export / import | `vault_export`, `vault_export_capabilities`, `vault_plain_export_sweep`, `vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, `vault_import_probe` |
-| Backups | `backup_list`, `backup_export`, `backup_save`, `backup_delete`, `backup_promote` |
+| Export / import | `vault_export`, `vault_export_capabilities`, `vault_unfinished_sweep`, `vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, `vault_import_probe` |
+| Backups | `backup_list`, `backup_export`, `backup_save`, `backup_delete`, `backup_promote`, `backup_folder_check`, `backup_folder_reuse` |
 | Jobs | `job_status`, `job_cancel` |
 | Mobile only | `app_settings_parse_toml`, `vault_root_remember_custom`, `vault_ingest_open`, `vault_ingest_directory`, `vault_discard_import` |
 | Electron main | `app_exit`, `pick_directory`, `pick_file`, `reveal_in_file_manager`, `reveal_os_path`, `open_in_terminal`, `winfsp_status`, `winfsp_install`, `fuse_status`, `fuse_install`; main sends `app_shutdown` to the daemon itself |
 
-**Vault export.** `vault_export` takes the folder chosen in the export option (`destDir`) and writes `{display_name}.zip` or `.7z` there (`vault_export_file_stem`). `includeWorkspace` and `includeSettings` choose what `.upriv-config/` carries in the last two. It never replaces a file, or a partial one, already using that name: it takes the next free number (`{display_name} 2.zip`, `{display_name} 3.zip`, …, also when a file arrives under the name while it writes) and logs `vault_export_numbered` (`format`, `id`, `number`; no name or path). It refuses a folder inside a `.upriv` (`export_destination_reserved`). The answer is the written `path`, its `size`, and `unreadable`: the files a `.7z` or plain-text `.zip` kept with zeros (§5.1), as UI paths. The UI toast names a numbered file and those files (`vaultExportToast`). A `.7z` export unlocks the vault with its password inside this call, through the same unlock limit as open: `wrong_password` or `vault_unlock_blocked` comes back before any file is written, and the Export window marks its password field (a toast when the window is closed). While the export runs, the window's one footer button is **Stop export**: it sends `job_cancel` (`by=user`), shows Stopping… until the call settles, and a stopped export ends with `toast.vault_export_cancelled` and no file left.
+**Vault export.** `vault_export` takes the folder chosen in the export option (`destDir`) and writes `{display_name}-upriv.zip`, `{display_name}-sevenzip.7z`, or `{display_name}-plain-text.zip` there (`export_stem`), holding its package (`{display_name}-upriv/{vault_id}/…`). `includeWorkspace` and `includeSettings` choose what `.upriv-config/` carries in the last two. It never replaces a file, or a partial one, already using that name: it takes the next free number (`{display_name}-upriv-2.zip`, `{display_name}-upriv-3.zip`, …), and its package folder the same name; a file that arrives under the name while it writes moves only the file to the next number and logs `vault_export_numbered` (`format`, `id`, `number`; no name or path). It refuses a folder inside a `.upriv` (`export_destination_reserved`). The answer is the written `path`, its `size`, and `unreadable`: the files a `.7z` or plain-text `.zip` kept with zeros (§5.1), as UI paths. The UI toast names a numbered file and those files (`vaultExportToast`). A `.7z` export unlocks the vault with its password inside this call, through the same unlock limit as open: `wrong_password` or `vault_unlock_blocked` comes back before any file is written, and the Export window marks its password field (a toast when the window is closed). While the export runs, the window's one footer button is **Stop export**: it sends `job_cancel` (`by=user`), shows Stopping… until the call settles, and a stopped export ends with `toast.vault_export_cancelled` and no file left. Once every byte is in, the flush and the rename are the job's last step: Stop is disabled and a late `job_cancel` gets `job_not_stoppable`.
 
-**Backup export.** `backup_export` takes the backups' keys (`stamps`, each `backupEntryKey`), the folder chosen in the Backups window (`destDir`), and a `job`. One backup is copied under its own name; several go into one Stored zip, `upriv-backups-<id>.zip`, whose entries are those files (a pin sharing its name with the copy in `backups/` is `saves-<file name>`). Like a vault export it never replaces a file or a partial already using the name: it takes the next free number (`upriv-backups-<id> 2.zip`) and logs `backup_export_numbered` (`id`, `number`). It refuses a folder inside a `.upriv`. Progress counts the bytes of the backups copied. Backups are frozen files, so the vault may be open and every other export stays free; delete and rename of that vault refuse with `vault_config_busy` until the export ends, and the settings window locks both with copy naming the export (`backupExportVaultIds`, edit-policy `backupExportLocked`, `vaultDeleteHold`). The export holds the zips it reads (`BackupExportGuard`): `backup_delete` and `backup_promote` of one of them refuse with `backup_exporting`, and close retention leaves it for a later close. It runs on the same lane as `vault_export`.
+**Backup folders.** `backup_list` answers `{ backups, chosen }`: each entry carries `location` (`data_folder` / `chosen`) and `path`, and `chosen` is the folder with its status, or null. `backup_save` answers `{ backup, fallback }`, and a close's outcome carries `backupFallback`: the status of the chosen folder when the zip went to the data folder, or null. `backup_folder_check` takes `path` and an optional `vault`, and answers `{ status }`. `backup_folder_reuse` lets the next backup make a subfolder this machine used. `vault_delete` takes `{ id, outsideBackups }` and answers `{ outside, folder }` (`none`, `kept`, `removed`, `failed`). `data_folder_export` takes `includeBackups`. `backup_list`, `backup_delete`, `backup_promote`, `backup_folder_check`, and `backup_folder_reuse` run on `HeavyLane::BackupFolder`, so a drive that stops answering holds nothing else up.
 
-**Jobs.** Work the person can stop is a job: `vault_open` (and `vault_plain_confirm`), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_change_kdf`, and `vault_root_setup_path` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done and whether it can still stop, and stays `null` while the job waits for its lane, which the UI shows as Queued. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password or unlock-RAM change removes its safety zip and leaves the header as it was, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
+**Backup export.** `backup_export` takes the backups' keys (`stamps`, each `backupEntryKey`), the folder chosen in the Backups window (`destDir`), and a `job`. One backup is copied under its own name; several go into one Stored zip, `upriv-backups-<id>.zip`, whose entries are those files (names shared between places are told apart: `saves-<file name>` for a pin, `chosen-<file name>` for the chosen folder, `chosen-saves-<file name>` for a pin there). Like a vault export it never replaces a file or a partial already using the name: it takes the next free number (`upriv-backups-<id>-2.zip`, `<stamp>-<id>-2.zip`) and logs `backup_export_numbered` (`id`, `number`). A backup zip is no package: its envelope stays at the zip root, and the copy's bytes are the backup's. It refuses a folder inside a `.upriv`. Progress counts the bytes of the backups copied. Backups are frozen files, so the vault may be open and every other export stays free; delete and rename of that vault refuse with `vault_config_busy` until the export ends, and the settings window locks both with copy naming the export (`backupExportVaultIds`, edit-policy `backupExportLocked`, `vaultDeleteHold`). The export holds the zips it reads (`BackupExportGuard`): `backup_delete` and `backup_promote` of one of them refuse with `backup_exporting`, and close retention leaves it for a later close. It runs on the same lane as `vault_export`.
+
+**Jobs.** Work the person can stop is a job: `vault_open` (and `vault_plain_confirm`), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild`, and `vault_root_setup_path` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done and whether it can still stop, and stays `null` while the job waits for its lane, which the UI shows as Queued. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password or unlock-RAM change removes its safety zip and leaves the header as it was, a stopped rebuild removes its pinned copy and leaves both index files as they were, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
 
 ### 8.4 Launch
 

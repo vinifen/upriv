@@ -39,6 +39,14 @@ describe("useDataFolderExportDestination", () => {
     }
   });
 
+  it("includes the backups until told otherwise", () => {
+    const { result } = renderHook(() => useDataFolderExportDestination());
+    expect(result.current.includeBackups).toBe(true);
+
+    act(() => result.current.setIncludeBackups(false));
+    expect(result.current.includeBackups).toBe(false);
+  });
+
   it("keeps the folder when the name starts over", async () => {
     pickFolder.mockResolvedValue("/media/usb");
     const { result } = renderHook(() => useDataFolderExportDestination());

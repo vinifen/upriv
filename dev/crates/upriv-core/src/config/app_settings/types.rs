@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::paths::VaultRootMode;
+use crate::paths::{BackupFolderTable, VaultRootMode};
 
 pub use crate::paths::WorkspaceSettings;
 
@@ -30,6 +30,9 @@ pub struct AppSettings {
     /// Per-system mount parents (`[workspace.<os>]` in settings.toml).
     #[serde(default)]
     pub workspace: WorkspaceSettings,
+    /// Where backups go by default on each desktop system (`[backups.<os>]`).
+    #[serde(default)]
+    pub backups: BackupFolderTable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -171,6 +174,7 @@ impl Default for AppSettings {
                 last_opened_vault: String::new(),
             },
             workspace: WorkspaceSettings::default(),
+            backups: BackupFolderTable::default(),
         }
     }
 }

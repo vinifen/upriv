@@ -27,8 +27,8 @@ use upriv_core::{
     delete_vault_group, discover_bootstrap_root, finish_import_session, hurry_close,
     inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
     load_vault_groups, open_import_session, open_or_initialize_vault_root, parse_settings_toml_str,
-    read_vault_root_alias, relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
-    reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
+    read_vault_root_alias, rebuild_vault, relocate_upriv_dir, remember_vault_root_custom_uri,
+    rename_vault, reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
     update_vault_group, vault_disk_usage, vault_list_item, write_vault_root_alias_for_root,
     write_vault_root_alias_for_root_with_custom, AppSettings, CloseState, IncompleteReplacePolicy,
@@ -181,6 +181,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_close" => vault_close(req.params),
         "vault_change_password" => vault_change_password(req.params),
         "vault_change_kdf" => vault_change_kdf(req.params),
+        "vault_rebuild" => vault_rebuild(req.params),
         "vault_close_phase" => vault_close_phase(req.params),
         "vault_close_hurry" => vault_close_hurry(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
@@ -219,6 +220,8 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_fs_os_path" => vault_ops::vault_fs_os_path(req.params),
         "vault_fs_move" => vault_ops::vault_fs_move(req.params),
         "backup_list" => vault_ops::backup_list(req.params),
+        "backup_folder_check" => vault_ops::backup_folder_check(req.params),
+        "backup_folder_reuse" => vault_ops::backup_folder_reuse(req.params),
         "backup_delete" => vault_ops::backup_delete(req.params),
         "backup_promote" => vault_ops::backup_promote(req.params),
         "backup_save" => vault_ops::backup_save(req.params),
@@ -1353,6 +1356,7 @@ fn vault_list_item_json(item: &VaultListItem) -> Value {
         "lastAccessedAt": item.last_accessed_at,
         "unlockPreset": unlock_preset,
         "plainLeftover": item.plain_leftover,
+        "outsideBackups": item.outside_backups,
     })
 }
 
@@ -1525,6 +1529,35 @@ fn vault_change_kdf(params: Value) -> RpcResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultRebuildParams {
+    id: String,
+    password: SecretString,
+    job: String,
+}
+
+/// Rebuild the lost index of a closed vault from its blobs' records.
+fn vault_rebuild(params: Value) -> RpcResponse {
+    let parsed: VaultRebuildParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match rebuild_vault(
+        &root,
+        parsed.id.trim(),
+        parsed.password.as_bytes(),
+        &parsed.job,
+    ) {
+        Ok(rebuilt) => ok(json!(rebuilt)),
+        Err(error) => map_core_err(error),
+    }
+}
+
 fn vault_close(params: Value) -> RpcResponse {
     let parsed: VaultCloseParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1552,6 +1585,7 @@ fn vault_close(params: Value) -> RpcResponse {
         Ok(outcome) => ok(json!({
             "backupFailed": outcome.backup_failed,
             "backupFailure": outcome.backup_failure,
+            "backupFallback": outcome.backup_fallback,
             "plain": outcome.plain,
         })),
         Err(error) => map_core_err(error),
@@ -1996,6 +2030,11 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             ("vault_file_too_large", Some(path.as_path()))
         }
         upriv_core::UprivError::VaultFileUnreadable { .. } => ("vault_file_unreadable", None),
+        upriv_core::UprivError::VaultIndexUnreadable { .. } => ("vault_index_unreadable", None),
+        upriv_core::UprivError::VaultIndexReadable => ("vault_index_readable", None),
+        upriv_core::UprivError::VaultRebuildSpaceShort { .. } => {
+            ("vault_rebuild_space_short", None)
+        }
         upriv_core::UprivError::VaultLocked(p) => ("vault_locked", Some(p.as_path())),
         upriv_core::UprivError::VaultMountFailed(_) => ("vault_mount_failed", None),
         upriv_core::UprivError::ImportArchiveNotFound(p) => {
@@ -2077,7 +2116,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             Some(json!({ "count": count, "examples": examples }))
         }
         upriv_core::UprivError::PlainSpaceShort { needed, available }
-        | upriv_core::UprivError::DataFolderExportSpaceShort { needed, available } => {
+        | upriv_core::UprivError::DataFolderExportSpaceShort { needed, available }
+        | upriv_core::UprivError::VaultRebuildSpaceShort { needed, available } => {
             Some(json!({ "needed": needed, "available": available }))
         }
         upriv_core::UprivError::PlainFolderUnwritable { count } => Some(json!({ "count": count })),
@@ -2312,6 +2352,7 @@ mod contract_tests {
         "vault_close",
         "vault_change_password",
         "vault_change_kdf",
+        "vault_rebuild",
         "vault_close_phase",
         "vault_close_hurry",
         "vault_export_capabilities",
@@ -2350,6 +2391,8 @@ mod contract_tests {
         "vault_fs_os_path",
         "vault_fs_move",
         "backup_list",
+        "backup_folder_check",
+        "backup_folder_reuse",
         "backup_delete",
         "backup_promote",
         "backup_save",

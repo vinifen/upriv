@@ -4,6 +4,7 @@ import { Button, Select, SwitchRow } from "@/components/ui";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
 import {
   AUTO_CLOSE_WHEN_BUSY,
+  BACKUP_FOLDER_SYSTEMS,
   COMPRESSION_PRESETS,
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
@@ -15,8 +16,12 @@ import {
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
   workspaceSystemsCurrentFirst,
+  appBackupFolders,
   appWorkspace,
   appWorkspacePlace,
+  backupFolderIssue,
+  backupFolderStatusI18nKey,
+  backupFolderSystem,
   compressionPresetFromSevenZip,
   sevenZipPatchFromCompressionPreset,
   validateWorkspaceTable,
@@ -25,9 +30,12 @@ import {
   currentWorkspaceSystem,
   workspaceSystemHasShortcut,
   workspacePathIssueI18nKey,
+  type BackupFolderTable,
   type CompressionPreset,
   type KdfUnlockPreset,
   type PolicyRadioBadge,
+  type VaultBackupFolders,
+  type VaultBackupPlace,
   type VaultConfigEditHold,
   type VaultDeleteHold,
   type VaultGroup,
@@ -43,8 +51,9 @@ import {
   displayNameErrorI18nKey,
   VAULT_DELETE_HOLD_I18N_KEY,
 } from "@upriv/shared";
+import { useBackupFolderCheck } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
-import { useVaultRootService } from "@/platform/services";
+import { useBackupService, useVaultRootService } from "@/platform/services";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { IntegerInput } from "./IntegerInput";
 import {
@@ -813,12 +822,190 @@ export function VaultSettingsCloseSection({
   );
 }
 
-export function VaultSettingsBackupSection({ config, onChange }: SectionPatchProps<"backup">) {
+interface BackupFolderChoicesProps {
+  /** Names the group of options for a screen reader. */
+  groupLabel: string;
+  active: boolean;
+  place: VaultBackupPlace;
+  path: string;
+  /** Only a vault can follow the app default. Says what that default is. */
+  inheritDescription?: string;
+  dataFolderTitle: string;
+  dataFolderDescription: string;
+  customTitle: string;
+  customDescription: string;
+  /** The vault that would use this folder as its own; null is the app default. */
+  vaultId: string | null;
+  vaultRootPath: string | null;
+  /** The row as saved. A folder already saved that fails never holds Save. */
+  savedPlace: VaultBackupPlace | null;
+  savedPath: string;
+  onChange: (place: VaultBackupPlace, path: string) => void;
+  /** True while this row holds Save: its path is missing, invalid, or newly typed and not usable. */
+  onBlockingChange?: (blocking: boolean) => void;
+}
+
+/** Where backups go on this system, as the app default or for one vault. */
+export function BackupFolderChoices({
+  groupLabel,
+  active,
+  place,
+  path,
+  inheritDescription,
+  dataFolderTitle,
+  dataFolderDescription,
+  customTitle,
+  customDescription,
+  vaultId,
+  vaultRootPath,
+  savedPlace,
+  savedPath,
+  onChange,
+  onBlockingChange,
+}: BackupFolderChoicesProps) {
+  const { t } = useTranslation();
+  const { showError } = useErrorToast();
+  const group = useId();
+  const pathId = useId();
+  const vaultRootService = useVaultRootService();
+  const backupService = useBackupService();
+  const custom = place === "custom";
+  const issue = backupFolderIssue(place, path, vaultRootPath);
+  const check = useBackupFolderCheck(backupService, custom && !issue ? path : "", vaultId);
+  const problem = check.status !== null && check.status !== "ok" ? check.status : null;
+  const typed = savedPlace !== "custom" || savedPath.trim() !== path.trim();
+  const blocking = custom && (issue !== null || (typed && (check.checking || problem !== null)));
+
+  useEffect(() => {
+    onBlockingChange?.(blocking);
+    return () => onBlockingChange?.(false);
+  }, [onBlockingChange, blocking]);
+
+  function pickFolder() {
+    if (!active) return;
+    void (async () => {
+      try {
+        const picked = await vaultRootService.pickFolder(
+          path.trim() || null,
+          t("modal.app_settings.action.pick_workspace_folder"),
+        );
+        if (picked?.trim()) onChange("custom", picked.trim());
+      } catch (error) {
+        showError(error, "error.unexpected");
+      }
+    })();
+  }
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={groupLabel}
+      className={active ? "grid gap-2" : "grid gap-2 opacity-60"}
+    >
+      {inheritDescription !== undefined ? (
+        <PolicyRadioOption
+          groupName={group}
+          value="inherit"
+          checked={place === "inherit"}
+          title={t("modal.settings.field.backup.folder_inherit")}
+          description={inheritDescription}
+          disabled={!active}
+          onSelect={() => onChange("inherit", path)}
+        />
+      ) : null}
+      <PolicyRadioOption
+        groupName={group}
+        value="data_folder"
+        checked={place === "data_folder"}
+        title={dataFolderTitle}
+        description={dataFolderDescription}
+        disabled={!active}
+        onSelect={() => onChange("data_folder", path)}
+      />
+      <PolicyRadioOption
+        groupName={group}
+        value="custom"
+        checked={custom}
+        title={customTitle}
+        description={customDescription}
+        disabled={!active}
+        attention={issue !== null || problem !== null}
+        onSelect={() => onChange("custom", path)}
+        footer={
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <PathField
+                id={pathId}
+                className="sm:flex-1"
+                value={path}
+                disabled={!active || !custom}
+                placeholder={t("modal.folder_field.placeholder")}
+                onChange={(next) => onChange("custom", next)}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                className="w-full shrink-0 sm:w-auto"
+                disabled={!active}
+                onClick={pickFolder}
+              >
+                {t("modal.app_settings.action.pick_workspace_folder")}
+              </Button>
+            </div>
+            {issue ? (
+              <p className="text-xs text-on-error-container" role="alert">
+                {t(workspacePathIssueI18nKey(issue))}
+              </p>
+            ) : check.checking ? (
+              <p className="text-xs text-on-surface-variant" role="status">
+                {t("modal.backup.folder.checking")}
+              </p>
+            ) : problem ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="min-w-0 flex-1 text-xs text-on-error-container" role="alert">
+                  {t(backupFolderStatusI18nKey(problem))}
+                </p>
+                <Button type="button" variant="ghost" size="sm" onClick={check.retry}>
+                  {t("action.retry")}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        }
+      />
+    </div>
+  );
+}
+
+interface VaultSettingsBackupSectionProps extends SectionPatchProps<"backup"> {
+  /** App default, so Follow the app default can say where that is. */
+  appBackups?: BackupFolderTable;
+  vaultId?: string | null;
+  vaultRootPath?: string | null;
+  /** Rows as saved. Absent for a vault still being created. */
+  saved?: VaultBackupFolders | null;
+  onFolderBlockingChange?: (blocking: boolean) => void;
+}
+
+export function VaultSettingsBackupSection({
+  config,
+  onChange,
+  appBackups = appBackupFolders(),
+  vaultId = null,
+  vaultRootPath = null,
+  saved = null,
+  onFolderBlockingChange,
+}: VaultSettingsBackupSectionProps) {
   const { t } = useTranslation();
   const modeId = useId();
   const keepId = useId();
   const enabledId = useId();
   const skipId = useId();
+  const current = backupFolderSystem(currentWorkspaceSystem());
+  const currentRow = current ? config[current] : null;
+  const appRow = current ? appBackups[current] : null;
+  const dataFolderLabel = t("modal.settings.field.backup.folder_data");
 
   return (
     <SettingsFormGrid>
@@ -868,6 +1055,48 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
         />
       </SettingsField>
+      {current && currentRow && appRow ? (
+        <SettingsField
+          label={t("modal.settings.field.backup.folder")}
+          hint={t("modal.settings.field.backup.folder_help")}
+        >
+          <BackupFolderChoices
+            groupLabel={t("modal.settings.field.backup.folder")}
+            active
+            place={currentRow.place}
+            path={currentRow.path}
+            inheritDescription={appRow.place === "custom" ? appRow.path : dataFolderLabel}
+            dataFolderTitle={dataFolderLabel}
+            dataFolderDescription={t("modal.settings.field.backup.folder_data_desc")}
+            customTitle={t("modal.settings.field.backup.folder_custom")}
+            customDescription={t("modal.settings.field.backup.folder_custom_desc")}
+            vaultId={vaultId}
+            vaultRootPath={vaultRootPath}
+            savedPlace={saved ? saved[current].place : null}
+            savedPath={saved ? saved[current].path : ""}
+            onChange={(place, path) => onChange({ [current]: { place, path } })}
+            onBlockingChange={onFolderBlockingChange}
+          />
+        </SettingsField>
+      ) : null}
+      {BACKUP_FOLDER_SYSTEMS.filter((system) => system !== current).map((system) => (
+        <SettingsField
+          key={system}
+          label={t(`modal.app_settings.field.workspace.system.${system}`)}
+          hint={t("modal.app_settings.field.workspace.other_system")}
+          disabled
+        >
+          <PathField
+            value={config[system].place === "custom" ? config[system].path : ""}
+            disabled
+            placeholder={
+              config[system].place === "data_folder"
+                ? dataFolderLabel
+                : t("modal.settings.field.backup.folder_inherit")
+            }
+          />
+        </SettingsField>
+      ))}
     </SettingsFormGrid>
   );
 }
@@ -1181,6 +1410,10 @@ interface VaultSettingsDangerZoneSectionProps {
   enabled?: boolean;
   /** Why Delete waits (`vaultDeleteHold`). While set the button stays off and the reason shows. */
   hold?: VaultDeleteHold | null;
+  /** This vault has backups outside the data folder, so the switch shows. */
+  outsideBackups?: boolean;
+  removeOutsideBackups?: boolean;
+  onRemoveOutsideBackupsChange?: (remove: boolean) => void;
   onRequestDelete: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
@@ -1196,6 +1429,9 @@ export function VaultSettingsDangerZoneSection({
   busy = false,
   enabled = true,
   hold = null,
+  outsideBackups = false,
+  removeOutsideBackups = false,
+  onRemoveOutsideBackupsChange,
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete,
@@ -1238,6 +1474,15 @@ export function VaultSettingsDangerZoneSection({
         disabled={busy}
         className={settingsControlClass}
       />
+      {outsideBackups ? (
+        <SwitchRow
+          checked={removeOutsideBackups}
+          disabled={busy}
+          onChange={(remove) => onRemoveOutsideBackupsChange?.(remove)}
+          label={t("modal.settings.delete_outside_backups")}
+          hint={t("modal.settings.delete_outside_backups_help")}
+        />
+      ) : null}
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={onCancelDelete} disabled={busy}>
           {t("action.cancel")}

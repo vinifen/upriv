@@ -2,16 +2,137 @@
 //! `.upriv-part`, a backup's `.partial`, or the data-folder zip's
 //! `.zip.upriv-part`. It is removed, and the log says whether that worked, so
 //! a file left behind is always on record. A plain-text export holds readable
-//! vault files, so its partial is overwritten first. No path goes to the log.
+//! vault files, so its partial is overwritten first, on a thread of its own
+//! ([`wipe_partial_behind`]), so the stop that left it answers at once. No
+//! path goes to the log.
 
+use std::collections::HashSet;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, LazyLock, Mutex};
 
 use crate::error::UprivError;
 use crate::logging::{log_event, LogLevel};
+use crate::paths::VaultRoot;
+use crate::session::lock_table;
 
+use super::unfinished::forget_file;
 use super::wipe::{wipe_file_then_unlink, WipeOptions};
 use crate::failure::classify_write_failure;
+
+/// Plaintext partials being overwritten off the thread that left them.
+static WIPING: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(HashSet::new()), Condvar::new()));
+
+/// Overwrite and remove the unfinished plaintext file at `path`, then forget
+/// its record in `state.json`, on a thread of its own: the stop or the sweep
+/// that found it answers at once. The record stays until the file is gone, so
+/// a crash or Close now before then leaves it to the next launch; a normal
+/// quit waits ([`wait_for_partial_wipes`]). A file in a
+/// picked storage-access folder is wiped here, while that folder is mounted.
+pub(super) fn wipe_partial_behind(
+    root: &VaultRoot,
+    path: &Path,
+    work: PartialWork,
+    opts: WipeOptions,
+) {
+    if crate::host_fs::export_tree_uri(path).is_some() {
+        return wipe_and_forget(root, path, work, &opts);
+    }
+    let Some(mark) = WipingMark::enter(path) else {
+        // Already on its way out.
+        return;
+    };
+    let behind = {
+        let root = root.clone();
+        let path = path.to_path_buf();
+        move || {
+            wipe_and_forget(&root, &path, work, &opts);
+            drop(mark);
+        }
+    };
+    if std::thread::Builder::new()
+        .name("upriv-wipe".into())
+        .spawn(behind)
+        .is_err()
+    {
+        // No thread to spare: the wipe runs here.
+        if let Some(_mark) = WipingMark::enter(path) {
+            wipe_and_forget(root, path, work, &opts);
+        }
+    }
+}
+
+fn wipe_and_forget(root: &VaultRoot, path: &Path, work: PartialWork, opts: &WipeOptions) {
+    if wipe_partial(path, work, opts) {
+        forget_file(root, path);
+    }
+}
+
+/// The mark [`wipe_partial_behind`] keeps on a path while it wipes it, taken
+/// off when dropped: also when the wipe panicked, so a quit never waits for a
+/// wipe that is over.
+struct WipingMark(PathBuf);
+
+impl WipingMark {
+    /// `None` while that path is already being wiped.
+    fn enter(path: &Path) -> Option<Self> {
+        lock_table(&WIPING.0)
+            .insert(path.to_path_buf())
+            .then(|| Self(path.to_path_buf()))
+    }
+}
+
+impl Drop for WipingMark {
+    fn drop(&mut self) {
+        let (wiping, done) = &*WIPING;
+        lock_table(wiping).remove(&self.0);
+        done.notify_all();
+    }
+}
+
+/// True while [`wipe_partial_behind`] works on `path`.
+pub(super) fn is_wiping(path: &Path) -> bool {
+    lock_table(&WIPING.0).contains(path)
+}
+
+/// Wait until every [`wipe_partial_behind`] has finished, or until
+/// [`hurry_partial_wipes`]. A normal quit (`app_shutdown`) and the desktop
+/// core's exit call this, so a normal quit leaves no readable bytes behind
+/// that a wipe had begun. Close now does not wait for it: what the wipe has
+/// not reached keeps its record for the next launch.
+pub fn wait_for_partial_wipes() {
+    wait_for_wipes_unless(&WIPES_HURRIED);
+}
+
+fn wait_for_wipes_unless(hurried: &AtomicBool) {
+    let (wiping, done) = &*WIPING;
+    let mut pending = lock_table(wiping);
+    while !pending.is_empty() && !hurried.load(Ordering::Relaxed) {
+        pending = done
+            .wait(pending)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+}
+
+/// Set once Close now asks the quit not to wait for wipes; it never clears,
+/// because the process is about to exit.
+static WIPES_HURRIED: AtomicBool = AtomicBool::new(false);
+
+/// Close now: end every [`wait_for_partial_wipes`], now and later. The wipes
+/// go on until the process exits, and their records stay for the next launch.
+pub fn hurry_partial_wipes() {
+    hurry_wipes(&WIPES_HURRIED);
+}
+
+fn hurry_wipes(hurried: &AtomicBool) {
+    hurried.store(true, Ordering::Relaxed);
+    let (wiping, done) = &*WIPING;
+    // Under the lock, so a waiter between its check and its wait still wakes.
+    let _held = lock_table(wiping);
+    done.notify_all();
+}
 
 /// What was writing the unfinished file, as the log names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +254,38 @@ mod tests {
         assert!(!partial.host_exists());
         assert_eq!(crate::host_fs::read(&second).unwrap(), vec![0u8; 19]);
         assert!(wipe_partial(&partial, PartialWork::VaultExport, &opts));
+    }
+
+    #[test]
+    fn a_wipe_that_panicked_is_no_longer_waited_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Notes-plain-text.zip.upriv-part");
+        let marked = path.clone();
+        let panicked = std::thread::spawn(move || {
+            let _mark = WipingMark::enter(&marked).unwrap();
+            assert!(WipingMark::enter(&marked).is_none());
+            panic!("the wipe went wrong");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(!is_wiping(&path));
+        wait_for_partial_wipes();
+    }
+
+    #[test]
+    fn close_now_ends_the_wait_for_a_wipe_still_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Notes-plain-text.zip.upriv-part");
+        let mark = WipingMark::enter(&path).unwrap();
+        let hurried = std::sync::Arc::new(AtomicBool::new(false));
+        let waiter = {
+            let hurried = std::sync::Arc::clone(&hurried);
+            std::thread::spawn(move || wait_for_wipes_unless(&hurried))
+        };
+        hurry_wipes(&hurried);
+        waiter.join().unwrap();
+        assert!(is_wiping(&path));
+        drop(mark);
     }
 
     #[cfg(unix)]

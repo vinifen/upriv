@@ -28,8 +28,9 @@ export interface CoreJobEvents<Meta extends object, Result> {
 
 /**
  * One job that core runs and `job_status` measures: a vault export, Back up
- * now, a backup export, Export data folder, or the removal of a leftover
- * folder. The vault list owns it, so it keeps running when the window that
+ * now, a backup export, Export data folder, the removal of a leftover folder,
+ * a password or unlock-RAM change, or the rebuild of a lost index. The vault
+ * list owns it, so it keeps running when the window that
  * started it closes. One at a time. It has no time limit: it ends when it is
  * done, fails, or is stopped.
  */

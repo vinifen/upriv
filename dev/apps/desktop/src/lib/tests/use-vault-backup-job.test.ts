@@ -6,7 +6,7 @@ import {
   RpcError,
   type BackupService,
   type JobService,
-  type VaultBackupEntry,
+  type VaultBackupSaved,
 } from "@upriv/shared";
 import { useVaultBackupJob, type VaultBackupJobEvents } from "@upriv/shared/react";
 
@@ -20,19 +20,24 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const saved: VaultBackupEntry = {
-  stamp: "20260101000000",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  saved: true,
+const saved: VaultBackupSaved = {
+  backup: {
+    stamp: "20260101000000",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    saved: true,
+  },
+  fallback: null,
 };
 
 function serviceSaving(saveNow: BackupService["saveNow"]): BackupService {
   return {
-    listBackups: async () => [],
+    listBackups: async () => ({ backups: [], chosen: null }),
     deleteBackups: async () => undefined,
     promoteToSave: async () => undefined,
     saveNow,
     exportTo: async (_vaultId, _keys, destDir) => ({ path: destDir, size: 0 }),
+    checkFolder: async () => "ok",
+    reuseFolder: async () => undefined,
   };
 }
 
@@ -55,7 +60,7 @@ describe("useVaultBackupJob", () => {
   });
 
   it("holds the job until the backup lands, then reports it", async () => {
-    const run = deferred<VaultBackupEntry>();
+    const run = deferred<VaultBackupSaved>();
     const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
     const on = events();
     const service = serviceSaving(saveNow);
@@ -76,7 +81,7 @@ describe("useVaultBackupJob", () => {
   });
 
   it("refuses a second backup while one runs", () => {
-    const saveNow = vi.fn(() => new Promise<VaultBackupEntry>(() => undefined));
+    const saveNow = vi.fn(() => new Promise<VaultBackupSaved>(() => undefined));
     const service = serviceSaving(saveNow);
     const on = events();
     const { result } = renderHook(() => useVaultBackupJob(service, jobs(), on));
@@ -92,7 +97,7 @@ describe("useVaultBackupJob", () => {
   });
 
   it("reports a failure and frees the job", async () => {
-    const run = deferred<VaultBackupEntry>();
+    const run = deferred<VaultBackupSaved>();
     const service = serviceSaving(() => run.promise);
     const on = events();
     const { result } = renderHook(() => useVaultBackupJob(service, jobs(), on));
@@ -111,7 +116,7 @@ describe("useVaultBackupJob", () => {
 
   it("has no time limit: a backup an hour long still lands", async () => {
     vi.useFakeTimers();
-    const run = deferred<VaultBackupEntry>();
+    const run = deferred<VaultBackupSaved>();
     const runner = jobs();
     const on = events();
     const { result } = renderHook(() =>
@@ -138,7 +143,7 @@ describe("useVaultBackupJob", () => {
   });
 
   it("stops in core when asked, and reports the stop, not a failure", async () => {
-    const run = deferred<VaultBackupEntry>();
+    const run = deferred<VaultBackupSaved>();
     const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
     const runner = jobs();
     const on = events();
@@ -166,7 +171,7 @@ describe("useVaultBackupJob", () => {
       cancel: vi.fn(async () => Promise.reject(refusal)),
     };
     const on = events();
-    const service = serviceSaving(() => new Promise<VaultBackupEntry>(() => undefined));
+    const service = serviceSaving(() => new Promise<VaultBackupSaved>(() => undefined));
     const { result } = renderHook(() => useVaultBackupJob(service, runner, on));
 
     act(() => {

@@ -1,4 +1,4 @@
-import { vaultWorkspace, type VaultSettingsConfig } from "@upriv/shared";
+import { vaultBackupFolders, vaultWorkspace, type VaultSettingsConfig } from "@upriv/shared";
 import { cloneJson } from "../cloneJson";
 
 const DEFAULTS: VaultSettingsConfig = {
@@ -12,7 +12,13 @@ const DEFAULTS: VaultSettingsConfig = {
   },
   storage: { mode: "encrypted_dir", plain_files: "chosen" },
   mount: vaultWorkspace(),
-  backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
+  backup: {
+    enabled: true,
+    mode: "keep_last",
+    keep_last: 1,
+    skip_unchanged: true,
+    ...vaultBackupFolders(),
+  },
   security: {
     wipe_passes: 1,
     wipe_pattern: "random",

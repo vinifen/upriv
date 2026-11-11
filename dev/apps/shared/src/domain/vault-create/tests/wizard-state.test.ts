@@ -192,7 +192,32 @@ describe("createVaultWizardReducer / submit and close", () => {
       submitAttempted: false,
       testingPassword: false,
       discardConfirmOpen: false,
+      weaknessNoticeOpen: false,
     });
+  });
+});
+
+describe("createVaultWizardReducer / weakness notice in the footer", () => {
+  const shown = () => reduce(openedAt("advanced"), { type: "weaknessNoticeRequested" });
+
+  it("shows one footer message at a time", () => {
+    expect(shown().weaknessNoticeOpen).toBe(true);
+    const discard = reduce(shown(), { type: "discardConfirmRequested" });
+    expect(discard).toMatchObject({ discardConfirmOpen: true, weaknessNoticeOpen: false });
+  });
+
+  it.each<[string, CreateVaultWizardAction]>([
+    ["an edit", { type: "draftPatched", patch: { password: "Other-pass" } }],
+    ["choosing a step", { type: "stepSelected", step: "password" }],
+    ["going back", { type: "backRequested" }],
+    ["a press elsewhere in the window", { type: "footerMessageDismissed" }],
+    ["closing", { type: "closed" }],
+  ])("goes away on %s", (_name, action) => {
+    expect(reduce(shown(), action).weaknessNoticeOpen).toBe(false);
+  });
+
+  it("takes a close request itself instead of closing the wizard", () => {
+    expect(resolveCreateVaultCloseIntent(shown())).toBe("dismiss-confirm");
   });
 });
 
@@ -216,17 +241,28 @@ describe("createVaultWizardReducer / settings a file carries", () => {
       displayName: "Notes",
       ...overrides,
     });
-  const withSettings = (draft = picked(), existingDisplayNames: readonly string[] = []) =>
+  const withSettings = (draft = picked()) =>
     reduce(openedAt("password", draft), {
       type: "embeddedSettings",
       embedded: embedded(),
       snapshot: draft,
+    });
+  /** The file names its vault (`vaultName` of the probe), as an export's settings do. */
+  const named = (
+    vaultName: string,
+    draft = picked({ importFileName: "Notes-sevenzip-2.7z", displayName: "Notes-sevenzip-2" }),
+    existingDisplayNames: readonly string[] = [],
+  ) =>
+    reduce(openedAt("password", draft), {
+      type: "vaultNamed",
+      vaultName,
+      snapshot: draft,
       existingDisplayNames,
     });
 
-  it("fills the draft and says the file carries settings", () => {
+  it("fills the draft and says the file carries settings, leaving the name", () => {
     const { draft } = withSettings();
-    expect(draft.displayName).toBe("Carried");
+    expect(draft.displayName).toBe("Notes");
     expect(draft.note).toBe("from the file");
     expect(draft.backup.keep_last).toBe(9);
     expect(draft.kdf.unlock_preset).toBe("1gib");
@@ -234,14 +270,41 @@ describe("createVaultWizardReducer / settings a file carries", () => {
     expect(draft.importCarriesSettings).toBe(true);
   });
 
+  it("names the vault after the vault the file holds, not the file", () => {
+    const state = named("Notes");
+    expect(state.draft.displayName).toBe("Notes");
+    // Filling the name is not an edit to discard.
+    expect(resolveCreateVaultCloseIntent(state)).toBe("close");
+  });
+
   it("gives a re-import a free name beside the vault it came from", () => {
-    expect(withSettings(picked(), ["Carried"]).draft.displayName).toBe("Carried 2");
+    expect(named("Carried", picked(), ["Carried"]).draft.displayName).toBe("Carried 2");
+  });
+
+  it("keeps a name typed before the file named its vault", () => {
+    const file = picked({ importFileName: "Notes-sevenzip.7z", displayName: "Notes-sevenzip" });
+    const typed = reduce(openedAt("password", file), {
+      type: "draftPatched",
+      patch: { displayName: "Mine" },
+    });
+    const next = reduce(typed, {
+      type: "vaultNamed",
+      vaultName: "Notes",
+      snapshot: file,
+      existingDisplayNames: [],
+    });
+    expect(next).toBe(typed);
   });
 
   it("takes the settings out when the switch goes off and back in when it goes on", () => {
-    const filled = withSettings();
+    const filled = reduce(named("Carried"), {
+      type: "embeddedSettings",
+      embedded: embedded(),
+      snapshot: picked({ importFileName: "Notes-sevenzip-2.7z", displayName: "Notes-sevenzip-2" }),
+    });
     const off = reduce(filled, { type: "draftPatched", patch: { importKeepSettings: false } });
-    expect(off.draft.displayName).toBe("Notes");
+    // The name is the file's vault folder, not one of the settings.
+    expect(off.draft.displayName).toBe("Carried");
     expect(off.draft.note).toBe("");
     expect(off.draft.archiveUnlockPreset).toBeNull();
     expect(off.draft.importCarriesSettings).toBe(true);
@@ -256,7 +319,7 @@ describe("createVaultWizardReducer / settings a file carries", () => {
       type: "draftPatched",
       patch: { importExtract: false },
     });
-    expect(off.draft.displayName).toBe("Notes");
+    expect(off.draft.note).toBe("");
   });
 
   it("keeps an edit made after they went in", () => {
@@ -266,7 +329,6 @@ describe("createVaultWizardReducer / settings a file carries", () => {
       { type: "draftPatched", patch: { importKeepSettings: false } },
     );
     expect(off.draft.note).toBe("my own note");
-    expect(off.draft.displayName).toBe("Notes");
   });
 
   it("does not read them twice when the same file is tested again", () => {
@@ -306,7 +368,7 @@ describe("createVaultWizardReducer / settings a file carries", () => {
   it("does not apply settings to a file whose switch is already off", () => {
     const draft = picked({ importKeepSettings: false });
     const { draft: next, carried } = withSettings(draft);
-    expect(next.displayName).toBe("Notes");
+    expect(next.note).toBe("");
     expect(next.importCarriesSettings).toBe(true);
     expect(carried?.applied).toBeNull();
   });

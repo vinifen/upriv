@@ -118,38 +118,48 @@ export interface VaultExportRun {
 const UNSAFE_FILENAME_CHARS = /[/\\<>:"|?*\u0000-\u001f\u007f-\u009f]/g;
 
 /**
- * The export file name's stem (mirrors Rust `sanitize_filename_base`).
- * Illegal characters become `_` so `Notes: 2026` stays recognizable instead of
- * collapsing to the generic fallback. Does **not** change the vault `display_name`.
+ * The vault's folder inside an export, and the start of its file name
+ * (mirrors Rust `vault_folder_name`). Illegal characters become `_` so
+ * `Notes: 2026` stays recognizable instead of collapsing to the generic
+ * fallback. Does **not** change the vault `display_name`.
  */
-export function sanitizeExportFilenameBase(displayName: string): string {
+export function vaultFolderName(displayName: string): string {
   const replaced = normalizeStoredName(displayName).replace(UNSAFE_FILENAME_CHARS, "_").trim();
   if (!replaced || replaced === "." || replaced === "..") return "vault";
   if (isWindowsReservedName(replaced)) return "vault";
   return replaced;
 }
 
+/** What an export holds, as its file name says (Rust `PackageKind`). */
+const EXPORT_KIND_SUFFIX: Record<VaultExportFormat, string> = {
+  store_zip: "upriv",
+  plain_zip: "plain-text",
+  seven_zip: "sevenzip",
+};
+
 /**
- * The file an export writes into its folder: the vault **display name** (not
- * registry id). Either zip: `{name}.zip`. Portable 7-Zip: `{name}.7z`. A
- * plain-text zip holds its files at its root, so unpacking it gives `{name}/`
- * with the files inside. While that name is taken core adds the next free `number`
- * (`{name} 2.zip`), the same way (`vault_export_file_stem`, `NumberedExportName`).
+ * The file an export writes into its folder: the vault's folder name (from
+ * the **display name**, not the registry id) and what it holds:
+ * `{name}-upriv.zip`, `{name}-plain-text.zip`, `{name}-sevenzip.7z`. Inside,
+ * a folder named like the file holds the vault's folder, which names the
+ * vault when it is imported, so the file can be renamed. While that name is
+ * taken core adds the next free `number` (`{name}-upriv-2.zip`), the same way
+ * (`export_stem`, `NumberedExportName`).
  */
 export function vaultExportFilename(
   displayName: string,
   format: VaultExportFormat,
   number = 1,
 ): string {
-  const stem = sanitizeExportFilenameBase(displayName);
-  const name = number > 1 ? `${stem} ${number}` : stem;
+  const stem = `${vaultFolderName(displayName)}-${EXPORT_KIND_SUFFIX[format]}`;
+  const name = number > 1 ? `${stem}-${number}` : stem;
   return format === "seven_zip" ? `${name}.7z` : `${name}.zip`;
 }
 
 /**
  * The name core saved the export under when its own name was already in the
- * folder (`{name} 2.zip`), or `null` when it kept that name. `writtenPath` is
- * the path the export answered with.
+ * folder (`{name}-upriv-2.zip`), or `null` when it kept that name.
+ * `writtenPath` is the path the export answered with.
  */
 export function vaultExportSavedAs(
   displayName: string,
@@ -193,12 +203,12 @@ export function vaultExportToast(
 export type ExportFilenameSanitizeKind = "unchanged" | "adjusted" | "fallback";
 
 /**
- * How `sanitizeExportFilenameBase` treated `displayName`.
+ * How `vaultFolderName` treated `displayName`.
  * `fallback` is the generic `"vault"` stem (empty, `.` / `..`, reserved device).
  */
 export function exportFilenameSanitizeKind(displayName: string): ExportFilenameSanitizeKind {
   const trimmed = normalizeStoredName(displayName);
-  const base = sanitizeExportFilenameBase(displayName);
+  const base = vaultFolderName(displayName);
   if (base === trimmed) return "unchanged";
   if (base === "vault") return "fallback";
   return "adjusted";

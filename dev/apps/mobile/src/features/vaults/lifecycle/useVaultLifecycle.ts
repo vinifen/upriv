@@ -12,6 +12,7 @@ import {
   isRpcError,
   isVaultCredentialChallengeI18nKey,
   normalizeVaultSettingsConfig,
+  offersVaultRebuild,
   plainFolderClassI18nKey,
   resolveVaultDisplayStatus,
   storageModeIsPlaintext,
@@ -415,6 +416,10 @@ export function useVaultLifecycle({
           }
           unlockRetainPasswordsRef.current.delete(vaultId);
           lifecycleService.clearPasswordInSession(vaultId);
+          // A lost index keeps the row in recovery until a rebuild.
+          if (offersVaultRebuild(errorI18nKey)) {
+            setVaultRuntimeState(vaultId, { session: "recovery" });
+          }
           if (isVaultCredentialChallengeI18nKey(errorI18nKey)) {
             if (lifecycleRequestRef.current?.vaultId === vaultId) {
               setCredentialErrorKey(errorI18nKey);
@@ -464,11 +469,27 @@ export function useVaultLifecycle({
       onOpenFileManager,
       pipeline,
       setLifecycleRequest,
+      setVaultRuntimeState,
       blockOpenVaultIdsRef,
       settingsPersistVaultIdsRef,
       showToast,
       t,
     ],
+  );
+
+  /**
+   * Open `vaultId` with `password` with no unlock window, as the rebuild of
+   * its lost index does once it ends. False when the open cannot start: the
+   * vault is busy, or held by other work.
+   */
+  const openWithPassword = useCallback(
+    (vaultId: string, password: string): boolean => {
+      lifecycleService.setPasswordInSession(vaultId, password);
+      if (startOpenPipeline(vaultId)) return true;
+      lifecycleService.clearPasswordInSession(vaultId);
+      return false;
+    },
+    [lifecycleService, startOpenPipeline],
   );
 
   /**
@@ -1334,6 +1355,7 @@ export function useVaultLifecycle({
     lifecycleVault,
     confirmLifecycle,
     cancelLifecycle,
+    openWithPassword,
     cancelClosingHold: closingHold.cancel,
     credentialBusy,
     credentialFieldPassword:

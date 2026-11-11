@@ -3,6 +3,7 @@ import {
   errorOnPasswordField,
   isVaultCredentialChallengeI18nKey,
   isVaultErrorCode,
+  offersVaultRebuild,
   requireVaultErrorI18nKey,
   VAULT_ERROR_CODES,
 } from "../..";
@@ -41,5 +42,15 @@ describe("isVaultCredentialChallengeI18nKey", () => {
     expect(errorOnPasswordField(requireVaultErrorI18nKey("vault_unlock_blocked"))).toBe(true);
     expect(errorOnPasswordField(requireVaultErrorI18nKey("insufficient_ram"))).toBe(false);
     expect(errorOnPasswordField(requireVaultErrorI18nKey("vault_backup_failed"))).toBe(false);
+  });
+
+  it("keeps a lost index on the dialog, which offers the rebuild", () => {
+    const lost = requireVaultErrorI18nKey("vault_index_unreadable");
+    expect(isVaultCredentialChallengeI18nKey(lost)).toBe(true);
+    expect(offersVaultRebuild(lost)).toBe(true);
+    // The password was right: the field is not marked.
+    expect(errorOnPasswordField(lost)).toBe(false);
+    expect(offersVaultRebuild(requireVaultErrorI18nKey("wrong_password"))).toBe(false);
+    expect(offersVaultRebuild(null)).toBe(false);
   });
 });

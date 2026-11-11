@@ -18,6 +18,7 @@ export interface SystemInfoSnapshot {
   ui: AppSettingsConfig["ui"];
   logging: AppSettingsConfig["logging"];
   workspace: AppSettingsConfig["workspace"];
+  backups: AppSettingsConfig["backups"];
   /** Row Info shows. The Electron renderer cannot read Node `process`. */
   workspaceSystem: WorkspaceSystem;
   /** `[app].last_opened_vault` from settings.toml (may be empty). */

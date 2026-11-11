@@ -45,9 +45,9 @@ export function useDataFolderExportJob(
 
   /** Start an export of `<name>.zip` into `destDir`. False while one runs. */
   const start = useCallback(
-    (destDir: string, name: string): boolean => {
+    (destDir: string, name: string, includeBackups: boolean): boolean => {
       if (!service) return false;
-      const started = startJob({}, (id) => service.exportTo(destDir, name, id));
+      const started = startJob({}, (id) => service.exportTo(destDir, name, includeBackups, id));
       if (started) setWritten(null);
       return started;
     },

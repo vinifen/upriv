@@ -48,6 +48,44 @@ describe("mobile rpc parser guards", () => {
   });
 });
 
+describe("backup folder rows on a phone", () => {
+  beforeEach(() => {
+    native.invoke.mockReset();
+  });
+
+  it("sends the desktop rows back with a settings save, so a phone keeps them", async () => {
+    native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { wrote: true } }));
+    const settings = createDefaultAppSettings();
+    settings.backups.windows = { place: "custom", path: "D:\\Backups" };
+    const { rpcAppSettingsSave } = await import("../rpc");
+
+    await rpcAppSettingsSave(settings);
+
+    const [method, params] = native.invoke.mock.calls[0];
+    expect(method).toBe("app_settings_save");
+    expect(JSON.parse(params).settings.backups.windows).toEqual({
+      place: "custom",
+      path: "D:\\Backups",
+    });
+  });
+
+  it("sends the choice about outside backups with a delete, and reads what happened", async () => {
+    native.invoke.mockResolvedValueOnce(
+      JSON.stringify({ ok: true, result: { outside: "none", folder: null } }),
+    );
+    const { rpcVaultDelete } = await import("../rpc");
+
+    await expect(rpcVaultDelete("notes", false)).resolves.toEqual({
+      outside: "none",
+      folder: null,
+    });
+    expect(native.invoke).toHaveBeenCalledWith(
+      "vault_delete",
+      JSON.stringify({ id: "notes", outsideBackups: false }),
+    );
+  });
+});
+
 describe("data folder export rpc", () => {
   beforeEach(() => {
     native.invoke.mockReset();
@@ -61,13 +99,20 @@ describe("data folder export rpc", () => {
       }),
     );
     const { rpcDataFolderExport } = await import("../rpc");
-    await expect(rpcDataFolderExport("/upriv-saf-export", "phone-copy", "job-1")).resolves.toEqual({
+    await expect(
+      rpcDataFolderExport("/upriv-saf-export", "phone-copy", false, "job-1"),
+    ).resolves.toEqual({
       path: "/upriv-saf-export/phone-copy.zip",
       size: 2048,
     });
     expect(native.invoke).toHaveBeenCalledWith(
       "data_folder_export",
-      JSON.stringify({ destDir: "/upriv-saf-export", name: "phone-copy", job: "job-1" }),
+      JSON.stringify({
+        destDir: "/upriv-saf-export",
+        name: "phone-copy",
+        includeBackups: false,
+        job: "job-1",
+      }),
     );
   });
 
@@ -75,7 +120,7 @@ describe("data folder export rpc", () => {
     native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { size: 1 } }));
     const { rpcDataFolderExport } = await import("../rpc");
     await expect(
-      rpcDataFolderExport("/upriv-saf-export", "phone-copy", "job-1"),
+      rpcDataFolderExport("/upriv-saf-export", "phone-copy", true, "job-1"),
     ).rejects.toBeInstanceOf(RpcError);
   });
 });

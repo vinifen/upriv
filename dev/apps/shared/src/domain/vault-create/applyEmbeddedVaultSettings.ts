@@ -1,3 +1,4 @@
+import { normalizeVaultBackupFolders } from "../backups/folders";
 import { normalizeWorkspaceTable } from "../workspace";
 import { uniqueDisplayName } from "../vault/displayName";
 import { AUTO_CLOSE_WHEN_BUSY, parseKdfUnlockPreset } from "../vault-settings";
@@ -19,7 +20,31 @@ function unchanged<T>(current: T, snapshot: T, incoming: T): T {
 }
 
 /**
- * Copy embedded vault settings onto a create draft.
+ * Name the new vault after the vault an import file holds: the name its
+ * settings hold, as the person typed it, or else an export's vault folder, the
+ * id of the vault it came from (`vaultName` of `vault_import_probe`). It does
+ * not follow the settings switch, and a name the person typed since the file
+ * was chosen (`snapshot`) stays. A vault made from a backup in the Backups
+ * window keeps its own name.
+ */
+export function applyImportVaultName(
+  draft: CreateVaultDraft,
+  vaultName: string,
+  snapshot: EmbeddedSettingsSnapshot,
+  existingDisplayNames: readonly string[],
+): CreateVaultDraft {
+  if (draft.importKind === "backup") return draft;
+  const displayName = unchanged(
+    draft.displayName,
+    snapshot.displayName,
+    uniqueDisplayName(vaultName, existingDisplayNames),
+  );
+  return displayName === draft.displayName ? draft : { ...draft, displayName };
+}
+
+/**
+ * Copy embedded vault settings onto a create draft. The name is not one of
+ * them: it comes from the file ([`applyImportVaultName`]).
  *
  * A field changes only when it still matches `snapshot` (the draft when the
  * file was chosen). Password and group stay. Edits made before the read
@@ -29,7 +54,6 @@ export function applyEmbeddedVaultSettings(
   draft: CreateVaultDraft,
   embedded: EmbeddedVaultSettings,
   snapshot: EmbeddedSettingsSnapshot,
-  existingDisplayNames: readonly string[] = [],
 ): CreateVaultDraft {
   const source = embedded.settings;
   const security = {
@@ -38,14 +62,6 @@ export function applyEmbeddedVaultSettings(
   };
   const next: CreateVaultDraft = {
     ...draft,
-    displayName:
-      draft.importKind === "backup"
-        ? draft.displayName
-        : unchanged(
-            draft.displayName,
-            snapshot.displayName,
-            uniqueDisplayName(source.vault.display_name, existingDisplayNames),
-          ),
     note: unchanged(draft.note, snapshot.note, source.vault.note),
     passwordHint: unchanged(draft.passwordHint, snapshot.passwordHint, source.vault.password_hint),
     hidden: unchanged(draft.hidden, snapshot.hidden, source.vault.hidden),
@@ -57,6 +73,7 @@ export function applyEmbeddedVaultSettings(
     security: unchanged(draft.security, snapshot.security, security),
     seven_zip: unchanged(draft.seven_zip, snapshot.seven_zip, { ...source.seven_zip }),
     file_manager: unchanged(draft.file_manager, snapshot.file_manager, { ...source.file_manager }),
+    carriedBackupFolders: normalizeVaultBackupFolders(source.backup),
     archiveUnlockPreset: embedded.unlockPreset,
   };
   if (embedded.unlockPreset && createVaultChoosesKdf(next)) {
@@ -67,7 +84,6 @@ export function applyEmbeddedVaultSettings(
 
 /** Fields `applyEmbeddedVaultSettings` may change, besides `archiveUnlockPreset`. */
 const EMBEDDED_DRAFT_FIELDS = [
-  "displayName",
   "note",
   "passwordHint",
   "hidden",
@@ -75,6 +91,7 @@ const EMBEDDED_DRAFT_FIELDS = [
   "storage",
   "mount",
   "backup",
+  "carriedBackupFolders",
   "auto_close",
   "security",
   "seven_zip",
@@ -206,6 +223,7 @@ export function parseEmbeddedVaultSettings(
         mode: backupMode,
         keep_last: keepLast,
         skip_unchanged: skipUnchanged,
+        ...normalizeVaultBackupFolders(settings.backup),
       },
       security: {
         wipe_passes: wipePasses,

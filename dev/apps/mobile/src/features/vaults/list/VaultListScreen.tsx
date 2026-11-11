@@ -310,6 +310,7 @@ export function VaultListScreen() {
     closeCreate,
     pipelineStatus,
     stopRowWork,
+    rebuildFromUnlock,
     rewrapJob,
     rewrapOutcome,
     changePassword,
@@ -1388,6 +1389,7 @@ export function VaultListScreen() {
         onStop={() => {
           if (lifecycle.lifecycleVault) stopRowWork(lifecycle.lifecycleVault.id);
         }}
+        onRebuild={rebuildFromUnlock}
       />
 
       <VaultRecoveryModal

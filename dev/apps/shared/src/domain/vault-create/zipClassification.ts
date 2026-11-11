@@ -7,6 +7,12 @@ export interface ImportZipClassification {
   zipLayout: ZipImportLayout;
   /** A `.zip` of files carries a file manager layout. A store zip keeps its own. */
   carriesWorkspace: boolean;
+  /**
+   * The name the new vault takes: the name the file's settings hold, as the
+   * person typed it, or else an export's vault folder, the id of the vault it
+   * came from. `null` for a zip of documents, named from its file.
+   */
+  vaultName: string | null;
 }
 
 /**
@@ -20,6 +26,7 @@ export function importZipClassificationFromProbe(probed: {
   kind: string;
   embedded: EmbeddedVaultSettings | null;
   carriesWorkspace: boolean;
+  vaultName: string | null;
 }): ImportZipClassification | null {
   if (probed.kind === "files_zip") {
     if (!probed.ok) return null;
@@ -27,11 +34,13 @@ export function importZipClassificationFromProbe(probed: {
       embedded: probed.embedded,
       zipLayout: "files",
       carriesWorkspace: probed.carriesWorkspace,
+      vaultName: probed.vaultName,
     };
   }
   return {
     embedded: probed.ok ? probed.embedded : null,
     zipLayout: "store",
     carriesWorkspace: false,
+    vaultName: probed.ok ? probed.vaultName : null,
   };
 }

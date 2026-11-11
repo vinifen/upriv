@@ -18,9 +18,9 @@ export const desktopCreateVaultService: CreateVaultService = {
   },
 
   async testImportPackagePassword(password, importFile, job) {
-    if (!importFile?.path) return { ok: false, embedded: null };
+    if (!importFile?.path) return { ok: false, embedded: null, vaultName: null };
     if (importFile.kind === "backup" || importFile.fileName.toLowerCase().endsWith(".zip")) {
-      return { ok: true, embedded: null };
+      return { ok: true, embedded: null, vaultName: null };
     }
     const probed = await rpcVaultImportProbe({
       archivePath: importFile.path,
@@ -28,7 +28,9 @@ export const desktopCreateVaultService: CreateVaultService = {
       kind: "seven_zip",
       job,
     });
-    return { ok: probed.ok, embedded: probed.ok ? probed.embedded : null };
+    return probed.ok
+      ? { ok: true, embedded: probed.embedded, vaultName: probed.vaultName }
+      : { ok: false, embedded: null, vaultName: null };
   },
 
   async readImportPackageSettings(importFile) {

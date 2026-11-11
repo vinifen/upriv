@@ -47,15 +47,53 @@ fn clear_last_opened(root: &VaultRoot, vault_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// What a delete did with the backups the vault keeps outside the data folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideBackups {
+    /// The vault keeps none.
+    None,
+    /// The person left them, so they stay where they were created.
+    Kept,
+    Removed,
+    /// The person asked, and their folder could not be reached or a zip stayed.
+    Failed,
+}
+
+impl OutsideBackups {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Kept => "kept",
+            Self::Removed => "removed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultDeleteOutcome {
+    pub outside: OutsideBackups,
+    /// The folder those backups are in.
+    pub folder: Option<std::path::PathBuf>,
+}
+
 /// Delete `vaults/<id>/` after a secure wipe. Vault must be closed.
-pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
+///
+/// With `remove_outside_backups`, the zips it wrote to its chosen folder go
+/// too, after the vault is gone, so a delete that fails costs no backup. Only
+/// zips on its own list, and only the folders that end up empty.
+pub fn delete_vault(
+    root: &VaultRoot,
+    vault_id: &str,
+    remove_outside_backups: bool,
+) -> Result<VaultDeleteOutcome> {
     let vault_id = vault_id.trim();
     let vault_dir = root.vault_dir(vault_id)?;
     if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     refuse_if_busy(&vault_dir)?;
-    let _closing = ClosingGuard::enter(&vault_dir)?;
+    let _closing = ClosingGuard::enter(&vault_dir);
     with_vault_dir_lock(&vault_dir, || {
         if is_vault_open_at(&vault_dir)
             || is_vault_preparing_at(&vault_dir)
@@ -83,6 +121,8 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
         super::plain::clear_for_delete(root, vault_id, &vault_dir)?;
         let _ = crate::runtime_state::forget_vault(root, vault_id);
         record_unlock_success(&vault_dir);
+        // The wipe takes the record of them away.
+        let outside = super::backup::outside_zips(root, vault_id, &vault_dir);
 
         let opts = config
             .as_ref()
@@ -95,7 +135,30 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
         let _ = remove_vault_from_groups(root, vault_id);
         let _ = clear_last_opened(root, vault_id);
         log_event(LogLevel::Info, "vault_deleted", &[("id", vault_id)]);
-        Ok(())
+        Ok(match outside {
+            None => VaultDeleteOutcome {
+                outside: OutsideBackups::None,
+                folder: None,
+            },
+            Some(zips) => {
+                let settled = if !remove_outside_backups {
+                    OutsideBackups::Kept
+                } else if zips.remove(root) {
+                    OutsideBackups::Removed
+                } else {
+                    OutsideBackups::Failed
+                };
+                log_event(
+                    LogLevel::Info,
+                    "vault_deleted_outside_backups",
+                    &[("id", vault_id), ("outcome", settled.as_str())],
+                );
+                VaultDeleteOutcome {
+                    outside: settled,
+                    folder: Some(zips.folder().to_path_buf()),
+                }
+            }
+        })
     })
 }
 
@@ -159,7 +222,8 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("gone").unwrap();
         assert!(dir.host_is_dir());
         crate::host_fs::write(dir.join("leftover.bin"), vec![7u8; 4096]).unwrap();
-        delete_vault(&root, "gone").unwrap();
+        let outcome = delete_vault(&root, "gone", false).unwrap();
+        assert_eq!(outcome.outside, OutsideBackups::None);
         assert!(!dir.host_exists());
     }
 
@@ -175,7 +239,7 @@ mode = "encrypted_dir"
         .unwrap();
         let lock_path = root.runtime_lock_path("held").unwrap();
         let _lock = crate::lockfile::acquire_vault_lock(lock_path).unwrap();
-        let err = delete_vault(&root, "held").unwrap_err();
+        let err = delete_vault(&root, "held", false).unwrap_err();
         assert!(matches!(err, UprivError::VaultLocked(_)));
         assert!(root.vault_dir("held").unwrap().host_is_dir());
     }
@@ -192,7 +256,7 @@ mode = "encrypted_dir"
         .unwrap();
         let dir = root.vault_dir("busy").unwrap();
         let _hold = crate::session::PreparingGuard::enter_exclusive(&dir).expect("hold");
-        let err = delete_vault(&root, "busy").unwrap_err();
+        let err = delete_vault(&root, "busy", false).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
         assert!(dir.host_is_dir());
     }

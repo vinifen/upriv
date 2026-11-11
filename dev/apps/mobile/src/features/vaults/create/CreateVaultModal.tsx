@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-n
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   NO_VAULT_GROUPS,
+  PASSWORD_WEAKNESS_I18N_KEYS,
   vaultRootPathForWorkspaceValidation,
   type CreateVaultDraft,
   type CreateVaultResult,
@@ -159,6 +160,8 @@ export function CreateVaultModal({
     isLastStep,
     canCreate,
     discardConfirmOpen,
+    passwordWeakness,
+    footerPasswordWeakness,
     testingPassword,
     passwordTestStartedAt,
     patchDraft,
@@ -184,7 +187,10 @@ export function CreateVaultModal({
   useEffect(() => {
     if (folderListingFailed && currentStep !== "source") goToStep("source");
   }, [currentStep, folderListingFailed, goToStep]);
-  const dismissConfirmOnBodyTap = useTapNotPan(dismissFooterConfirm, discardConfirmOpen);
+  const dismissConfirmOnBodyTap = useTapNotPan(
+    dismissFooterConfirm,
+    discardConfirmOpen || footerPasswordWeakness !== null,
+  );
 
   useEffect(() => {
     if (!open) setCreateError(null);
@@ -195,6 +201,18 @@ export function CreateVaultModal({
     <View style={{ gap: spacing.sm }}>
       {createError ? (
         <Text style={[typography.caption, { color: colors.onErrorContainer }]}>{createError}</Text>
+      ) : null}
+      {footerPasswordWeakness && !createError ? (
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[
+            typography.caption,
+            styles.footerNotice,
+            { backgroundColor: colors.surfaceContainerHigh, color: colors.onErrorContainer },
+          ]}
+        >
+          {t(PASSWORD_WEAKNESS_I18N_KEYS[footerPasswordWeakness])}
+        </Text>
       ) : null}
       {discardConfirmOpen ? (
         <>
@@ -300,6 +318,7 @@ export function CreateVaultModal({
           onStopTestImportPassword: stopTestImportPassword,
           testingPassword,
           passwordTestStartedAt,
+          passwordWeakness,
           ...stepFocus,
         })}
       </ScrollView>
@@ -309,4 +328,12 @@ export function CreateVaultModal({
 
 const styles = StyleSheet.create({
   body: { gap: spacing.md, paddingBottom: spacing.sm },
+  /** Above the buttons and out of the flow, so they stay exactly where they are. */
+  footerNotice: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: "100%",
+    paddingBottom: spacing.xs,
+  },
 });

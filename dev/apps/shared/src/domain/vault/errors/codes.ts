@@ -38,6 +38,15 @@ export const VAULT_ERROR_CODES = {
   FILE_UNREADABLE: "vault_file_unreadable",
   /** No set-aside file of that name can be put back: it was put back or deleted already. */
   HELD_NOT_FOUND: "vault_held_not_found",
+  /**
+   * The password opened the header, but neither index file opens: the tree
+   * is lost and the files are not. The unlock window offers the rebuild.
+   */
+  INDEX_UNREADABLE: "vault_index_unreadable",
+  /** A rebuild was asked for a vault whose index opens. */
+  INDEX_READABLE: "vault_index_readable",
+  /** The copy a rebuild pins first does not fit (`details.needed`, `details.available`). */
+  REBUILD_SPACE_SHORT: "vault_rebuild_space_short",
   VAULT_LOCKED: "vault_locked",
   MOUNT_FAILED: "vault_mount_failed",
   /** Windows directory mount needs NTFS or ReFS. exFAT and FAT cannot hold it. */
@@ -50,7 +59,7 @@ export const VAULT_ERROR_CODES = {
   VAULT_MUST_BE_CLOSED: "vault_must_be_closed",
   /** Open refused while export, password change, or unlock-RAM change holds the vault. */
   VAULT_BUSY: "vault_busy",
-  /** Safety zip failed, so the password and unlock RAM were left unchanged. */
+  /** Safety zip failed, so the password change, unlock-RAM change, or rebuild changed nothing. */
   VAULT_BACKUP_FAILED: "vault_backup_failed",
   /** New password matches the current one. Not a broken vault header. */
   REWRAP_PASSWORD_UNCHANGED: "rewrap_password_unchanged",

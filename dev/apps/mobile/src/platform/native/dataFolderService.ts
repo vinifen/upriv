@@ -8,8 +8,8 @@ import { nativeSafExportMount } from "./safExportMount";
  * into it (`SafExportMount`).
  */
 export const nativeDataFolderService: DataFolderService = {
-  exportTo: (destDir, name, job) =>
+  exportTo: (destDir, name, includeBackups, job) =>
     nativeSafExportMount.withExportFolder(destDir, job, (dir) =>
-      rpcDataFolderExport(dir, name, job),
+      rpcDataFolderExport(dir, name, includeBackups, job),
     ),
 };

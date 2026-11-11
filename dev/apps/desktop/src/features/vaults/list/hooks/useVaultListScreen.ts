@@ -18,6 +18,7 @@ import {
   VAULT_LIST_SEARCH_PERSIST_MS,
   createDraftForImportSource,
   createDraftForScratchSource,
+  backupFellBackToastKey,
   createDraftFromBackup,
   groupIdContainingVault,
   applyPendingCreateGroupEffect,
@@ -28,10 +29,12 @@ import {
   createVaultImportPackage,
   dataFolderCanExport,
   fileNameOfPath,
+  formatBytes,
   vaultCanSaveBackupNow,
   vaultDeleteHold,
   resolveVaultListStatus,
   vaultRowControls,
+  vaultRebuildSpaceShort,
   vaultRowJobWork,
   vaultStatusLabelKey,
   VAULT_DELETE_HOLD_I18N_KEY,
@@ -50,6 +53,7 @@ import {
   shouldRecordVaultHidden,
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
+  type BackupLocation,
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
   type VaultExportRun,
@@ -70,6 +74,7 @@ import {
   useOperationLimit,
   useUnfinishedSweep,
   useVaultBackupJob,
+  useVaultRebuildJob,
   useVaultRewrapJob,
   type VaultRewrapOutcome,
   type VaultRewrapTarget,
@@ -548,9 +553,13 @@ export function useVaultListScreen() {
   const jobs = useJobService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
-    onSaved: (vaultId) => {
+    onSaved: (vaultId, saved) => {
       const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
-      showToast(t("toast.backup_now_saved", { name }));
+      showToast(
+        saved.fallback
+          ? t(backupFellBackToastKey(saved.fallback), { name })
+          : t("toast.backup_now_saved", { name }),
+      );
       setBackupListRefresh((token) => token + 1);
     },
     onFailed: (_vaultId, error) => {
@@ -579,6 +588,47 @@ export function useVaultListScreen() {
     onFailed: (error, target) => {
       setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error });
       if (!rewrapShown(target)) showError(error, "error.settings_save_failed");
+    },
+    onCancelled: () => showToast(t("error.job_cancelled")),
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
+  });
+  const vaultName = (vaultId: string) =>
+    vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
+  /** The lifecycle's open with a password, set once it exists below. */
+  const openWithPasswordRef = useRef<(vaultId: string, password: string) => boolean>(() => false);
+  const rebuild = useVaultRebuildJob(securityService, jobs, {
+    onRebuilt: (result, { vaultId }, password) => {
+      // The new index is sealed and recorded: the vault is closed, not in recovery.
+      setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
+      const name = vaultName(vaultId);
+      showToast(
+        result.setAside > 0
+          ? t("toast.vault_rebuilt_set_aside", {
+              name,
+              files: result.files,
+              count: result.setAside,
+            })
+          : t("toast.vault_rebuilt", { name, files: result.files }),
+      );
+      // Ready to use: it opens with the password the rebuild ran with. The
+      // rebuild no longer holds it, though the list has not drawn that yet.
+      if (!password) return;
+      blockOpenVaultIdsRef.current.delete(vaultId);
+      openWithPasswordRef.current(vaultId, password);
+    },
+    onFailed: (error, { vaultId }) => {
+      const space = vaultRebuildSpaceShort(error);
+      if (space) {
+        showToast(
+          t("toast.vault_rebuild_space_short", {
+            name: vaultName(vaultId),
+            needed: formatBytes(space.needed),
+            available: formatBytes(space.available),
+          }),
+        );
+        return;
+      }
+      showError(error, "toast.vault_rebuild_failed");
     },
     onCancelled: () => showToast(t("error.job_cancelled")),
     onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
@@ -621,6 +671,7 @@ export function useVaultListScreen() {
   blockOpenVaultIdsRef.current = new Set(
     [
       rewrap.job?.vaultId,
+      rebuild.job?.vaultId,
       backupJob.job?.vaultId,
       ...(dataFolderExport.job ? vaults.map((vault) => vault.id) : []),
     ].filter((id): id is string => id != null),
@@ -631,7 +682,14 @@ export function useVaultListScreen() {
   useEffect(() => {
     if (!lifecycleRequest || !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
-  }, [backupJob.job, dataFolderExport.job, lifecycleRequest, rewrap.job, setLifecycleRequest]);
+  }, [
+    backupJob.job,
+    dataFolderExport.job,
+    lifecycleRequest,
+    rebuild.job,
+    rewrap.job,
+    setLifecycleRequest,
+  ]);
 
   const lifecycle = useVaultLifecycleActions({
     vaults,
@@ -644,6 +702,7 @@ export function useVaultListScreen() {
     settingsPersistVaultIdsRef,
     blockOpenVaultIdsRef,
   });
+  openWithPasswordRef.current = lifecycle.openWithPassword;
   // The Export window follows its vault's export while one runs.
   const shownExportJob =
     lifecycle.exportJob?.vaultId === modals.exportVaultId ? lifecycle.exportJob : null;
@@ -685,12 +744,13 @@ export function useVaultListScreen() {
     [showHiddenVaults, vaults],
   );
   const rewrapJob = rewrap.job;
+  const rebuildJob = rebuild.job;
   const backupNowJob = backupJob.job;
   const quitClose = useQuitCloseProgress(vaults, setVaultRuntimeState);
   const pipelineListStatus = useMemo(() => {
     // A close this window started keeps its own row; the quit only adds the rest.
     const rowWork = { ...quitClose.rowWork, ...lifecycle.pipelineListStatus.rowWork };
-    for (const job of [rewrapJob, backupNowJob]) {
+    for (const job of [rewrapJob, rebuildJob, backupNowJob]) {
       if (!job) continue;
       rowWork[job.vaultId] = vaultRowJobWork({
         startedAt: job.startedAt,
@@ -712,6 +772,10 @@ export function useVaultListScreen() {
           ...quitClose.backingUpVaultIds,
         ]),
       ],
+      recoveringVaultIds: [
+        ...(lifecycle.pipelineListStatus.recoveringVaultIds ?? []),
+        ...(rebuildJob ? [rebuildJob.vaultId] : []),
+      ],
       passwordChangeVaultIds: rewrapJob?.kind === "password" ? [rewrapJob.vaultId] : undefined,
       kdfChangeVaultIds: rewrapJob?.kind === "kdf" ? [rewrapJob.vaultId] : undefined,
       backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
@@ -725,6 +789,7 @@ export function useVaultListScreen() {
     dataFolderExport.job,
     lifecycle.pipelineListStatus,
     quitClose,
+    rebuildJob,
     rewrapJob,
   ]);
 
@@ -732,10 +797,11 @@ export function useVaultListScreen() {
   const stopRowWork = useCallback(
     (vaultId: string) => {
       if (rewrapJob?.vaultId === vaultId) rewrap.stop();
+      else if (rebuildJob?.vaultId === vaultId) rebuild.stop();
       else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
       else lifecycle.stopVaultWork(vaultId);
     },
-    [backupJob, backupNowJob, lifecycle, rewrap, rewrapJob],
+    [backupJob, backupNowJob, lifecycle, rebuild, rebuildJob, rewrap, rewrapJob],
   );
 
   // Everything running, for the quit overlay; the counts go to Electron main,
@@ -996,7 +1062,7 @@ export function useVaultListScreen() {
   }, [dataFolderExport.job, showToast, t]);
 
   const handleCreateVaultFromBackup = useCallback(
-    (stamp: string, fileName: string, saved = false) => {
+    (stamp: string, fileName: string, saved = false, location?: BackupLocation) => {
       if (!modals.backupVault) return;
       if (refuseCreateWhileDataFolderExports()) return;
       modals.setCreateVaultInitialDraft(
@@ -1009,6 +1075,7 @@ export function useVaultListScreen() {
           groupIdContainingVault(groups, modals.backupVault.id),
           fileName,
           saved,
+          location,
         ),
       );
       modals.setCreateVaultInitialStep("source");
@@ -1113,7 +1180,7 @@ export function useVaultListScreen() {
   );
 
   const handleVaultDelete = useCallback(
-    async (vaultId: string) => {
+    async (vaultId: string, outsideBackups: boolean) => {
       if (lifecycle.pipeline.isVaultPipelineBusy(vaultId)) {
         showToast(t("toast.pipeline_busy"));
         return;
@@ -1131,7 +1198,12 @@ export function useVaultListScreen() {
       }
 
       try {
-        await vaultService.unregisterSettings(vaultId);
+        const deleted = await vaultService.unregisterSettings(vaultId, outsideBackups);
+        const params = { name: target?.displayName ?? vaultId, folder: deleted.folder ?? "" };
+        if (deleted.outside === "kept") showToast(t("toast.vault_deleted_outside_kept", params));
+        if (deleted.outside === "failed") {
+          showToast(t("toast.vault_deleted_outside_failed", params));
+        }
       } catch (error) {
         showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
         throw error;
@@ -1459,6 +1531,17 @@ export function useVaultListScreen() {
       onLifecycleStop: () => {
         if (modals.lifecycleVault) lifecycle.stopVaultWork(modals.lifecycleVault.id);
       },
+      onLifecycleRebuild: (password: string) => {
+        const vault = modals.lifecycleVault;
+        if (!vault) return;
+        if (!rebuild.rebuild(vault.id, password)) {
+          showToast(t("toast.vault_rebuild_busy"));
+          return;
+        }
+        // The list owns the rebuild: the row shows it, and the window closes.
+        lifecycle.abandonCredentialVerify();
+        modals.setLifecycleRequest(null);
+      },
       recoveryVault: modals.recoveryVault,
       recoveryOpen: modals.recoveryVaultId !== null,
       onRecoveryClose: () => modals.setRecoveryVaultId(null),
@@ -1630,8 +1713,9 @@ export function useVaultListScreen() {
             job: dataFolderExport.job,
             written: dataFolderExport.written,
             clearWritten: dataFolderExport.clearWritten,
-            onStart: (destDir: string, name: string) =>
-              dataFolderExportCanStart && dataFolderExport.start(destDir, name),
+            outsideBackups: vaults.filter((vault) => vault.outsideBackups).length,
+            onStart: (destDir: string, name: string, includeBackups: boolean) =>
+              dataFolderExportCanStart && dataFolderExport.start(destDir, name, includeBackups),
             onStop: dataFolderExport.stop,
           }
         : undefined,

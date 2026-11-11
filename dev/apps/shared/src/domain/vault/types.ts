@@ -79,7 +79,10 @@ export type VaultPipelineListStatus = {
    * edit-policy `backupExportLocked`).
    */
   backupExportVaultIds?: readonly string[];
-  /** Vault whose leftover plain-text folder is being wiped. Displays `recovering`. */
+  /**
+   * Vault whose leftover plain-text folder is being wiped, or whose lost
+   * index is being rebuilt. Displays `recovering`.
+   */
   recoveringVaultIds?: readonly string[];
   /** Closed vault whose password rewrap is in flight. */
   passwordChangeVaultIds?: readonly string[];
@@ -215,6 +218,8 @@ export interface VaultRow {
   hidden?: boolean;
   /** A plaintext folder from an earlier session waits to be removed. */
   plainLeftover?: boolean;
+  /** Backups of this vault went to the folder it uses now outside the data folder. */
+  outsideBackups?: boolean;
 }
 
 /**

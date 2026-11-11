@@ -4,6 +4,7 @@ import { useTranslation, type I18nKey } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import {
   useOperationLimit,
+  usePasswordWeakness,
   type VaultRewrapJob,
   type VaultRewrapOutcome,
 } from "@upriv/shared/react";
@@ -38,14 +39,20 @@ import type {
   VaultPipelineListStatus,
   KdfUnlockPreset,
   VaultRewrapKind,
+  BackupFolderTable,
+  VaultBackupFolders,
 } from "@upriv/shared";
 import {
+  backupFolderLeftBehind,
+  backupFolderSystem,
+  currentWorkspaceSystem,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   changeKdfFormCanSubmit,
   DEFAULT_KDF_UNLOCK_PRESET,
   changeKdfFormIsDirty,
   changePasswordFormCanSubmit,
   changePasswordFormIsDirty,
+  vaultPublicText,
   displayNameErrorI18nKey,
   EMPTY_CHANGE_PASSWORD_FIELDS,
   errorDisplayI18nKey,
@@ -111,7 +118,7 @@ interface VaultSettingsModalProps {
     vaultId: string,
     assignment: CreateVaultGroupAssignment,
   ) => Promise<void> | void;
-  onVaultDelete?: (vaultId: string) => Promise<void> | void;
+  onVaultDelete?: (vaultId: string, outsideBackups: boolean) => Promise<void> | void;
   /** List toast. A save or a rewrap can finish after this modal closes. */
   onNotice?: (message: string) => void;
   /** The password or unlock-RAM change in flight; the list owns it. */
@@ -186,6 +193,8 @@ export function VaultSettingsModal({
   const [loadTimedOut, setLoadTimedOut] = useState(false);
   const [mountPathIssue, setMountPathIssue] = useState(false);
   const [mountDriverAttention, setMountDriverAttention] = useState(false);
+  const [backupFolderBlocking, setBackupFolderBlocking] = useState(false);
+  const [removeOutsideBackups, setRemoveOutsideBackups] = useState(false);
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   /** Invalidates a submit that ran past `OPERATION_LIMIT_MS`. */
   const sectionBusyGenRef = useRef(0);
@@ -246,6 +255,8 @@ export function VaultSettingsModal({
       setResolvedRootPath(null);
       setMountPathIssue(false);
       setMountDriverAttention(false);
+      setBackupFolderBlocking(false);
+      setRemoveOutsideBackups(false);
       return;
     }
     let cancelled = false;
@@ -334,6 +345,21 @@ export function VaultSettingsModal({
     vaultListStatus,
     submitting: passwordRewrapRunning,
   });
+
+  const vaultText = useMemo(
+    () =>
+      vaultPublicText({
+        displayName: vault?.displayName ?? "",
+        passwordHint: config?.vault.password_hint ?? "",
+        note: config?.vault.note ?? "",
+      }),
+    [vault?.displayName, config?.vault.password_hint, config?.vault.note],
+  );
+  const passwordWeakness = usePasswordWeakness(
+    passwordFields.newPassword,
+    vaultText,
+    passwordFields.currentPassword,
+  );
 
   const kdfCanSubmit =
     headerUnlockPreset !== undefined &&
@@ -535,6 +561,15 @@ export function VaultSettingsModal({
           await vaultService.registerSettings(toSave.vault.id, toSave);
         }
         onVaultSettingsSaved?.(fromId, vaultSettingsToListPatch(toSave));
+        const backupSystem = backupFolderSystem(currentWorkspaceSystem());
+        if (backupSystem) {
+          const app = appSettings.backups[backupSystem];
+          const leftBehind = backupFolderLeftBehind(
+            { app, vault: baseline.backup[backupSystem] },
+            { app, vault: toSave.backup[backupSystem] },
+          );
+          if (leftBehind) notice(t("toast.backup_folder_changed"));
+        }
         if (generation !== sectionBusyGenRef.current) return;
         if (!showing()) {
           notice(t("toast.settings_saved_for", { name: toSave.vault.display_name }));
@@ -586,6 +621,7 @@ export function VaultSettingsModal({
       t,
       vaultService,
       flashSaved,
+      appSettings.backups,
     ],
   );
 
@@ -851,7 +887,16 @@ export function VaultSettingsModal({
 
   const handleSaveClick = () => {
     if (settingsSaveBlocked) return;
-    if (!activeArea || !areaDirty || sectionBusy || mountPathIssue || mountDriverAttention) return;
+    if (
+      !activeArea ||
+      !areaDirty ||
+      sectionBusy ||
+      mountPathIssue ||
+      mountDriverAttention ||
+      backupFolderBlocking
+    ) {
+      return;
+    }
 
     if (activeArea === "preferences" && draft) {
       const validation = validateDisplayName(draft.vault.display_name);
@@ -869,7 +914,15 @@ export function VaultSettingsModal({
     if (settingsSaveBlocked) return;
     if (!activeArea || sectionBusy) return;
     if (activeArea === "preferences") {
-      if (!draft || !preferencesDirty || mountPathIssue || mountDriverAttention) return;
+      if (
+        !draft ||
+        !preferencesDirty ||
+        mountPathIssue ||
+        mountDriverAttention ||
+        backupFolderBlocking
+      ) {
+        return;
+      }
       void persistPreferences(draft);
       return;
     }
@@ -901,10 +954,11 @@ export function VaultSettingsModal({
     const generation = (sectionBusyGenRef.current += 1);
     setSectionBusy(true);
     try {
-      await onVaultDelete?.(vault.id);
+      await onVaultDelete?.(vault.id, removeOutsideBackups);
       if (generation !== sectionBusyGenRef.current) return;
       setDeleteOpen(false);
       setDeleteConfirm("");
+      setRemoveOutsideBackups(false);
       if (openRef.current) handleCloseModal();
     } catch (error) {
       if (generation !== sectionBusyGenRef.current) return;
@@ -958,6 +1012,7 @@ export function VaultSettingsModal({
     !areaDirty ||
     mountPathIssue ||
     mountDriverAttention ||
+    backupFolderBlocking ||
     (activeArea === "preferences" && !vaultService.canPersistSettings) ||
     (activeArea === "password" && !passwordCanSubmit) ||
     (activeArea === "kdf" && !kdfCanSubmit);
@@ -1140,6 +1195,12 @@ export function VaultSettingsModal({
                       setMountPathIssue,
                       setMountDriverAttention,
                       appSettings.workspace,
+                      {
+                        appBackups: appSettings.backups,
+                        vaultId: vault.id,
+                        saved: baseline?.backup ?? null,
+                        onBlockingChange: setBackupFolderBlocking,
+                      },
                     )}
                   </VaultSettingsSection>
                 ))}
@@ -1155,9 +1216,13 @@ export function VaultSettingsModal({
                       setDeleteOpen(true);
                       setDeleteConfirm("");
                     }}
+                    outsideBackups={vault.outsideBackups === true}
+                    removeOutsideBackups={removeOutsideBackups}
+                    onRemoveOutsideBackupsChange={setRemoveOutsideBackups}
                     onCancelDelete={() => {
                       setDeleteOpen(false);
                       setDeleteConfirm("");
+                      setRemoveOutsideBackups(false);
                     }}
                     onConfirmDelete={() => {
                       void handleConfirmDelete();
@@ -1179,6 +1244,7 @@ export function VaultSettingsModal({
                 </p>
                 <VaultChangePasswordFields
                   fields={passwordFields}
+                  weakness={passwordWeakness}
                   rewrapBlocked={rewrapBlocked && !passwordRewrapRunning}
                   busy={passwordRewrapRunning}
                   passwordFieldError={passwordFieldError}
@@ -1258,6 +1324,12 @@ function renderPreferenceSection(
   onMountPathIssue: (invalid: boolean) => void,
   onDriverAttentionChange: (active: boolean) => void,
   appWorkspace: WorkspaceTable,
+  backupFolder: {
+    appBackups: BackupFolderTable;
+    vaultId: string;
+    saved: VaultBackupFolders | null;
+    onBlockingChange: (blocking: boolean) => void;
+  },
 ) {
   switch (sectionId) {
     case "vault":
@@ -1308,6 +1380,11 @@ function renderPreferenceSection(
         <VaultSettingsBackupSection
           config={draft.backup}
           onChange={(patch) => patchDraft("backup", patch)}
+          appBackups={backupFolder.appBackups}
+          vaultId={backupFolder.vaultId}
+          vaultRootPath={vaultRootPath}
+          saved={backupFolder.saved}
+          onFolderBlockingChange={backupFolder.onBlockingChange}
         />
       );
     default:

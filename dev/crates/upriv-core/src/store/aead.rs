@@ -15,11 +15,13 @@ use crate::error::{Result, UprivError};
 pub const MASTER_KEY_LEN: usize = 32;
 pub const CONTENT_KEY_LEN: usize = 32;
 pub const INDEX_KEY_LEN: usize = 64;
+pub const RECORD_KEY_LEN: usize = 32;
 pub const XCHACHA_NONCE_LEN: usize = 24;
 pub const AES_SIV_NONCE_LEN: usize = 16;
 
 const HKDF_CONTENT_INFO: &[u8] = b"upriv-content-key-v1";
 const HKDF_INDEX_INFO: &[u8] = b"upriv-index-key-v1";
+const HKDF_RECORD_INFO: &[u8] = b"upriv-record-key-v1";
 
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
@@ -33,10 +35,24 @@ pub fn random_master_key() -> Zeroizing<[u8; MASTER_KEY_LEN]> {
 
 pub type ContentKey = Zeroizing<[u8; CONTENT_KEY_LEN]>;
 pub type IndexKey = Zeroizing<[u8; INDEX_KEY_LEN]>;
+pub type RecordKey = Zeroizing<[u8; RECORD_KEY_LEN]>;
+
+/// One key per layer of the store, each its own HKDF label of the master key,
+/// so no layer shares a key with another.
+pub struct LayerKeys {
+    /// File chunks.
+    pub content: ContentKey,
+    /// The sealed tree.
+    pub index: IndexKey,
+    /// The recovery records blobs carry ([`super::record`]).
+    pub record: RecordKey,
+}
 
 /// HKDF-SHA256, `salt=None` (RFC 5869 zeros). Intentional: IKM is a 32-byte
 /// CSPRNG master. Do not add a public salt without a `format_version` bump.
-pub fn derive_layer_keys(master: &[u8; MASTER_KEY_LEN]) -> Result<(ContentKey, IndexKey)> {
+/// A password or unlock-RAM change keeps the master key, so it keeps every
+/// layer key, and the blobs and their records stay as they are.
+pub fn derive_layer_keys(master: &[u8; MASTER_KEY_LEN]) -> Result<LayerKeys> {
     let hk = Hkdf::<Sha256>::new(None, master);
     let mut content = Zeroizing::new([0u8; CONTENT_KEY_LEN]);
     hk.expand(HKDF_CONTENT_INFO, content.as_mut())
@@ -44,7 +60,14 @@ pub fn derive_layer_keys(master: &[u8; MASTER_KEY_LEN]) -> Result<(ContentKey, I
     let mut index = Zeroizing::new([0u8; INDEX_KEY_LEN]);
     hk.expand(HKDF_INDEX_INFO, index.as_mut())
         .map_err(|_| store_err("HKDF index key expand failed"))?;
-    Ok((content, index))
+    let mut record = Zeroizing::new([0u8; RECORD_KEY_LEN]);
+    hk.expand(HKDF_RECORD_INFO, record.as_mut())
+        .map_err(|_| store_err("HKDF record key expand failed"))?;
+    Ok(LayerKeys {
+        content,
+        index,
+        record,
+    })
 }
 
 pub fn wrap_master_key(
@@ -157,6 +180,21 @@ fn store_err(detail: &str) -> UprivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_layer_has_its_own_key() {
+        let master = [9u8; MASTER_KEY_LEN];
+        let keys = derive_layer_keys(&master).unwrap();
+        let record = keys.record.as_slice();
+        assert_ne!(record, keys.content.as_slice());
+        assert_ne!(record, &keys.index[..RECORD_KEY_LEN]);
+        assert_ne!(record, &keys.index[RECORD_KEY_LEN..]);
+        assert_ne!(keys.content.as_slice(), &keys.index[..CONTENT_KEY_LEN]);
+        let again = derive_layer_keys(&master).unwrap();
+        assert_eq!(again.record.as_slice(), record);
+        assert_eq!(again.content.as_slice(), keys.content.as_slice());
+        assert_eq!(again.index.as_slice(), keys.index.as_slice());
+    }
 
     #[test]
     fn encrypt_xchacha_rejects_empty_aad() {

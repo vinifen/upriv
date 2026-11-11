@@ -98,7 +98,7 @@ interface ExportIncludeSwitchesProps {
   onChange: (include: VaultExportInclude) => void;
 }
 
-/** What `.upriv-config/` carries beside the vault's files. */
+/** What `.upriv-config/` carries beside the vault folder. */
 function ExportIncludeSwitches({ include, disabled, onChange }: ExportIncludeSwitchesProps) {
   const { t } = useTranslation();
   return (
@@ -271,7 +271,7 @@ export function ExportVaultModal({
   };
 
   const folderHint = (option: VaultExportFormat) =>
-    t("vault.export.dialog.folder_hint", {
+    t("vault.export.dialog.package_hint", {
       filename: vaultExportFilename(vault.displayName, option),
       numbered: vaultExportFilename(vault.displayName, option, 2),
     });

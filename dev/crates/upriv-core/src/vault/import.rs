@@ -4,7 +4,7 @@
 use crate::host_fs::File;
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Seek};
 use std::path::Path;
 
 use crate::config::{known_vault_ids, save_vault_config, VaultConfig};
@@ -17,11 +17,12 @@ use crate::store::{content_hash_hex, load_header, INDEX_DIR_NAME};
 use super::backup::{backup_locator_from_leaf, backup_zip_file, copy_ciphertext_tree};
 use super::create::claim_new_vault_dir;
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
+use super::package::imported_vault_name;
 use super::persistence::{save_vault_persistence, VaultPersistence};
 use super::seven_zip_pack::{ensure_free_ram, try_vec_with_capacity};
 use super::unfinished::{forget_import, record_import};
 use super::zip_io::{
-    buffered_zip_reader, read_zip_config_toml, unzip_store_bytes, unzip_store_path,
+    buffered_zip_reader, read_store_zip_config, unzip_store_bytes, unzip_store_path, StoreEnvelope,
 };
 
 pub(crate) fn map_archive_open_error(path: &Path, error: std::io::Error) -> UprivError {
@@ -192,31 +193,67 @@ pub fn parse_backup_import_path(path: &str) -> Option<(String, String)> {
     if parts.get(vaults_idx + 2).copied() != Some("backups") {
         return None;
     }
-    match parts.get(vaults_idx + 3).copied() {
+    let mut at = vaults_idx + 3;
+    let place = if parts.get(at).copied() == Some("chosen") {
+        at += 1;
+        "chosen/"
+    } else {
+        ""
+    };
+    match parts.get(at).copied() {
         Some("saves") => {
-            let raw = (*parts.get(vaults_idx + 4)?).to_string();
+            let raw = (*parts.get(at + 1)?).to_string();
             let stamp = backup_locator_from_leaf(&raw)?;
-            if parts.len() != vaults_idx + 5 {
+            if parts.len() != at + 2 {
                 return None;
             }
-            Some((id, format!("saves/{stamp}")))
+            Some((id, format!("{place}saves/{stamp}")))
         }
         Some(raw) => {
             let stamp = backup_locator_from_leaf(raw)?;
-            if parts.len() != vaults_idx + 4 {
+            if parts.len() != at + 1 {
                 return None;
             }
-            Some((id, stamp))
+            Some((id, format!("{place}{stamp}")))
         }
         None => None,
     }
 }
 
-/// Public settings inside a store zip or a backup locator. Missing entry is `Ok(None)`.
-pub fn read_import_zip_settings(
-    root: &VaultRoot,
-    archive_path: &str,
-) -> Result<Option<EmbeddedVaultSettings>> {
+/// What a store zip carries for the vault made from it.
+#[derive(Debug, Clone)]
+pub struct StoreZipSettings {
+    /// The `config.toml` beside `store/`; `None` when the zip has none.
+    pub settings: Option<EmbeddedVaultSettings>,
+    /// The name the new vault takes: the name its settings hold, as the
+    /// person typed it, or else an export's vault folder, the id of the vault
+    /// it came from (`super::package::imported_vault_name`).
+    pub vault_name: Option<String>,
+}
+
+fn store_zip_settings<R: Read + Seek>(reader: R) -> Result<StoreZipSettings> {
+    let (envelope, config) = read_store_zip_config(reader)?;
+    let settings = config
+        .map(|bytes| parse_embedded_settings(&bytes))
+        .transpose()?;
+    let carried = settings
+        .as_ref()
+        .map(|settings| settings.config.vault.display_name.as_str());
+    let vault_name = match envelope.as_ref().and_then(StoreEnvelope::package) {
+        Some(package) => Some(imported_vault_name(carried, package)),
+        None => carried
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_string),
+    };
+    Ok(StoreZipSettings {
+        settings,
+        vault_name,
+    })
+}
+
+/// Public settings and the vault's name inside a store zip or a backup
+/// locator. A missing `config.toml` is no settings.
+pub fn read_import_zip_settings(root: &VaultRoot, archive_path: &str) -> Result<StoreZipSettings> {
     let zip_path = if let Some((id, stamp)) = parse_backup_import_path(archive_path) {
         backup_zip_file(root, &id, &stamp)?
     } else {
@@ -227,10 +264,12 @@ pub fn read_import_zip_settings(
         path.to_path_buf()
     };
     let file = File::open(&zip_path).map_err(|error| map_archive_open_error(&zip_path, error))?;
-    match read_zip_config_toml(buffered_zip_reader(file)?)? {
-        Some(bytes) => Ok(Some(parse_embedded_settings(&bytes)?)),
-        None => Ok(None),
-    }
+    store_zip_settings(buffered_zip_reader(file)?)
+}
+
+/// [`read_import_zip_settings`] for a store zip already in memory.
+pub fn read_import_zip_bytes_settings(zip_bytes: &[u8]) -> Result<StoreZipSettings> {
+    store_zip_settings(std::io::Cursor::new(zip_bytes))
 }
 
 /// Unpack `backups/<stamp>-<id>.zip` into a new vault.
@@ -338,6 +377,21 @@ mode = "encrypted_dir"
         assert_eq!(parse_backup_import_path("/tmp/Notes.zip"), None);
         assert_eq!(parse_backup_import_path("vaults/notes/store"), None);
         assert_eq!(
+            parse_backup_import_path("vaults/notes/backups/chosen/20260528120000-notes.zip"),
+            Some(("notes".into(), "chosen/20260528120000-notes.zip".into()))
+        );
+        assert_eq!(
+            parse_backup_import_path("vaults/notes/backups/chosen/saves/20260528120000-notes.zip"),
+            Some((
+                "notes".into(),
+                "chosen/saves/20260528120000-notes.zip".into()
+            ))
+        );
+        assert_eq!(
+            parse_backup_import_path("vaults/notes/backups/chosen/chosen/20260528120000.zip"),
+            None
+        );
+        assert_eq!(
             parse_backup_import_path("/tmp/vaults/notes/backups/Notes.zip"),
             None
         );
@@ -414,12 +468,12 @@ mode = "encrypted_dir"
             .find(|&index| archive.by_index(index).unwrap().name().ends_with(&a_blob))
             .expect("the blob of a.txt");
         let entry = archive.by_index(blob).unwrap();
-        let last = (entry.data_start() + entry.compressed_size() - 1) as usize;
+        // Past the nonce, inside the blob's one chunk: the zip checksum no
+        // longer matches either.
+        let in_chunk = (entry.data_start() + 30) as usize;
         drop(entry);
         drop(archive);
-        // The blob's last byte, inside its AEAD tag: the zip checksum no
-        // longer matches either.
-        bytes[last] ^= 0x01;
+        bytes[in_chunk] ^= 0x01;
         let damaged = tmp.path().join("damaged.zip");
         crate::host_fs::write(&damaged, &bytes).unwrap();
 

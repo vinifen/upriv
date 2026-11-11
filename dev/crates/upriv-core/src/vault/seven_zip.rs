@@ -5,7 +5,7 @@
 //! payload. Members stream into `store/` in waves. Each full wave seals the
 //! index; the tail is sealed after the last member.
 //! Plaintext is capped at 64 times the archive length, the same factor as a
-//! files zip. `.upriv-config/` beside the vault's files is optional: an export
+//! files zip. `.upriv-config/` beside the vault folder is optional: an export
 //! writes it as the archive's first block, so a password test reads the
 //! settings without decoding a vault file.
 
@@ -32,6 +32,7 @@ use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
 use super::import_job::fill_new_vault;
+use super::package::{imported_vault_name, Package, PackageWalk, Placed};
 use super::seven_zip_pack::{seven_zip_decode_threads, sevenz_member_name_unsafe, sevenz_password};
 
 const ARCHIVE_READ_BUFFER: usize = 1024 * 1024;
@@ -142,16 +143,16 @@ fn normalize_member_name(name: &str) -> String {
 
 #[derive(Debug)]
 enum ArchiveMember {
-    /// `None` is the outer folder. `Some` is a vault folder under it.
+    /// `None` is one of the package's folders. `Some` is a vault folder.
     Directory(Option<String>),
-    /// Logical path with the outer folder removed.
+    /// Logical path under the package's vault folder.
     File(String),
-    /// `.upriv-config/config.toml`.
+    /// `config.toml` of `.upriv-config/`, beside the vault folder.
     Settings,
-    /// `.upriv-config/workspace.json`.
+    /// `workspace.json` of `.upriv-config/`.
     Workspace,
     /// A file that is not vault data: the rest of `.upriv-config/`, or a
-    /// plaintext-folder marker.
+    /// name a vault never holds.
     Skipped,
 }
 
@@ -162,12 +163,9 @@ fn archive_layout_error(detail: impl Into<String>) -> UprivError {
     }
 }
 
-/// One outer folder. Every document sits directly under it, beside an optional
-/// `.upriv-config/`.
-fn classify_archive_member(
-    entry: &ArchiveEntry,
-    outer: &mut Option<String>,
-) -> Result<ArchiveMember> {
+/// The package (`super::package`): one folder holding the vault folder, with
+/// the vault's documents, and an optional `.upriv-config/` beside it.
+fn classify_archive_member(entry: &ArchiveEntry, walk: &mut PackageWalk) -> Result<ArchiveMember> {
     if entry.is_anti_item {
         return Err(archive_layout_error("refusing a .7z anti-item"));
     }
@@ -175,36 +173,21 @@ fn classify_archive_member(
     if sevenz_member_name_unsafe(&name) {
         return Err(archive_layout_error("refusing an unsafe .7z member path"));
     }
-    let parts: Vec<&str> = name.split('/').filter(|part| !part.is_empty()).collect();
-    let Some(folder) = parts.first().copied() else {
-        return Err(archive_layout_error("missing .7z outer folder"));
+    let logical = match walk.place(&name, entry.is_directory) {
+        Ok(Placed::Vault(logical)) => logical,
+        Ok(Placed::Folder) => return Ok(ArchiveMember::Directory(None)),
+        Ok(Placed::Config(_)) if entry.is_directory => return Ok(ArchiveMember::Directory(None)),
+        Ok(Placed::Config(file)) => {
+            return Ok(match config_member(&file) {
+                ConfigMember::Settings => ArchiveMember::Settings,
+                ConfigMember::Workspace => ArchiveMember::Workspace,
+                ConfigMember::Other => ArchiveMember::Skipped,
+            });
+        }
+        Err(detail) => return Err(archive_layout_error(detail)),
     };
-    match outer {
-        Some(current) if current != folder => {
-            return Err(archive_layout_error(
-                "a .7z must contain exactly one top folder",
-            ));
-        }
-        None => *outer = Some(folder.to_string()),
-        Some(_) => {}
-    }
-    if parts.len() == 1 {
-        if entry.is_directory {
-            return Ok(ArchiveMember::Directory(None));
-        }
-        return Err(archive_layout_error(
-            "a file must sit under the outer folder",
-        ));
-    }
     if entry.is_directory {
-        return Ok(ArchiveMember::Directory(Some(parts[1..].join("/"))));
-    }
-    let logical = parts[1..].join("/");
-    match config_member(&logical) {
-        Some(ConfigMember::Settings) => return Ok(ArchiveMember::Settings),
-        Some(ConfigMember::Workspace) => return Ok(ArchiveMember::Workspace),
-        Some(ConfigMember::Other) => return Ok(ArchiveMember::Skipped),
-        None => {}
+        return Ok(ArchiveMember::Directory(Some(logical)));
     }
     if is_skipped_on_import(&logical) {
         return Ok(ArchiveMember::Skipped);
@@ -224,7 +207,7 @@ struct MemberIngest<'a> {
     root: &'a VaultRoot,
     vault_id: &'a str,
     keep_workspace: bool,
-    outer: Option<String>,
+    walk: PackageWalk,
     budget: u64,
     folders: HashSet<String>,
     /// The carried file-manager layout, when `keep_workspace` asked for it.
@@ -235,7 +218,7 @@ impl MemberIngest<'_> {
     /// Stages the member. The caller seals each full wave, then the tail.
     /// Every member's bytes are read through: the decoder reads them in order.
     fn ingest(&mut self, entry: &ArchiveEntry, payload: &mut dyn Read) -> Result<()> {
-        let member = classify_archive_member(entry, &mut self.outer)?;
+        let member = classify_archive_member(entry, &mut self.walk)?;
         match &member {
             ArchiveMember::Directory(None) => return Ok(()),
             ArchiveMember::Directory(Some(logical)) if is_reserved_logical(logical) => {
@@ -283,19 +266,47 @@ impl MemberIngest<'_> {
     }
 }
 
-/// Password check, and the settings the archive carries.
+/// What a `.7z`'s password test learns.
+#[derive(Debug, Clone)]
+pub struct SevenZipProbe {
+    /// The settings its `.upriv-config/` carries.
+    pub settings: Option<EmbeddedVaultSettings>,
+    /// The name the new vault takes: the name those settings hold, or else
+    /// its package's vault folder (`super::package::imported_vault_name`).
+    pub vault_name: String,
+}
+
+fn missing_vault_folder() -> UprivError {
+    archive_layout_error("missing .7z vault folder")
+}
+
+/// The package every member name of `reader` forms, read from the archive's
+/// listing without decoding a member.
+fn archive_package<R: Read + Seek>(reader: &ArchiveReader<R>) -> Result<Package> {
+    let mut walk = PackageWalk::default();
+    for entry in &reader.archive().files {
+        let name = normalize_member_name(entry.name());
+        walk.place(&name, entry.is_directory())
+            .map_err(archive_layout_error)?;
+    }
+    walk.package().ok_or_else(missing_vault_folder)
+}
+
+/// Password check, the settings the archive carries, and its vault's name.
 ///
 /// A wrong password fails even when the header is not encrypted: `config.toml`
 /// is read to its end, so its checksum is checked, or else one byte of the first
-/// file is decoded. An archive that is only the outer folder succeeds after that
-/// directory is classified. Only the first member is read, so no vault file is
-/// decoded for the settings.
+/// file is decoded. An archive that is only its package's folders succeeds
+/// after they are classified. Only the first member is read, so no vault file
+/// is decoded for the settings. The vault folder comes from the names of
+/// every member, which the settings beside it do not carry.
 fn probe_reader<R: Read + Seek>(
     reader: &mut ArchiveReader<R>,
     archive_len: u64,
-) -> Result<Option<EmbeddedVaultSettings>> {
+) -> Result<SevenZipProbe> {
+    let package = archive_package(reader)?;
     let budget = plaintext_budget(archive_len);
-    let mut outer = None;
+    let mut walk = PackageWalk::default();
     let mut settings = None;
     let mut layout_error: Option<UprivError> = None;
     reader
@@ -303,7 +314,7 @@ fn probe_reader<R: Read + Seek>(
             if layout_error.is_some() {
                 return Ok(false);
             }
-            match classify_archive_member(entry, &mut outer) {
+            match classify_archive_member(entry, &mut walk) {
                 Ok(ArchiveMember::Directory(_)) => Ok(true),
                 Ok(ArchiveMember::Settings) => {
                     settings = read_carried_settings(payload)?;
@@ -336,32 +347,36 @@ fn probe_reader<R: Read + Seek>(
     if let Some(error) = layout_error {
         return Err(error);
     }
-    if outer.is_none() {
-        return Err(archive_layout_error("missing .7z outer folder"));
-    }
-    Ok(settings)
+    let carried = settings
+        .as_ref()
+        .map(|settings| settings.config.vault.display_name.as_str());
+    let vault_name = imported_vault_name(carried, &package);
+    Ok(SevenZipProbe {
+        settings,
+        vault_name,
+    })
 }
 
-/// Password check of a `.7z` in memory, and the settings it carries, as the
-/// job `job_id`.
+/// Password check of a `.7z` in memory, the settings it carries, and its
+/// vault's name, as the job `job_id`.
 pub fn probe_logical_seven_zip(
     archive_bytes: &[u8],
     archive_password: &[u8],
     job_id: &str,
-) -> Result<Option<EmbeddedVaultSettings>> {
+) -> Result<SevenZipProbe> {
     Job::run(job_id, JobKind::ImportProbe, None, |job| {
         let mut reader = open_archive_reader(archive_bytes, archive_password, job)?;
         probe_reader(&mut reader, archive_bytes.len() as u64)
     })
 }
 
-/// Password check of a `.7z` file, and the settings it carries, as the job
-/// `job_id`. The compressed bytes stay on disk.
+/// Password check of a `.7z` file, the settings it carries, and its vault's
+/// name, as the job `job_id`. The compressed bytes stay on disk.
 pub fn probe_logical_seven_zip_path(
     path: &Path,
     archive_password: &[u8],
     job_id: &str,
-) -> Result<Option<EmbeddedVaultSettings>> {
+) -> Result<SevenZipProbe> {
     Job::run(job_id, JobKind::ImportProbe, None, |job| {
         let (mut reader, len) = open_archive_path(path, archive_password, job)?;
         probe_reader(&mut reader, len)
@@ -388,7 +403,7 @@ fn import_reader<R: Read + Seek>(
             root,
             vault_id: id,
             keep_workspace: extras.keep_workspace,
-            outer: None,
+            walk: PackageWalk::default(),
             budget: plaintext_budget(archive_len),
             folders: HashSet::new(),
             layout: None,
@@ -417,8 +432,8 @@ fn import_reader<R: Read + Seek>(
         if let Some(error) = write_error {
             return Err(error);
         }
-        if members.outer.is_none() {
-            return Err(archive_layout_error("missing .7z outer folder"));
+        if std::mem::take(&mut members.walk).package().is_none() {
+            return Err(missing_vault_folder());
         }
         fs_seal_staged_imports(root, id)?;
         extras.seal(root, id, members.layout)
@@ -479,60 +494,85 @@ mod import_mem_tests {
     use super::*;
     use crate::{close_vault, create_vault, open_vault};
 
+    fn member(name: &str, is_directory: bool) -> ArchiveEntry {
+        let mut entry = ArchiveEntry::new();
+        entry.name = name.into();
+        entry.is_directory = is_directory;
+        entry
+    }
+
     #[test]
-    fn classifies_the_outer_folder_layout() {
-        let mut outer = None;
-        let mut settings = ArchiveEntry::new();
-        settings.name = "Notes/config.toml".into();
-        match classify_archive_member(&settings, &mut outer).unwrap() {
+    fn classifies_the_package_layout() {
+        let mut walk = PackageWalk::default();
+        for folder in ["Notes-sevenzip", "Notes-sevenzip/Notes"] {
+            assert!(matches!(
+                classify_archive_member(&member(folder, true), &mut walk).unwrap(),
+                ArchiveMember::Directory(None)
+            ));
+        }
+        match classify_archive_member(
+            &member("Notes-sevenzip/Notes/config.toml", false),
+            &mut walk,
+        )
+        .unwrap()
+        {
             ArchiveMember::File(logical) => assert_eq!(logical, "config.toml"),
             other => panic!("expected a file, got {other:?}"),
         }
-
-        let mut doc = ArchiveEntry::new();
-        doc.name = "Notes/docs/hi.txt".into();
-        match classify_archive_member(&doc, &mut outer).unwrap() {
+        match classify_archive_member(
+            &member("Notes-sevenzip/Notes/docs/hi.txt", false),
+            &mut walk,
+        )
+        .unwrap()
+        {
             ArchiveMember::File(logical) => assert_eq!(logical, "docs/hi.txt"),
             other => panic!("expected a file, got {other:?}"),
         }
 
-        let mut nested_layout = ArchiveEntry::new();
-        nested_layout.name = "Notes/docs/.upriv-workspace.json".into();
-        assert!(classify_archive_member(&nested_layout, &mut outer).is_err());
+        for reserved in [
+            "Notes-sevenzip/Notes/docs/.upriv-workspace.json",
+            "Notes-sevenzip/Notes/.upriv-workspace.json",
+        ] {
+            assert!(classify_archive_member(&member(reserved, false), &mut walk).is_err());
+        }
 
-        let mut layout = ArchiveEntry::new();
-        layout.name = "Notes/.upriv-workspace.json".into();
-        assert!(classify_archive_member(&layout, &mut outer).is_err());
-
-        let mut carried = ArchiveEntry::new();
-        carried.name = "Notes/.upriv-config/config.toml".into();
+        let carried = |name: &str, walk: &mut PackageWalk| {
+            classify_archive_member(&member(name, false), walk).unwrap()
+        };
+        // What the export carries sits beside the vault folder.
         assert!(matches!(
-            classify_archive_member(&carried, &mut outer).unwrap(),
+            carried("Notes-sevenzip/.upriv-config/config.toml", &mut walk),
             ArchiveMember::Settings
         ));
-        carried.name = "Notes/.upriv-config/workspace.json".into();
         assert!(matches!(
-            classify_archive_member(&carried, &mut outer).unwrap(),
+            carried("Notes-sevenzip/.upriv-config/workspace.json", &mut walk),
             ArchiveMember::Workspace
         ));
-        carried.name = "Notes/.upriv-config/README.md".into();
         assert!(matches!(
-            classify_archive_member(&carried, &mut outer).unwrap(),
+            carried("Notes-sevenzip/.upriv-config/README.md", &mut walk),
             ArchiveMember::Skipped
         ));
-        carried.name = "Notes/docs/.upriv-config/config.toml".into();
-        assert!(matches!(
-            classify_archive_member(&carried, &mut outer).unwrap(),
-            ArchiveMember::Skipped
-        ));
+        // A vault never holds the name: inside the vault folder it is skipped.
+        for inside in [
+            "Notes-sevenzip/Notes/.upriv-config/config.toml",
+            "Notes-sevenzip/Notes/docs/.upriv-config/config.toml",
+        ] {
+            assert!(matches!(carried(inside, &mut walk), ArchiveMember::Skipped));
+        }
 
-        let mut second = ArchiveEntry::new();
-        second.name = "Other/notes.txt".into();
-        assert!(classify_archive_member(&second, &mut outer).is_err());
-
-        let mut traversal = ArchiveEntry::new();
-        traversal.name = "Notes/../secret.txt".into();
-        assert!(classify_archive_member(&traversal, &mut None).is_err());
+        // Anything outside the package's vault folder breaks it.
+        for stray in [
+            ("Other/Notes/notes.txt", false),
+            ("Notes-sevenzip/Other/notes.txt", false),
+            ("Notes-sevenzip/notes.txt", false),
+            ("Notes-sevenzip/Notes/../secret.txt", false),
+        ] {
+            assert!(
+                classify_archive_member(&member(stray.0, stray.1), &mut walk).is_err(),
+                "{stray:?}"
+            );
+        }
+        assert_eq!(walk.package().unwrap().vault, "Notes");
     }
 
     #[test]

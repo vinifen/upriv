@@ -14,8 +14,11 @@ use super::{err, map_core_err, ok, path_utf8, require_vault_root, RpcResponse};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DataFolderExportParams {
     dest_dir: String,
-    /// Zip name without `.zip`; it also names the folder inside the zip.
+    /// Zip name without `.zip`; it also names the folder at the zip's top,
+    /// which holds the data folder under its own name.
     name: String,
+    /// Off leaves every vault's `backups/` folder empty in the copy.
+    include_backups: bool,
     /// Names this export for `job_status` and `job_cancel`.
     job: String,
 }
@@ -38,7 +41,13 @@ pub(super) fn export(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match export_data_folder(&root, &dest_dir, &parsed.name, &parsed.job) {
+    match export_data_folder(
+        &root,
+        &dest_dir,
+        &parsed.name,
+        parsed.include_backups,
+        &parsed.job,
+    ) {
         Ok(export) => match path_utf8(&export.path) {
             Ok(path) => ok(json!({ "path": path, "size": export.size })),
             Err(response) => response,

@@ -295,6 +295,7 @@ private object CoreLanes {
   private val rewrap = single("upriv-rewrap")
   val pack = single("upriv-pack")
   private val dataFolder = single("upriv-data-folder")
+  private val backupFolder = single("upriv-backup-folder")
   private val importNames = AtomicInteger()
   val importFiles: CoroutineDispatcher =
     Executors.newFixedThreadPool(phoneImportThreads()) { runnable ->
@@ -312,7 +313,7 @@ private object CoreLanes {
     "vault_close", "vault_delete", "vault_discard_import",
     "vault_plain_confirm", "vault_plain_sync",
     "vault_plain_deletions", "vault_plain_send", "vault_plain_unsend" -> lifecycle
-    "vault_change_password", "vault_change_kdf" -> rewrap
+    "vault_change_password", "vault_change_kdf", "vault_rebuild" -> rewrap
     "vault_fs_import_os_file", "vault_import_probe" -> importFiles
     "vault_import_zip",
     "vault_import_7z",
@@ -324,6 +325,8 @@ private object CoreLanes {
     "backup_save",
     "backup_export" -> pack
     "data_folder_export" -> dataFolder
+    "backup_list", "backup_delete", "backup_promote",
+    "backup_folder_check", "backup_folder_reuse" -> backupFolder
     else -> light
   }
 

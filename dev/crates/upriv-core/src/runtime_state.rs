@@ -164,12 +164,11 @@ pub fn save_runtime_state(root: &VaultRoot, state: &RuntimeState) -> Result<()> 
     paths::write_bytes_atomic(&path, body.as_bytes())
 }
 
+/// One read-modify-write of `state.json` at a time in this process. The file
+/// is replaced whole, so a writer that panicked left it whole too.
 fn with_state_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     static STATE_IO: Mutex<()> = Mutex::new(());
-    let _guard = STATE_IO.lock().map_err(|_| UprivError::VaultStoreInvalid {
-        path: Path::new("state.json").to_path_buf(),
-        detail: "state lock poisoned".into(),
-    })?;
+    let _guard = crate::session::lock_table(&STATE_IO);
     f()
 }
 

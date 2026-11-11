@@ -49,7 +49,7 @@ function jobs(progress: JobProgress | null = null): JobService & {
 
 /** The job id the export ran as. */
 function jobOf(exportTo: { mock: { calls: unknown[][] } }, call = 0): string {
-  return exportTo.mock.calls[call][2] as string;
+  return exportTo.mock.calls[call][3] as string;
 }
 
 function events(): DataFolderExportJobEvents & {
@@ -78,12 +78,12 @@ describe("useDataFolderExportJob", () => {
     const { result } = renderHook(() => useDataFolderExportJob(service(exportTo), jobs(), on));
 
     act(() => {
-      expect(result.current.start("/media/usb", ZIP)).toBe(true);
+      expect(result.current.start("/media/usb", ZIP, true)).toBe(true);
     });
-    expect(exportTo).toHaveBeenCalledWith("/media/usb", ZIP, jobOf(exportTo));
+    expect(exportTo).toHaveBeenCalledWith("/media/usb", ZIP, true, jobOf(exportTo));
     expect(result.current.job?.id).toBe(jobOf(exportTo));
     act(() => {
-      expect(result.current.start("/elsewhere", ZIP)).toBe(false);
+      expect(result.current.start("/elsewhere", ZIP, true)).toBe(false);
     });
     expect(exportTo).toHaveBeenCalledTimes(1);
 
@@ -108,7 +108,7 @@ describe("useDataFolderExportJob", () => {
     );
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     await act(async () => {
       first.resolve(written);
@@ -116,7 +116,7 @@ describe("useDataFolderExportJob", () => {
     await waitFor(() => expect(result.current.written).not.toBeNull());
 
     act(() => {
-      result.current.start("/media/other", ZIP);
+      result.current.start("/media/other", ZIP, true);
     });
     expect(result.current.written).toBeNull();
     expect(jobOf(exportTo, 1)).not.toBe(jobOf(exportTo, 0));
@@ -133,7 +133,7 @@ describe("useDataFolderExportJob", () => {
     );
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     await act(async () => {
       run.resolve(written);
@@ -158,7 +158,7 @@ describe("useDataFolderExportJob", () => {
     );
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(JOB_PROGRESS_POLL_MS);
@@ -176,7 +176,7 @@ describe("useDataFolderExportJob", () => {
     const { result } = renderHook(() => useDataFolderExportJob(service(exportTo), runner, on));
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     act(() => {
       result.current.stop();
@@ -209,7 +209,7 @@ describe("useDataFolderExportJob", () => {
     );
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     const error = new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.SPACE_SHORT, "space");
     await act(async () => {
@@ -230,7 +230,7 @@ describe("useDataFolderExportJob", () => {
     const { result } = renderHook(() => useDataFolderExportJob(service(exportTo), runner, on));
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(12 * 60 * 60 * 1_000);
@@ -255,7 +255,7 @@ describe("useDataFolderExportJob", () => {
     const { result } = renderHook(() => useDataFolderExportJob(service(exportTo), runner, on));
 
     act(() => {
-      result.current.start("/media/usb", ZIP);
+      result.current.start("/media/usb", ZIP, true);
     });
     await act(async () => {
       result.current.stop();
@@ -267,7 +267,7 @@ describe("useDataFolderExportJob", () => {
   it("does nothing without a service", () => {
     const { result } = renderHook(() => useDataFolderExportJob(undefined, jobs(), events()));
     act(() => {
-      expect(result.current.start("/media/usb", ZIP)).toBe(false);
+      expect(result.current.start("/media/usb", ZIP, true)).toBe(false);
     });
     expect(result.current.job).toBeNull();
   });

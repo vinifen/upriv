@@ -62,6 +62,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CHANGE_PASSWORD: "vault_change_password",
   /** Rewrap the closed vault at a new Argon2id unlock cost. The password stays. */
   VAULT_CHANGE_KDF: "vault_change_kdf",
+  /** Rebuild the lost index of a closed vault from the records its blobs carry. */
+  VAULT_REBUILD: "vault_rebuild",
   /** Phase of an in-flight `vault_close` (`flush` | `backup` | null). Light; polled while closing. */
   VAULT_CLOSE_PHASE: "vault_close_phase",
   VAULT_CLOSE_HURRY: "vault_close_hurry",
@@ -111,9 +113,13 @@ export const CORE_RPC_COMMANDS = {
    */
   VAULT_FS_OS_PATH: "vault_fs_os_path",
   BACKUP_LIST: "backup_list",
+  /** What a folder typed into the settings can do right now. */
+  BACKUP_FOLDER_CHECK: "backup_folder_check",
+  /** Use a vault's chosen folder again after its folder there went away. */
+  BACKUP_FOLDER_REUSE: "backup_folder_reuse",
   BACKUP_DELETE: "backup_delete",
   BACKUP_PROMOTE: "backup_promote",
-  /** Zip the closed vault straight into `backups/saves/`. */
+  /** Zip the closed vault straight into `saves/` where its backups go. */
   BACKUP_SAVE: "backup_save",
   /** Copy one backup zip, or bundle several, into the chosen folder. The vault may be open. */
   BACKUP_EXPORT: "backup_export",

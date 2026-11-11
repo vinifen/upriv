@@ -8,6 +8,11 @@ Upriv lee esta carpeta al importar esta exportación en una bóveda nueva. No es
 将此导出文件导入新保险库时，Upriv 会读取此文件夹。它不是保险库中的文件，新保险库也不会保留它。
 इस एक्सपोर्ट को नए वॉल्ट में इम्पोर्ट करते समय Upriv यह फ़ोल्डर पढ़ता है। यह वॉल्ट की फ़ाइल नहीं है, और नया वॉल्ट इसे नहीं रखता।
 
+The vault's own files are in the folder beside this one.
+Los archivos de la bóveda están en la carpeta junto a esta.
+保险库自身的文件位于此文件夹旁边的文件夹中。
+वॉल्ट की अपनी फ़ाइलें इस फ़ोल्डर के बगल वाले फ़ोल्डर में हैं।
+
 `config.toml` holds the vault's settings, when the export included them.
 `config.toml` contiene la configuración de la bóveda, si la exportación la incluyó.
 如果导出时包含了保险库设置，它们保存在 `config.toml` 中。

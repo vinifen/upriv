@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, TryLockError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -15,7 +15,9 @@ use crate::store::{OpenedStore, VaultHeader, VaultIndex};
 
 mod jobs;
 
-pub use jobs::{cancel_job, job_status, stop_all_jobs, JobStatus, JobStop};
+pub use jobs::{
+    cancel_job, job_status, log_request_panic, note_panic, stop_all_jobs, JobStatus, JobStop,
+};
 pub(crate) use jobs::{Job, JobKind, ProgressReader};
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
@@ -35,6 +37,8 @@ pub struct OpenSession {
     pub master_key: [u8; 32],
     pub content_key: [u8; 32],
     pub index_key: [u8; 64],
+    /// The key of the recovery records the vault's blobs carry.
+    pub record_key: [u8; 32],
     #[zeroize(skip)]
     pub index: VaultIndex,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
@@ -99,6 +103,8 @@ impl OpenSession {
         content_key.copy_from_slice(opened.content_key.as_ref());
         let mut index_key = [0u8; 64];
         index_key.copy_from_slice(opened.index_key.as_ref());
+        let mut record_key = [0u8; 32];
+        record_key.copy_from_slice(opened.record_key.as_ref());
         Self {
             vault_id,
             display_name,
@@ -107,6 +113,7 @@ impl OpenSession {
             master_key,
             content_key,
             index_key,
+            record_key,
             index: opened.index,
             dirty: false,
             tree_revision: 0,
@@ -120,6 +127,26 @@ impl OpenSession {
             deferred: None,
             pending_layout: None,
         }
+    }
+
+    /// What the next seal of this session's tree writes its records with.
+    pub(crate) fn records(&self) -> crate::store::Records<'_> {
+        crate::store::Records {
+            header: &self.header,
+            key: &self.record_key,
+            index: &self.index,
+        }
+    }
+
+    /// Record and flush the staged blobs ([`crate::store::StagedBlobs::sync`])
+    /// for the seal of the tree as it is now.
+    pub(crate) fn sync_staged_blobs(&mut self, due: crate::store::RecordsDue) -> Result<()> {
+        let records = crate::store::Records {
+            header: &self.header,
+            key: &self.record_key,
+            index: &self.index,
+        };
+        self.staged_blobs.sync(&records, due)
     }
 }
 
@@ -158,59 +185,59 @@ static VAULT_REGISTRY_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()
 static DATA_FOLDER_EXPORTS: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn session_lock_poisoned(detail: &str) -> UprivError {
+/// Lock one of the process-wide tables or gates. Work that panicked while it
+/// held one leaves the lock poisoned, and what it holds is still whole: each
+/// change to a table is one insert, removal, or count, and a gate holds
+/// nothing. So the lock is taken as it is: one failed job never leaves every
+/// open and export of a vault refused until Upriv restarts.
+pub(crate) fn lock_table<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// An open session whose own lock is poisoned: work on it panicked, and its
+/// index may be half changed, so it is not used again.
+fn open_session_poisoned() -> UprivError {
     UprivError::VaultStoreInvalid {
         path: PathBuf::from("session"),
-        detail: detail.into(),
+        detail: "open session poisoned".into(),
     }
 }
 
 /// Serialize Argon2-bound work for the whole process (`open` + create seed).
 pub fn with_unlock_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _held = UNLOCK_GATE
-        .lock()
-        .map_err(|_| session_lock_poisoned("unlock lock poisoned"))?;
+    let _held = lock_table(&UNLOCK_GATE);
     f()
 }
 
-fn vault_dir_gate(vault_dir: &Path) -> Result<Arc<Mutex<()>>> {
-    let mut map = VAULT_DIR_GATES
-        .lock()
-        .map_err(|_| session_lock_poisoned("vault-dir gate lock poisoned"))?;
-    Ok(map
+fn vault_dir_gate(vault_dir: &Path) -> Arc<Mutex<()>> {
+    lock_table(&VAULT_DIR_GATES)
         .entry(vault_dir.to_path_buf())
         .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone())
+        .clone()
 }
 
 /// Exclusive critical section for one vault directory (create TOCTOU).
 pub fn with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let gate = vault_dir_gate(vault_dir)?;
-    let _held = gate
-        .lock()
-        .map_err(|_| session_lock_poisoned("vault-dir lock poisoned"))?;
+    let gate = vault_dir_gate(vault_dir);
+    let _held = lock_table(&gate);
     f()
 }
 
 /// Same section as [`with_vault_dir_lock`], without waiting.
 /// A holder (rewrap, open, rename) makes the caller return [`UprivError::VaultBusy`].
 pub fn try_with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let gate = vault_dir_gate(vault_dir)?;
+    let gate = vault_dir_gate(vault_dir);
     let _held = match gate.try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::WouldBlock) => return Err(UprivError::VaultBusy),
-        Err(TryLockError::Poisoned(_)) => {
-            return Err(session_lock_poisoned("vault-dir lock poisoned"));
-        }
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
     };
     f()
 }
 
 /// Process-wide identity lock: slug allocation + `vaults/<id>/` create/rename.
 pub fn with_vault_registry_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _held = VAULT_REGISTRY_GATE
-        .lock()
-        .map_err(|_| session_lock_poisoned("vault-registry lock poisoned"))?;
+    let _held = lock_table(&VAULT_REGISTRY_GATE);
     f()
 }
 
@@ -231,33 +258,21 @@ pub fn with_vault_dir_locks<T>(
     with_vault_dir_lock(a, || with_vault_dir_lock(b, f))
 }
 
-fn lock_sessions(
-) -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Arc<Mutex<OpenSession>>>>> {
-    SESSIONS.lock().map_err(|_| UprivError::VaultStoreInvalid {
-        path: PathBuf::from("session"),
-        detail: "session lock poisoned".into(),
-    })
+fn lock_sessions() -> MutexGuard<'static, HashMap<PathBuf, Arc<Mutex<OpenSession>>>> {
+    lock_table(&SESSIONS)
 }
 
-fn lock_throttle() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, UnlockThrottle>>> {
-    THROTTLE.lock().map_err(|_| UprivError::VaultStoreInvalid {
-        path: PathBuf::from("session"),
-        detail: "throttle lock poisoned".into(),
-    })
+fn lock_throttle() -> MutexGuard<'static, HashMap<PathBuf, UnlockThrottle>> {
+    lock_table(&THROTTLE)
 }
 
 pub fn is_vault_open_at(vault_dir: &Path) -> bool {
-    lock_sessions()
-        .map(|g| g.contains_key(vault_dir))
-        .unwrap_or(false)
+    lock_sessions().contains_key(vault_dir)
 }
 
 /// Ids of the sessions open under `vaults_dir`.
 pub(crate) fn open_session_ids_under(vaults_dir: &Path) -> Vec<String> {
-    let Ok(guard) = lock_sessions() else {
-        return Vec::new();
-    };
-    guard
+    lock_sessions()
         .iter()
         .filter(|(dir, _)| dir.starts_with(vaults_dir))
         .filter_map(|(_, session)| session.lock().ok().map(|inner| inner.vault_id.clone()))
@@ -265,9 +280,7 @@ pub(crate) fn open_session_ids_under(vaults_dir: &Path) -> Vec<String> {
 }
 
 pub fn open_session_ids() -> Vec<String> {
-    let Ok(guard) = lock_sessions() else {
-        return Vec::new();
-    };
+    let guard = lock_sessions();
     let mut ids = Vec::new();
     for session in guard.values() {
         if let Ok(inner) = session.lock() {
@@ -313,120 +326,84 @@ pub fn vault_activity_blocks_root_switch() -> bool {
 
 /// True while `with_unlock_lock` holds the process Argon2 gate (open/create seed).
 pub fn is_unlock_in_flight() -> bool {
-    match UNLOCK_GATE.try_lock() {
-        Ok(_guard) => false,
-        Err(std::sync::TryLockError::WouldBlock) => true,
-        Err(std::sync::TryLockError::Poisoned(_)) => true,
-    }
+    matches!(UNLOCK_GATE.try_lock(), Err(TryLockError::WouldBlock))
 }
 
 fn any_closing() -> bool {
-    CLOSING.lock().map(|g| !g.is_empty()).unwrap_or(true)
+    !lock_table(&CLOSING).is_empty()
 }
 
 fn any_preparing() -> bool {
-    PREPARING
-        .lock()
-        .map(|g| g.values().any(|count| *count > 0))
-        .unwrap_or(true)
+    lock_table(&PREPARING).values().any(|count| *count > 0)
 }
 
 pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
-    CLOSING
-        .lock()
-        .map(|g| g.contains_key(vault_dir))
-        .unwrap_or(true)
+    lock_table(&CLOSING).contains_key(vault_dir)
 }
 
 /// Where an in-flight close of this vault is. `None` when no close is running.
 pub fn vault_close_phase_at(vault_dir: &Path) -> Option<ClosePhase> {
-    CLOSING
-        .lock()
-        .ok()
-        .and_then(|g| g.get(vault_dir).map(|closing| closing.phase))
+    lock_table(&CLOSING)
+        .get(vault_dir)
+        .map(|closing| closing.phase)
 }
 
 /// Make the close running for this vault finish the Close now way. False when
 /// none is running.
 pub(crate) fn hurry_close_at(vault_dir: &Path) -> bool {
-    CLOSING
-        .lock()
-        .ok()
-        .and_then(|g| {
-            g.get(vault_dir)
-                .map(|closing| closing.hurry.store(true, Ordering::Relaxed))
-        })
+    lock_table(&CLOSING)
+        .get(vault_dir)
+        .map(|closing| closing.hurry.store(true, Ordering::Relaxed))
         .is_some()
 }
 
 /// [`hurry_close_at`] for every close running under `vaults_dir`.
 pub(crate) fn hurry_closes_under(vaults_dir: &Path) {
-    if let Ok(guard) = CLOSING.lock() {
-        guard
-            .iter()
-            .filter(|(dir, _)| dir.starts_with(vaults_dir))
-            .for_each(|(_, closing)| closing.hurry.store(true, Ordering::Relaxed));
-    }
+    lock_table(&CLOSING)
+        .iter()
+        .filter(|(dir, _)| dir.starts_with(vaults_dir))
+        .for_each(|(_, closing)| closing.hurry.store(true, Ordering::Relaxed));
 }
 
-/// True while a close runs under `vaults_dir`. A poisoned lock reads as none:
-/// the one caller is waiting to exit.
+/// True while a close runs under `vaults_dir`.
 pub(crate) fn any_close_under(vaults_dir: &Path) -> bool {
-    CLOSING
-        .lock()
-        .map(|g| g.keys().any(|dir| dir.starts_with(vaults_dir)))
-        .unwrap_or(false)
+    lock_table(&CLOSING)
+        .keys()
+        .any(|dir| dir.starts_with(vaults_dir))
 }
 
-/// True while this vault is mid-open or mid-create-seed. Fail closed on poison.
+/// True while this vault is mid-open or mid-create-seed.
 pub fn is_vault_preparing_at(vault_dir: &Path) -> bool {
-    PREPARING
-        .lock()
-        .map(|g| g.get(vault_dir).is_some_and(|count| *count > 0))
-        .unwrap_or(true)
+    lock_table(&PREPARING)
+        .get(vault_dir)
+        .is_some_and(|count| *count > 0)
 }
 
-/// True while a vault folder under `vaults_dir` is open or mid-close. Fail
-/// closed on poison.
+/// True while a vault folder under `vaults_dir` is open or mid-close.
 pub(crate) fn any_session_under(vaults_dir: &Path) -> bool {
-    let open = lock_sessions()
-        .map(|g| g.keys().any(|dir| dir.starts_with(vaults_dir)))
-        .unwrap_or(true);
-    open || CLOSING
-        .lock()
-        .map(|g| g.keys().any(|dir| dir.starts_with(vaults_dir)))
-        .unwrap_or(true)
+    lock_sessions()
+        .keys()
+        .any(|dir| dir.starts_with(vaults_dir))
+        || any_close_under(vaults_dir)
 }
 
 /// True while a vault folder under `vaults_dir` is held for open, create,
-/// import, export, backup, or rewrap. Fail closed on poison.
+/// import, export, backup, or rewrap.
 pub(crate) fn any_preparing_under(vaults_dir: &Path) -> bool {
-    PREPARING
-        .lock()
-        .map(|g| {
-            g.iter()
-                .any(|(dir, count)| *count > 0 && dir.starts_with(vaults_dir))
-        })
-        .unwrap_or(true)
+    lock_table(&PREPARING)
+        .iter()
+        .any(|(dir, count)| *count > 0 && dir.starts_with(vaults_dir))
 }
 
-fn lock_data_folder_exports() -> Result<std::sync::MutexGuard<'static, HashSet<PathBuf>>> {
-    DATA_FOLDER_EXPORTS
-        .lock()
-        .map_err(|_| session_lock_poisoned("data folder export lock poisoned"))
-}
-
-/// True while any data folder is being copied into a zip. Fail closed on poison.
+/// True while any data folder is being copied into a zip.
 pub fn is_data_folder_export_running() -> bool {
-    lock_data_folder_exports()
-        .map(|g| !g.is_empty())
-        .unwrap_or(true)
+    !lock_table(&DATA_FOLDER_EXPORTS).is_empty()
 }
 
 /// Refuse work that would add, move, or remove files the running export of the
 /// data folder at `root` may still copy: a new vault folder, or a backup delete or pin.
 pub(crate) fn ensure_data_folder_export_idle(root: &Path) -> Result<()> {
-    if lock_data_folder_exports()?.contains(root) {
+    if lock_table(&DATA_FOLDER_EXPORTS).contains(root) {
         return Err(UprivError::DataFolderExportBusy);
     }
     Ok(())
@@ -439,7 +416,7 @@ pub(crate) struct DataFolderExportGuard {
 
 impl DataFolderExportGuard {
     pub(crate) fn enter(root: &Path) -> Result<Self> {
-        if !lock_data_folder_exports()?.insert(root.to_path_buf()) {
+        if !lock_table(&DATA_FOLDER_EXPORTS).insert(root.to_path_buf()) {
             return Err(UprivError::DataFolderExportBusy);
         }
         Ok(Self {
@@ -450,30 +427,25 @@ impl DataFolderExportGuard {
 
 impl Drop for DataFolderExportGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = DATA_FOLDER_EXPORTS.lock() {
-            guard.remove(&self.root);
-        }
+        lock_table(&DATA_FOLDER_EXPORTS).remove(&self.root);
     }
 }
 
-fn lock_backup_exports() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Vec<PathBuf>>>> {
-    BACKUP_EXPORTS
-        .lock()
-        .map_err(|_| session_lock_poisoned("backup export lock poisoned"))
+fn lock_backup_exports() -> MutexGuard<'static, HashMap<PathBuf, Vec<PathBuf>>> {
+    lock_table(&BACKUP_EXPORTS)
 }
 
-/// True while a backup export reads this vault's backups. Fail closed on poison.
+/// True while a backup export reads this vault's backups.
 pub(crate) fn is_vault_backup_export_at(vault_dir: &Path) -> bool {
-    BACKUP_EXPORTS
-        .lock()
-        .map(|g| g.get(vault_dir).is_some_and(|zips| !zips.is_empty()))
-        .unwrap_or(true)
+    lock_backup_exports()
+        .get(vault_dir)
+        .is_some_and(|zips| !zips.is_empty())
 }
 
 /// Refuse with [`UprivError::BackupExporting`] while an export reads any of
 /// `zips`, so a delete or a pin never pulls a backup from under it.
 pub(crate) fn ensure_backups_not_exporting(vault_dir: &Path, zips: &[PathBuf]) -> Result<()> {
-    let exports = lock_backup_exports()?;
+    let exports = lock_backup_exports();
     let reading = exports
         .get(vault_dir)
         .is_some_and(|held| zips.iter().any(|zip| held.contains(zip)));
@@ -488,7 +460,7 @@ pub(crate) fn ensure_backups_not_exporting(vault_dir: &Path, zips: &[PathBuf]) -
 /// zip that is halfway gone. Retention uses this: it runs without the vault's
 /// lock, and a zip it skips goes on a later close.
 pub(crate) fn remove_backup_unless_exporting(vault_dir: &Path, zip: &Path) -> Result<bool> {
-    let exports = lock_backup_exports()?;
+    let exports = lock_backup_exports();
     if exports
         .get(vault_dir)
         .is_some_and(|held| held.iter().any(|read| read == zip))
@@ -514,7 +486,7 @@ impl BackupExportGuard {
     pub(crate) fn enter(vault_dir: &Path, zips: Vec<PathBuf>) -> Result<Self> {
         use crate::host_fs::HostFsQuery;
 
-        let mut exports = lock_backup_exports()?;
+        let mut exports = lock_backup_exports();
         if let Some(gone) = zips.iter().find(|zip| !zip.host_is_file()) {
             return Err(UprivError::VaultPathNotFound(gone.display().to_string()));
         }
@@ -531,9 +503,7 @@ impl BackupExportGuard {
 
 impl Drop for BackupExportGuard {
     fn drop(&mut self) {
-        let Ok(mut exports) = BACKUP_EXPORTS.lock() else {
-            return;
-        };
+        let mut exports = lock_backup_exports();
         let Some(held) = exports.get_mut(&self.vault_dir) else {
             return;
         };
@@ -582,25 +552,22 @@ pub(crate) struct ClosingGuard {
 }
 
 impl ClosingGuard {
-    pub(crate) fn enter(vault_dir: &Path) -> Result<Self> {
-        let mut guard = CLOSING
-            .lock()
-            .map_err(|_| session_lock_poisoned("closing lock poisoned"))?;
+    pub(crate) fn enter(vault_dir: &Path) -> Self {
         let hurry = Arc::new(AtomicBool::new(false));
         // Close now ends the backup.
         let backup = Job::stopped_by(Arc::clone(&hurry));
-        guard.insert(
+        lock_table(&CLOSING).insert(
             vault_dir.to_path_buf(),
             Closing {
                 phase: ClosePhase::Flush,
                 hurry: Arc::clone(&hurry),
             },
         );
-        Ok(Self {
+        Self {
             vault_dir: vault_dir.to_path_buf(),
             hurry,
             backup,
-        })
+        }
     }
 
     pub(crate) fn hurry(&self) -> &Arc<AtomicBool> {
@@ -613,19 +580,15 @@ impl ClosingGuard {
     }
 
     pub(crate) fn set_phase(&self, phase: ClosePhase) {
-        if let Ok(mut guard) = CLOSING.lock() {
-            if let Some(current) = guard.get_mut(&self.vault_dir) {
-                current.phase = phase;
-            }
+        if let Some(current) = lock_table(&CLOSING).get_mut(&self.vault_dir) {
+            current.phase = phase;
         }
     }
 }
 
 impl Drop for ClosingGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = CLOSING.lock() {
-            guard.remove(&self.vault_dir);
-        }
+        lock_table(&CLOSING).remove(&self.vault_dir);
     }
 }
 
@@ -635,21 +598,18 @@ pub(crate) struct PreparingGuard {
 }
 
 impl PreparingGuard {
-    pub(crate) fn enter(vault_dir: &Path) -> Result<Self> {
-        let mut guard = PREPARING
-            .lock()
-            .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
-        *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
-        Ok(Self {
+    pub(crate) fn enter(vault_dir: &Path) -> Self {
+        *lock_table(&PREPARING)
+            .entry(vault_dir.to_path_buf())
+            .or_insert(0) += 1;
+        Self {
             vault_dir: vault_dir.to_path_buf(),
-        })
+        }
     }
 
     /// One holder. Open, export, and rewrap use this so they cannot overlap.
     pub(crate) fn enter_exclusive(vault_dir: &Path) -> Result<Self> {
-        let mut guard = PREPARING
-            .lock()
-            .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
+        let mut guard = lock_table(&PREPARING);
         if guard.get(vault_dir).is_some_and(|count| *count > 0) {
             return Err(UprivError::VaultBusy);
         }
@@ -662,20 +622,19 @@ impl PreparingGuard {
 
 impl Drop for PreparingGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = PREPARING.lock() {
-            match guard.get_mut(&self.vault_dir) {
-                Some(count) if *count > 1 => *count -= 1,
-                Some(_) => {
-                    guard.remove(&self.vault_dir);
-                }
-                None => {}
+        let mut guard = lock_table(&PREPARING);
+        match guard.get_mut(&self.vault_dir) {
+            Some(count) if *count > 1 => *count -= 1,
+            Some(_) => {
+                guard.remove(&self.vault_dir);
             }
+            None => {}
         }
     }
 }
 
 pub fn insert_session(session: OpenSession) -> Result<()> {
-    let mut guard = lock_sessions()?;
+    let mut guard = lock_sessions();
     if guard.contains_key(&session.vault_dir) {
         return Err(UprivError::VaultAlreadyOpen(session.vault_id.clone()));
     }
@@ -684,13 +643,11 @@ pub fn insert_session(session: OpenSession) -> Result<()> {
 }
 
 pub fn take_session(vault_dir: &Path) -> Result<OpenSession> {
-    let arc = lock_sessions()?
+    let arc = lock_sessions()
         .remove(vault_dir)
         .ok_or_else(|| UprivError::VaultNotOpen(vault_dir.display().to_string()))?;
     let mutex = wait_unique_session(arc)?;
-    mutex
-        .into_inner()
-        .map_err(|_| session_lock_poisoned("open session poisoned"))
+    mutex.into_inner().map_err(|_| open_session_poisoned())
 }
 
 fn wait_unique_session(mut arc: Arc<Mutex<OpenSession>>) -> Result<Mutex<OpenSession>> {
@@ -698,11 +655,7 @@ fn wait_unique_session(mut arc: Arc<Mutex<OpenSession>>) -> Result<Mutex<OpenSes
         match Arc::try_unwrap(arc) {
             Ok(mutex) => return Ok(mutex),
             Err(remaining) => {
-                drop(
-                    remaining
-                        .lock()
-                        .map_err(|_| session_lock_poisoned("open session poisoned"))?,
-                );
+                drop(remaining.lock().map_err(|_| open_session_poisoned())?);
                 arc = remaining;
                 std::thread::yield_now();
             }
@@ -715,19 +668,17 @@ pub fn with_open_session<T>(
     vault_dir: &Path,
     f: impl FnOnce(&mut OpenSession) -> Result<T>,
 ) -> Result<T> {
-    let arc = lock_sessions()?
+    let arc = lock_sessions()
         .get(vault_dir)
         .cloned()
         .ok_or_else(|| UprivError::VaultNotOpen(vault_dir.display().to_string()))?;
-    let mut session = arc
-        .lock()
-        .map_err(|_| session_lock_poisoned("open session poisoned"))?;
+    let mut session = arc.lock().map_err(|_| open_session_poisoned())?;
     f(&mut session)
 }
 
 /// Fail closed if this vault is in the 60 s block window.
 pub fn check_unlock_allowed(vault_dir: &Path) -> Result<()> {
-    let mut guard = lock_throttle()?;
+    let mut guard = lock_throttle();
     let state = guard.entry(vault_dir.to_path_buf()).or_default();
     let now = Instant::now();
     if let Some(until) = state.blocked_until {
@@ -744,13 +695,11 @@ pub fn check_unlock_allowed(vault_dir: &Path) -> Result<()> {
 }
 
 pub fn record_unlock_success(vault_dir: &Path) {
-    if let Ok(mut guard) = lock_throttle() {
-        guard.remove(vault_dir);
-    }
+    lock_throttle().remove(vault_dir);
 }
 
 pub fn record_unlock_failure(vault_dir: &Path) -> Result<()> {
-    let mut guard = lock_throttle()?;
+    let mut guard = lock_throttle();
     let state = guard.entry(vault_dir.to_path_buf()).or_default();
     let now = Instant::now();
     state
@@ -769,9 +718,7 @@ pub fn record_unlock_failure(vault_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 pub(crate) fn clear_throttle_key_for_tests(vault_dir: &Path) {
-    if let Ok(mut g) = THROTTLE.lock() {
-        g.remove(vault_dir);
-    }
+    lock_throttle().remove(vault_dir);
 }
 
 #[cfg(test)]
@@ -786,8 +733,8 @@ mod tests {
             std::thread::current().id()
         ));
         assert!(!is_vault_preparing_at(&dir));
-        let first = PreparingGuard::enter(&dir).expect("first preparing");
-        let second = PreparingGuard::enter(&dir).expect("second preparing");
+        let first = PreparingGuard::enter(&dir);
+        let second = PreparingGuard::enter(&dir);
         assert!(is_vault_preparing_at(&dir));
         drop(first);
         assert!(is_vault_preparing_at(&dir));
@@ -842,7 +789,7 @@ mod tests {
         ));
         // Only assert the positive path: ClosingGuard alone is enough to block.
         // Do not assert process-wide idle — parallel Argon2 holds UNLOCK_GATE.
-        let _guard = ClosingGuard::enter(&dir).expect("enter closing");
+        let _guard = ClosingGuard::enter(&dir);
         assert!(vault_activity_blocks_root_switch());
     }
 
@@ -875,7 +822,7 @@ mod tests {
         ));
         assert_eq!(vault_close_phase_at(&dir), None);
         {
-            let guard = ClosingGuard::enter(&dir).expect("enter closing");
+            let guard = ClosingGuard::enter(&dir);
             assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Flush));
             guard.set_phase(ClosePhase::Backup);
             assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Backup));
@@ -892,7 +839,7 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         ));
-        let guard = ClosingGuard::enter(&dir).expect("enter closing");
+        let guard = ClosingGuard::enter(&dir);
         assert!(!guard.backup_job().is_stopped());
         guard.hurry().store(true, Ordering::Relaxed);
         assert!(guard.backup_job().is_stopped());
@@ -919,5 +866,26 @@ mod tests {
         check_unlock_allowed(&b).expect("distinct path = distinct throttle bucket");
         clear_throttle_key_for_tests(&a);
         clear_throttle_key_for_tests(&b);
+    }
+
+    #[test]
+    fn work_that_panicked_holding_a_vault_leaves_it_usable() {
+        let dir = PathBuf::from(format!(
+            "/upriv-test-panic-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let panicked = std::panic::catch_unwind(|| {
+            let _held = PreparingGuard::enter_exclusive(&dir).unwrap();
+            let _ = with_vault_dir_lock(&dir, || -> Result<()> {
+                with_unlock_lock(|| -> Result<()> { panic!("export went wrong") })
+            });
+        });
+        assert!(panicked.is_err());
+        // The gates it held, and the mark its guard dropped while unwinding.
+        assert!(!is_vault_preparing_at(&dir));
+        with_vault_dir_lock(&dir, || with_unlock_lock(|| Ok(()))).unwrap();
+        try_with_vault_dir_lock(&dir, || Ok(())).unwrap();
+        drop(PreparingGuard::enter_exclusive(&dir).unwrap());
     }
 }

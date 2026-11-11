@@ -15,6 +15,7 @@ fn install_panic_hook() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         std::panic::set_hook(Box::new(|info| {
+            upriv_core::session::note_panic(info.location());
             eprintln!("[upriv-ffi] panic: {info}");
         }));
     });
@@ -89,17 +90,21 @@ pub fn invoke(method: String, params_json: String) -> String {
         }
     };
 
+    let name = method.clone();
     let response = catch_unwind(AssertUnwindSafe(|| {
         handle_rpc(RpcRequest { method, params })
     }))
-    .unwrap_or_else(|_| RpcResponse {
-        ok: false,
-        result: None,
-        error: Some(RpcErrorBody {
-            code: "internal_error".into(),
-            message: "internal error while handling request".into(),
-            details: None,
-        }),
+    .unwrap_or_else(|_| {
+        upriv_core::session::log_request_panic(&name);
+        RpcResponse {
+            ok: false,
+            result: None,
+            error: Some(RpcErrorBody {
+                code: "internal_error".into(),
+                message: "internal error while handling request".into(),
+                details: None,
+            }),
+        }
     });
     serde_json::to_string(&response).unwrap_or_else(|_| internal_error_envelope())
 }
@@ -170,14 +175,17 @@ pub fn import_content_fd(vault_id: String, logical_path: String, fd: i32, job: S
     let response = catch_unwind(AssertUnwindSafe(|| {
         upriv_rpc::ingest_content_fd(&vault_id, &logical_path, fd, &job)
     }))
-    .unwrap_or_else(|_| RpcResponse {
-        ok: false,
-        result: None,
-        error: Some(RpcErrorBody {
-            code: "internal_error".into(),
-            message: "internal error while handling request".into(),
-            details: None,
-        }),
+    .unwrap_or_else(|_| {
+        upriv_core::session::log_request_panic("import_content_fd");
+        RpcResponse {
+            ok: false,
+            result: None,
+            error: Some(RpcErrorBody {
+                code: "internal_error".into(),
+                message: "internal error while handling request".into(),
+                details: None,
+            }),
+        }
     });
     serde_json::to_string(&response).unwrap_or_else(|_| internal_error_envelope())
 }

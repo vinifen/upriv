@@ -2,8 +2,11 @@
 //! plain-text export of a vault.
 //!
 //! This is not a Upriv store zip. Entries are streamed into a new `store/`.
-//! Nothing is unpacked onto disk. A plain-text export is the same thing with
-//! `.upriv-config/` beside its files; every part of that folder is optional.
+//! Nothing is unpacked onto disk. A plain-text export holds its files in its
+//! package's vault folder (`super::package`), with `.upriv-config/` beside that
+//! folder; every part of `.upriv-config/` is optional. The new vault takes the
+//! name its settings carry, or else the vault folder's
+//! (`super::package::imported_vault_name`).
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -32,14 +35,15 @@ use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
 use super::import_job::fill_new_vault;
+use super::package::{imported_vault_name, is_os_junk, Package};
 use super::seven_zip_pack::sevenz_member_name_unsafe;
-use super::zip_io::buffered_zip_reader;
+use super::zip_io::{buffered_zip_reader, StoreEnvelope};
 
 /// Deflate of text can be well above the store-zip factor. Still finite.
 pub(crate) const FILES_ZIP_EXPAND_FACTOR: u64 = 64;
-/// Zip comment of a plain-text export. Its files sit at the zip's root, so one
-/// top folder there is a vault folder and not a wrapper, and a `store/` there is
-/// a document. A zip tool that packs it again drops the comment.
+/// Zip comment of a plain-text export. Its package's vault folder is the
+/// vault root, and a `store/` there is a document. A zip tool that packs it
+/// again drops the comment; a carried `.upriv-config/` still marks it.
 pub(crate) const PLAIN_ZIP_COMMENT: &str = "Upriv plain-text vault export";
 const S_IFMT: u32 = 0o170000;
 const S_IFLNK: u32 = 0o120000;
@@ -69,6 +73,12 @@ pub struct ImportZipProbe {
     pub settings: Option<EmbeddedVaultSettings>,
     /// It carries a file-manager layout.
     pub workspace: bool,
+    /// The name a vault made from a plain-text export takes: the name its
+    /// settings hold, or else its package's vault folder
+    /// (`super::package::imported_vault_name`). `None` for a zip of
+    /// documents, which its file's name names. A store zip's comes with its
+    /// settings (`read_import_zip_settings`).
+    pub vault_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -113,15 +123,10 @@ fn entry_parts(name: &str) -> Vec<&str> {
     name.split('/').filter(|part| !part.is_empty()).collect()
 }
 
-fn is_os_junk(name: &str) -> bool {
-    entry_parts(name)
-        .iter()
-        .any(|part| *part == "__MACOSX" || *part == ".DS_Store")
-}
-
-/// `store/header/vault.header`, at the zip root or inside one outer folder.
-/// A document that is merely named `vault.header`, or a `store/` deeper in a
-/// folder of documents, is not a vault.
+/// `store/header/vault.header` at the zip root or inside one folder: a zip of
+/// a vault's ciphertext that is no store zip (one folder is neither a backup
+/// nor an export's package). A document that is merely named `vault.header`,
+/// or a `store/` deeper in a folder of documents, is not a vault.
 fn is_upriv_store_entry(name: &str) -> bool {
     let parts = entry_parts(name);
     let n = parts.len();
@@ -131,17 +136,23 @@ fn is_upriv_store_entry(name: &str) -> bool {
         && parts[n - 1] == HEADER_FILE_NAME
 }
 
-/// `.upriv-config/` at the zip root or inside one outer folder: this zip is a
-/// plain-text export, whatever else its files look like.
-fn is_config_folder_entry(name: &str) -> bool {
-    entry_parts(name)
-        .iter()
-        .take(2)
-        .any(|part| *part == EXPORT_CONFIG_DIR)
-}
-
-fn usable_for_probe(name: &str) -> bool {
-    !name.is_empty() && !is_os_junk(name)
+/// The package of a plain-text export: the zip's comment says it is one, or
+/// `.upriv-config/` sits beside its vault folder. Its vault folder is the
+/// vault's root. A zip of documents a person packed has no such package, even
+/// when it has the same shape.
+fn plain_text_package(entries: &[ZipEntryMeta], exported: bool) -> Option<Package> {
+    let package = Package::find(
+        entries
+            .iter()
+            .filter(|entry| !entry.symlink)
+            .map(|entry| (entry.name.as_str(), entry.is_dir)),
+    )?;
+    let config_folder = package.beside(EXPORT_CONFIG_DIR);
+    let carries_config = entries.iter().any(|entry| {
+        let name = normalize_entry_name(&entry.name);
+        name == config_folder || package.config(&name).is_some()
+    });
+    (exported || carries_config).then_some(package)
 }
 
 /// One shared top folder is removed when every entry lives under it, so a zip
@@ -175,25 +186,22 @@ fn strip_root<'a>(name: &'a str, root: Option<&str>) -> Option<&'a str> {
     name.strip_prefix(&prefix).filter(|rest| !rest.is_empty())
 }
 
-fn carries_config_folder(entries: &[ZipEntryMeta]) -> bool {
-    entries.iter().any(|entry| {
-        let name = normalize_entry_name(&entry.name);
-        usable_for_probe(&name) && is_config_folder_entry(&name)
-    })
-}
-
-/// Store zip when a Upriv marker is present. Otherwise a files zip, or an error.
+/// A store zip when it holds a store envelope ([`StoreEnvelope`]) and is no
+/// plain-text export. Otherwise a files zip, or an error.
 pub(crate) fn classify_zip_entries(
     entries: &[ZipEntryMeta],
     source_len: u64,
     exported: bool,
 ) -> Result<ZipImportClass> {
     let store = !exported
-        && !carries_config_folder(entries)
-        && entries.iter().any(|entry| {
-            let name = normalize_entry_name(&entry.name);
-            usable_for_probe(&name) && is_upriv_store_entry(&name)
-        });
+        && plain_text_package(entries, exported).is_none()
+        && StoreEnvelope::find_in(
+            entries
+                .iter()
+                .filter(|entry| !entry.symlink)
+                .map(|entry| entry.name.as_str()),
+        )
+        .is_some();
     if store {
         return Ok(ZipImportClass::Store);
     }
@@ -211,12 +219,14 @@ fn probe_reader<R: Read + Seek>(reader: R, source_len: u64) -> Result<ImportZipP
             class,
             settings: None,
             workspace: false,
+            vault_name: None,
         });
     }
     let mut probe = ImportZipProbe {
         class,
         settings: None,
         workspace: false,
+        vault_name: None,
     };
     for entry in plan_files_zip(&entries, source_len, exported)? {
         match entry {
@@ -229,6 +239,12 @@ fn probe_reader<R: Read + Seek>(reader: R, source_len: u64) -> Result<ImportZipP
             PlannedZipEntry::Directory(_) | PlannedZipEntry::File { .. } => {}
         }
     }
+    let carried = probe
+        .settings
+        .as_ref()
+        .map(|settings| settings.config.vault.display_name.as_str());
+    probe.vault_name = plain_text_package(&entries, exported)
+        .map(|package| imported_vault_name(carried, &package));
     Ok(probe)
 }
 
@@ -253,14 +269,16 @@ fn is_plain_text_export<R: Read + Seek>(archive: &ZipArchive<R>) -> bool {
     archive.comment() == PLAIN_ZIP_COMMENT.as_bytes()
 }
 
-/// Decide vault paths before any vault is created. `exported` is a zip this app
-/// wrote: its root is the vault root.
+/// Decide vault paths before any vault is created. `exported` is a zip this
+/// app wrote. A plain-text export's vault folder is the vault root
+/// ([`plain_text_package`]), and only it carries `.upriv-config/`; a zip of
+/// documents loses one shared top folder.
 pub(crate) fn plan_files_zip(
     entries: &[ZipEntryMeta],
     source_len: u64,
     exported: bool,
 ) -> Result<Vec<PlannedZipEntry>> {
-    let plain_text_export = exported || carries_config_folder(entries);
+    let package = plain_text_package(entries, exported);
     let mut usable = Vec::new();
     for entry in entries {
         let name = normalize_entry_name(&entry.name);
@@ -272,7 +290,7 @@ pub(crate) fn plan_files_zip(
         if sevenz_member_name_unsafe(&name) {
             return Err(layout_error("refusing an unsafe zip entry path"));
         }
-        if !plain_text_export && is_upriv_store_entry(&name) {
+        if package.is_none() && is_upriv_store_entry(&name) {
             return Err(layout_error(
                 "this .zip is a Upriv vault file, not a folder of documents",
             ));
@@ -284,28 +302,39 @@ pub(crate) fn plan_files_zip(
         .iter()
         .map(|(entry, name)| (*entry, name.as_str()))
         .collect();
-    let root = if exported { None } else { shared_root(&named) };
+    let root = match package {
+        Some(_) => None,
+        None => shared_root(&named),
+    };
     let limit = source_len.saturating_mul(FILES_ZIP_EXPAND_FACTOR);
     let mut declared = 0u64;
     let mut seen = HashSet::new();
     let mut planned = Vec::new();
     for (entry, name) in &usable {
-        let Some(logical) = strip_root(name, root) else {
+        let logical = match &package {
+            Some(package) => {
+                // What the export carries about the vault, beside its folder.
+                if let Some(file) = package.config(name) {
+                    if !entry.is_dir {
+                        match config_member(file) {
+                            ConfigMember::Settings => {
+                                planned.push(PlannedZipEntry::Settings { index: entry.index })
+                            }
+                            ConfigMember::Workspace => {
+                                planned.push(PlannedZipEntry::Workspace { index: entry.index })
+                            }
+                            ConfigMember::Other => {}
+                        }
+                    }
+                    continue;
+                }
+                package.inside(name)
+            }
+            None => strip_root(name, root),
+        };
+        let Some(logical) = logical else {
             continue;
         };
-        match config_member(logical) {
-            Some(_) if entry.is_dir => continue,
-            Some(ConfigMember::Settings) => {
-                planned.push(PlannedZipEntry::Settings { index: entry.index });
-                continue;
-            }
-            Some(ConfigMember::Workspace) => {
-                planned.push(PlannedZipEntry::Workspace { index: entry.index });
-                continue;
-            }
-            Some(ConfigMember::Other) => continue,
-            None => {}
-        }
         if is_skipped_on_import(logical) {
             continue;
         }
@@ -617,16 +646,28 @@ mod tests {
     }
 
     #[test]
-    fn the_config_folder_is_read_only_at_the_vault_root() {
+    fn the_config_folder_is_read_only_beside_a_plain_text_exports_vault_folder() {
         let planned = plan(
             &[
-                meta(0, "Notes/.upriv-config/", true, 0),
-                meta(1, "Notes/.upriv-config/config.toml", false, 5),
-                meta(2, "Notes/.upriv-config/workspace.json", false, 5),
-                meta(3, "Notes/.upriv-config/README.md", false, 5),
-                meta(4, "Notes/.upriv-config/unknown.txt", false, 5),
-                meta(5, "Notes/docs/.upriv-config/config.toml", false, 5),
-                meta(6, "Notes/docs/hi.txt", false, 5),
+                meta(0, "Notes-plain-text/.upriv-config/", true, 0),
+                meta(1, "Notes-plain-text/.upriv-config/config.toml", false, 5),
+                meta(2, "Notes-plain-text/.upriv-config/workspace.json", false, 5),
+                meta(3, "Notes-plain-text/.upriv-config/README.md", false, 5),
+                meta(4, "Notes-plain-text/.upriv-config/unknown.txt", false, 5),
+                // A vault never holds the name, so inside the vault folder it is skipped.
+                meta(
+                    5,
+                    "Notes-plain-text/notes/.upriv-config/config.toml",
+                    false,
+                    5,
+                ),
+                meta(
+                    6,
+                    "Notes-plain-text/notes/docs/.upriv-config/config.toml",
+                    false,
+                    5,
+                ),
+                meta(7, "Notes-plain-text/notes/docs/hi.txt", false, 5),
             ],
             100,
         )
@@ -639,20 +680,66 @@ mod tests {
                 "docs/hi.txt".to_string()
             ]
         );
+        // A zip of documents carries no settings: its `.upriv-config/` stays out.
+        let documents = plan(
+            &[
+                meta(0, "Notes/.upriv-config/config.toml", false, 5),
+                meta(1, "Notes/docs/hi.txt", false, 5),
+                meta(2, "Notes/readme.txt", false, 5),
+            ],
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            logicals(&documents),
+            vec!["docs/hi.txt".to_string(), "readme.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_plain_text_export_is_named_after_its_vault_folder() {
+        let exported = [
+            meta(0, "Notes-plain-text-2/", true, 0),
+            meta(1, "Notes-plain-text-2/My notes/", true, 0),
+            meta(2, "Notes-plain-text-2/My notes/docs/hi.txt", false, 5),
+        ];
+        assert_eq!(
+            plain_text_package(&exported, true).map(|package| package.vault),
+            Some("My notes".to_string())
+        );
+        assert_eq!(
+            logicals(&plan_files_zip(&exported, 100, true).unwrap()),
+            vec!["docs/hi.txt".to_string()]
+        );
+        // The same shape a person packed is documents, with no name of its own.
+        assert_eq!(plain_text_package(&exported, false), None);
+        assert_eq!(
+            logicals(&plan(&exported, 100).unwrap()),
+            vec!["My notes".to_string(), "My notes/docs/hi.txt".to_string()]
+        );
     }
 
     #[test]
     fn a_vault_copy_inside_a_plain_text_export_is_a_document() {
         let entries = [
-            meta(0, "Notes/.upriv-config/README.md", false, 5),
-            meta(1, "Notes/store/header/vault.header", false, 5),
+            meta(0, "Notes-plain-text/.upriv-config/README.md", false, 5),
+            meta(
+                1,
+                "Notes-plain-text/notes/store/header/vault.header",
+                false,
+                5,
+            ),
         ];
         assert_eq!(classify(&entries, 100).unwrap(), ZipImportClass::Files);
         assert_eq!(
             logicals(&plan(&entries, 100).unwrap()),
             vec!["store/header/vault.header".to_string()]
         );
-        let deeper = [meta(0, "Notes/backups/store/header/vault.header", false, 5)];
+        // A store deeper in a folder of documents.
+        let deeper = [
+            meta(0, "Notes/backups/store/header/vault.header", false, 5),
+            meta(1, "Notes/readme.txt", false, 5),
+        ];
         assert_eq!(classify(&deeper, 100).unwrap(), ZipImportClass::Files);
     }
 
@@ -692,9 +779,20 @@ mod tests {
             ZipImportClass::Files
         );
         assert_eq!(
-            classify(&[meta(0, "Notes/store/header/vault.header", false, 4)], 100).unwrap(),
+            classify(
+                &[meta(
+                    0,
+                    "Notes-upriv/Notes/store/header/vault.header",
+                    false,
+                    4
+                )],
+                100
+            )
+            .unwrap(),
             ZipImportClass::Store
         );
+        // A store in one folder is neither a backup nor an export's package.
+        assert!(classify(&[meta(0, "Notes/store/header/vault.header", false, 4)], 100).is_err());
         assert_eq!(
             classify(&[meta(0, "notes/vault.header", false, 4)], 100).unwrap(),
             ZipImportClass::Files

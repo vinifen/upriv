@@ -12,6 +12,7 @@ import {
 import {
   vaultExportSavedAs,
   vaultExportUnreadableNames,
+  vaultFolderName,
   VAULT_EXPORT_UNREADABLE_TOAST_MS,
 } from "../export";
 import { vaultListItemFixture } from "./fixtures";
@@ -55,7 +56,7 @@ describe("vaultExportToast", () => {
   it("names the saved file at the usual length when every file read", () => {
     const toast = vaultExportToast(
       target,
-      { path: "/out/My notes.7z", size: 1, unreadable: [] },
+      { path: "/out/My notes-sevenzip.7z", size: 1, unreadable: [] },
       tr,
     );
     expect(toast).toEqual({ message: "vault.export.success(name=My notes)", durationMs: null });
@@ -64,12 +65,12 @@ describe("vaultExportToast", () => {
   it("adds the files kept with zeros and stays longer", () => {
     const toast = vaultExportToast(
       target,
-      { path: "/out/My notes 2.7z", size: 1, unreadable: ["/docs/gone.pdf"] },
+      { path: "/out/My notes-sevenzip-2.7z", size: 1, unreadable: ["/docs/gone.pdf"] },
       tr,
     );
     expect(toast.message).toBe(
-      "vault.export.success_numbered(filename=My notes.7z,name=My notes,saved=My notes 2.7z) " +
-        "vault.export.kept_unreadable(count=1,names=gone.pdf)",
+      "vault.export.success_numbered(filename=My notes-sevenzip.7z,name=My notes," +
+        "saved=My notes-sevenzip-2.7z) vault.export.kept_unreadable(count=1,names=gone.pdf)",
     );
     expect(toast.durationMs).toBe(VAULT_EXPORT_UNREADABLE_TOAST_MS);
   });
@@ -109,72 +110,70 @@ describe("vaultExportPending", () => {
 });
 
 describe("vaultExportFilename", () => {
-  it("uses the display name, not a slug", () => {
-    expect(vaultExportFilename("Minhas notas", "store_zip")).toBe("Minhas notas.zip");
-    expect(vaultExportFilename("Minhas notas", "seven_zip")).toBe("Minhas notas.7z");
+  it("uses the display name, not a slug, and says what the file holds", () => {
+    expect(vaultExportFilename("Minhas notas", "store_zip")).toBe("Minhas notas-upriv.zip");
+    expect(vaultExportFilename("Minhas notas", "seven_zip")).toBe("Minhas notas-sevenzip.7z");
+    expect(vaultExportFilename("Minhas notas", "plain_zip")).toBe("Minhas notas-plain-text.zip");
   });
 
   it("trims the display name", () => {
-    expect(vaultExportFilename("  Vault  ", "store_zip")).toBe("Vault.zip");
+    expect(vaultExportFilename("  Vault  ", "store_zip")).toBe("Vault-upriv.zip");
   });
 
   it("collapses extra spaces in the display name", () => {
-    expect(vaultExportFilename("My    notes", "store_zip")).toBe("My notes.zip");
-  });
-
-  it("names a plain-text .zip after the vault, so it unpacks to that folder", () => {
-    expect(vaultExportFilename("Notes", "plain_zip")).toBe("Notes.zip");
-    expect(vaultExportFilename("Notes", "plain_zip", 2)).toBe("Notes 2.zip");
-    expect(vaultExportFilename("Notes", "store_zip")).toBe("Notes.zip");
+    expect(vaultExportFilename("My    notes", "store_zip")).toBe("My notes-upriv.zip");
   });
 
   it("adds the number core gives a taken name", () => {
-    expect(vaultExportFilename("My notes", "store_zip", 1)).toBe("My notes.zip");
-    expect(vaultExportFilename("My notes", "store_zip", 2)).toBe("My notes 2.zip");
-    expect(vaultExportFilename("My notes", "seven_zip", 12)).toBe("My notes 12.7z");
+    expect(vaultExportFilename("My notes", "store_zip", 1)).toBe("My notes-upriv.zip");
+    expect(vaultExportFilename("My notes", "store_zip", 2)).toBe("My notes-upriv-2.zip");
+    expect(vaultExportFilename("My notes", "plain_zip", 2)).toBe("My notes-plain-text-2.zip");
+    expect(vaultExportFilename("My notes", "seven_zip", 12)).toBe("My notes-sevenzip-12.7z");
   });
 });
 
 describe("vaultExportSavedAs", () => {
   it("is null while the export kept its own name", () => {
-    expect(vaultExportSavedAs("My notes", "store_zip", "/media/usb/My notes.zip")).toBeNull();
-    expect(vaultExportSavedAs("My notes", "seven_zip", "E:\\Copies\\My notes.7z")).toBeNull();
+    expect(vaultExportSavedAs("My notes", "store_zip", "/media/usb/My notes-upriv.zip")).toBeNull();
+    expect(
+      vaultExportSavedAs("My notes", "seven_zip", "E:\\Copies\\My notes-sevenzip.7z"),
+    ).toBeNull();
   });
 
   it("names the numbered file core saved instead", () => {
-    expect(vaultExportSavedAs("My notes", "store_zip", "/media/usb/My notes 2.zip")).toBe(
-      "My notes 2.zip",
+    expect(vaultExportSavedAs("My notes", "store_zip", "/media/usb/My notes-upriv-2.zip")).toBe(
+      "My notes-upriv-2.zip",
     );
-    expect(vaultExportSavedAs("My notes", "seven_zip", "/upriv-saf-export/My notes 3.7z")).toBe(
-      "My notes 3.7z",
-    );
+    expect(
+      vaultExportSavedAs("My notes", "seven_zip", "/upriv-saf-export/My notes-sevenzip-3.7z"),
+    ).toBe("My notes-sevenzip-3.7z");
   });
 
   it("replaces illegal path characters instead of dropping the name", () => {
-    expect(vaultExportFilename("a/b:c", "seven_zip")).toBe("a_b_c.7z");
-    expect(vaultExportFilename("Notes: 2026", "store_zip")).toBe("Notes_ 2026.zip");
+    expect(vaultExportFilename("a/b:c", "seven_zip")).toBe("a_b_c-sevenzip.7z");
+    expect(vaultExportFilename("Notes: 2026", "store_zip")).toBe("Notes_ 2026-upriv.zip");
   });
 
   it("replaces control characters, including DEL and C1", () => {
-    expect(vaultExportFilename("a\u0001b", "store_zip")).toBe("a_b.zip");
-    expect(vaultExportFilename("a\u007fb", "store_zip")).toBe("a_b.zip");
-    expect(vaultExportFilename("a\u0085b", "store_zip")).toBe("a_b.zip");
+    expect(vaultFolderName("a\u0001b")).toBe("a_b");
+    expect(vaultFolderName("a\u007fb")).toBe("a_b");
+    expect(vaultFolderName("a\u0085b")).toBe("a_b");
   });
 
   it("falls back to vault for empty, dot and reserved names", () => {
-    expect(vaultExportFilename("", "store_zip")).toBe("vault.zip");
-    expect(vaultExportFilename("..", "store_zip")).toBe("vault.zip");
-    expect(vaultExportFilename("CON", "store_zip")).toBe("vault.zip");
+    expect(vaultFolderName("")).toBe("vault");
+    expect(vaultFolderName("..")).toBe("vault");
+    expect(vaultExportFilename("CON", "store_zip")).toBe("vault-upriv.zip");
   });
 
   it("does not throw on a lone surrogate", () => {
-    expect(vaultExportFilename("Fotos \uD83D", "store_zip")).toBe("Fotos \uD83D.zip");
+    expect(vaultFolderName("Fotos \uD83D")).toBe("Fotos \uD83D");
   });
 
   it("defaults callers to a .zip of the encrypted vault", () => {
     expect(
       vaultExportFilename(vaultListItemFixture({ displayName: "Demo" }).displayName, "store_zip"),
-    ).toBe("Demo.zip");
+    ).toBe("Demo-upriv.zip");
   });
 });
 

@@ -1,5 +1,6 @@
 import type { VaultListSortDirection, VaultListSortMode, VaultListViewMode } from "../vault-list";
 import { workspaceTablesEqual, type WorkspaceTable } from "../workspace";
+import type { BackupFolderTable } from "../backups/folders";
 
 export type LocaleId = "en" | "pt-BR" | "es";
 export type UiTheme = "dark" | "neutral" | "light";
@@ -14,6 +15,7 @@ export const APP_SETTINGS_SECTIONS = [
   "language",
   "general",
   "workspace",
+  "backups",
   "vault_list",
   "groups",
   "logging",
@@ -132,6 +134,8 @@ export interface AppSettingsConfig {
    * `place` starts `unset`. `file_manager_folder` is one flag for every system and starts off.
    */
   workspace: WorkspaceTable;
+  /** Where backups go by default on each desktop system (`[backups.<os>]`). */
+  backups: BackupFolderTable;
 }
 
 export type AppSettingsPatch = {
@@ -139,9 +143,10 @@ export type AppSettingsPatch = {
   logging?: Partial<AppSettingsConfig["logging"]>;
   app?: Partial<AppSettingsConfig["app"]>;
   workspace?: Partial<AppSettingsConfig["workspace"]>;
+  backups?: Partial<AppSettingsConfig["backups"]>;
 };
 
-/** True when saveable System Settings prefs match (`ui` + `logging` + `workspace`; ignores wire `app`). */
+/** True when saveable System Settings prefs match (`ui` + `logging` + `workspace` + `backups`; ignores wire `app`). */
 export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): boolean {
   return (
     a.ui.locale === b.ui.locale &&
@@ -173,6 +178,7 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&
     a.logging.keep_last_entries === b.logging.keep_last_entries &&
-    workspaceTablesEqual(a.workspace, b.workspace)
+    workspaceTablesEqual(a.workspace, b.workspace) &&
+    JSON.stringify(a.backups) === JSON.stringify(b.backups)
   );
 }

@@ -366,7 +366,7 @@ mode = "encrypted_dir"
             b"one-file"
         );
         crate::close_vault(&root, "notes").unwrap();
-        crate::delete_vault(&root, "notes").unwrap();
+        crate::delete_vault(&root, "notes", false).unwrap();
 
         let welcome = crate::vault::VaultWelcome {
             readme: "# Welcome\n",

@@ -26,6 +26,9 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_file_too_large: "error.vault_file_too_large",
   vault_file_unreadable: "error.vault_file_unreadable",
   vault_held_not_found: "error.vault_held_not_found",
+  vault_index_unreadable: "error.vault_index_unreadable",
+  vault_index_readable: "error.vault_index_readable",
+  vault_rebuild_space_short: "error.vault_rebuild_space_short",
   vault_locked: "error.vault_locked",
   vault_mount_failed: "error.vault_mount_failed",
   vault_mount_filesystem: "error.vault_mount_filesystem",
@@ -56,11 +59,20 @@ const CREDENTIAL_CHALLENGE_KEYS = new Set<I18nKey>([
   VAULT_ERROR_I18N_KEYS.wrong_password,
   VAULT_ERROR_I18N_KEYS.vault_unlock_blocked,
   VAULT_ERROR_I18N_KEYS.insufficient_ram,
+  VAULT_ERROR_I18N_KEYS.vault_index_unreadable,
 ]);
 
-/** Stay on the password dialog — do not dismiss into the pipeline overlay. */
+/**
+ * Stay on the password dialog — do not dismiss into the pipeline overlay. A
+ * lost index stays too: the dialog offers the rebuild with the password typed.
+ */
 export function isVaultCredentialChallengeI18nKey(key: I18nKey): boolean {
   return CREDENTIAL_CHALLENGE_KEYS.has(key);
+}
+
+/** The unlock found the index lost: the dialog offers the rebuild. */
+export function offersVaultRebuild(key: I18nKey | null): boolean {
+  return key === VAULT_ERROR_I18N_KEYS.vault_index_unreadable;
 }
 
 /**

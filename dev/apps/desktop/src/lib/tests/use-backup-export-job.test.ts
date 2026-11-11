@@ -25,11 +25,13 @@ const WRITTEN: VaultPathWriteResult = { path: "/media/usb/20260101000000-notes.z
 
 function serviceExporting(exportTo: BackupService["exportTo"]): BackupService {
   return {
-    listBackups: async () => [],
+    listBackups: async () => ({ backups: [], chosen: null }),
     deleteBackups: async () => undefined,
     promoteToSave: async () => undefined,
-    saveNow: async () => ({ stamp: "", createdAt: "" }),
+    saveNow: async () => ({ backup: { stamp: "", createdAt: "" }, fallback: null }),
     exportTo,
+    checkFolder: async () => "ok",
+    reuseFolder: async () => undefined,
   };
 }
 

@@ -24,9 +24,10 @@ use super::aead::{
 };
 use super::header::{chunk_aad, VaultHeader};
 use super::index::{
-    sha256_hex, ChunkVersion, DeadBlobSpan, FileProblem, VaultIndex, VaultNode, CHUNK_VERSION_LEN,
-    DATA_DIR_NAME,
+    sha256_hex, ChunkVersion, DeadBlobSpan, FileProblem, SessionWrites, VaultIndex, VaultNode,
+    CHUNK_VERSION_LEN, DATA_DIR_NAME,
 };
+use super::record::Records;
 use crate::error::{Result, UprivError};
 
 /// Poly1305 tag appended by XChaCha20-Poly1305. Blob length is nonce + plaintext + tag.
@@ -70,7 +71,7 @@ fn parse_file_id(file_id: &str) -> Result<Uuid> {
     })
 }
 
-fn cipher_len(plain_len: u32) -> usize {
+pub(super) fn cipher_len(plain_len: u32) -> usize {
     plain_len as usize + XCHACHA_NONCE_LEN + XCHACHA_TAG_LEN
 }
 
@@ -163,6 +164,10 @@ struct OpenBlob {
     position: u64,
     created: bool,
     rollback_len: u64,
+    /// The blob's newest recovery record, `(start, length)` ([`open_blob`]):
+    /// chunk placement keeps off it, so it stays readable until a later one
+    /// replaces it.
+    record: Option<(u64, u64)>,
 }
 
 /// Opening the blob of the file at `logical_path` failed. A blob that is gone
@@ -189,20 +194,28 @@ impl OpenBlob {
             position: 0,
             created: true,
             rollback_len: 0,
+            record: None,
         })
     }
 
     fn append(path: PathBuf, logical_path: &str) -> Result<Self> {
-        let file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::ReadWrite)
+        let mut file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::ReadWrite)
             .map_err(|error| blob_open_error(logical_path, error))?;
         let position = file.metadata()?.len();
+        let record = super::record::newest_record_span(&mut file, position);
         Ok(Self {
             file,
             path,
             position,
             created: false,
             rollback_len: position,
+            record,
         })
+    }
+
+    /// Keep chunk placement off the newest record.
+    fn protect_record(&self, occupied: &mut Vec<(u64, u64)>) {
+        occupied.extend(self.record);
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) -> Result<u64> {
@@ -267,15 +280,29 @@ impl OpenBlob {
 
 /// The blob of the file at `logical_path`, open for writing. `allow_create`
 /// makes a missing blob for a file that has no chunks yet.
+///
+/// Its newest record is the one its last bytes end with. Once this session
+/// writes chunks after it, the blob no longer ends with it, so `writes` keeps
+/// where it is for every later write of the session.
 fn open_blob(
     store_dir: &Path,
     file_id: &str,
     allow_create: bool,
     logical_path: &str,
+    writes: &mut SessionWrites,
 ) -> Result<OpenBlob> {
     let path = blob_path(store_dir, file_id)?;
     match crate::host_fs::entry_kind(&path) {
-        Ok(crate::host_fs::EntryKind::File) => OpenBlob::append(path, logical_path),
+        Ok(crate::host_fs::EntryKind::File) => {
+            let mut blob = OpenBlob::append(path, logical_path)?;
+            match blob.record {
+                Some(span) => {
+                    writes.records.insert(file_id.to_string(), span);
+                }
+                None => blob.record = writes.records.get(file_id).copied(),
+            }
+            Ok(blob)
+        }
         Ok(_) => Err(unreadable(logical_path, FileProblem::Damaged)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && allow_create => {
             OpenBlob::create(path)
@@ -380,6 +407,13 @@ pub struct ChunkBlobMutation {
     /// Appends to roll back when the index is not sealed. `(path, length before this write)`.
     pub truncate_to: Vec<(PathBuf, u64)>,
     pub superseded: Vec<PathBuf>,
+    /// Blobs whose file lost chunks with none written: nothing to flush, but
+    /// their newest record no longer matches, so the close writes one
+    /// ([`StagedBlobs`]).
+    trimmed: Vec<PathBuf>,
+    /// Blobs of `created` that already carry their first record, written by
+    /// the import that made them ([`super::record::record_made_blob`]).
+    recorded: Vec<PathBuf>,
     /// Nodes a pack rewrote. Restored without cloning the rest of the index.
     pack_rollback: Vec<PackNodeRollback>,
 }
@@ -389,6 +423,8 @@ impl ChunkBlobMutation {
         self.created.extend(other.created);
         self.truncate_to.extend(other.truncate_to);
         self.superseded.extend(other.superseded);
+        self.trimmed.extend(other.trimmed);
+        self.recorded.extend(other.recorded);
         self.pack_rollback.extend(other.pack_rollback);
     }
 
@@ -455,17 +491,55 @@ impl ChunkBlobMutation {
             .collect()
     }
 
-    /// Flush what this write put on disk ([`StagedBlobs::sync`]). Call it
-    /// before the index that names those bytes is sealed. Only for a write
-    /// that made all its blobs: a flush that fails here is not remembered, so
-    /// the caller deletes them. A write that grew a blob is flushed with the
-    /// session's staged blobs instead.
-    pub fn sync_before_index(&self) -> Result<()> {
-        debug_assert!(self.truncate_to.is_empty(), "a grown blob is staged");
+    /// Record and flush what this write put on disk ([`StagedBlobs::sync`]).
+    /// Call it before the index that names those bytes is sealed, with that
+    /// index in `records`. Only for a write that made all its blobs: a flush
+    /// that fails here is not remembered, so the caller deletes them. A write
+    /// that grew a blob is flushed with the session's staged blobs instead.
+    pub(crate) fn sync_before_index(&self, records: &Records<'_>) -> Result<()> {
+        debug_assert!(
+            self.truncate_to.is_empty() && self.trimmed.is_empty(),
+            "a grown blob is staged"
+        );
         let mut staged = StagedBlobs::default();
         staged.add(self);
-        staged.sync()
+        staged.sync(records, RecordsDue::Made)
     }
+
+    /// The blobs this write made carry their first record already: a seal
+    /// that stages them writes none.
+    pub(crate) fn mark_recorded(&mut self) {
+        self.recorded.clone_from(&self.created);
+    }
+
+    /// A blob this write made has no record yet.
+    pub(crate) fn owes_record(&self) -> bool {
+        self.created
+            .iter()
+            .any(|path| !self.recorded.contains(path))
+    }
+
+    /// Flush the blobs this write made while no index can name them yet, so
+    /// the long flush runs before the caller takes the session. Their record,
+    /// appended before ([`Self::mark_recorded`]), goes with that flush.
+    pub(crate) fn flush_unnamed(&self) -> Result<()> {
+        debug_assert!(
+            self.truncate_to.is_empty() && self.trimmed.is_empty(),
+            "a grown blob is staged"
+        );
+        let mut staged = StagedBlobs::default();
+        staged.add(self);
+        staged.flush()
+    }
+}
+
+/// Which blobs a seal writes recovery records to ([`super::record`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordsDue {
+    /// The blobs made since the last seal.
+    Made,
+    /// Also every blob written since its last record: the seal of a close.
+    All,
 }
 
 /// Blobs written since the last seal, and the folders that name them.
@@ -474,6 +548,11 @@ impl ChunkBlobMutation {
 /// bytes: each blob, each folder that holds a new blob, then the folder above
 /// it (`data/`, which names the shard folders). Whoever made a shard folder,
 /// its name is flushed with every seal that names a new blob in it.
+///
+/// Before that flush it appends the recovery records the seal owes
+/// ([`super::record`]): one to each blob made since the last seal that its
+/// import did not record already, and, at a close, one to each blob written
+/// or trimmed since its last record.
 ///
 /// A blob whose flush failed is never flushed again, since a second `fsync`
 /// can report success for bytes the first one lost. Its files are copied to a
@@ -485,6 +564,11 @@ impl ChunkBlobMutation {
 pub(crate) struct StagedBlobs {
     /// Every blob written, made or grown, still to flush.
     written: HashSet<PathBuf>,
+    /// Blobs made since the last seal, which records them.
+    made: HashSet<PathBuf>,
+    /// Blobs written or trimmed after their last record. Kept from seal to
+    /// seal until the close records them ([`RecordsDue::All`]).
+    behind: HashSet<PathBuf>,
     /// Folders that hold a blob made or moved in since the last seal.
     holders: HashSet<PathBuf>,
     /// Blobs whose flush failed.
@@ -498,11 +582,31 @@ impl StagedBlobs {
         for path in &mutation.created {
             self.add_holder_of(path);
             self.written.insert(path.clone());
+            if !mutation.recorded.contains(path) {
+                self.made.insert(path.clone());
+            }
         }
         for (path, _) in &mutation.truncate_to {
-            if !self.written.contains(path) && !self.failed.contains(path) {
+            if self.failed.contains(path) {
+                continue;
+            }
+            if !self.written.contains(path) {
                 self.written.insert(path.clone());
             }
+            self.note_behind(path);
+        }
+        for path in &mutation.trimmed {
+            if !self.failed.contains(path) {
+                self.note_behind(path);
+            }
+        }
+    }
+
+    /// A blob that changed after its last record. One made since the last
+    /// seal gets its record at that seal anyway.
+    fn note_behind(&mut self, path: &Path) {
+        if !self.made.contains(path) && !self.behind.contains(path) {
+            self.behind.insert(path.to_path_buf());
         }
     }
 
@@ -540,12 +644,46 @@ impl StagedBlobs {
         self.copy_failed
     }
 
-    /// After a seal: everything staged is on disk or was copied.
+    /// After a seal: everything staged is on disk or was copied. The blobs
+    /// behind their records stay for the close, except the failed ones, whose
+    /// files the seal moved to copies.
     pub(crate) fn clear(&mut self) {
+        let failed = std::mem::take(&mut self.failed);
+        self.behind.retain(|path| !failed.contains(path));
         self.written.clear();
+        self.made.clear();
         self.holders.clear();
-        self.failed.clear();
         self.copy_failed = false;
+    }
+
+    /// Append the records `due` ([`super::record::append_records`]), from the
+    /// tree in `records`, which the caller seals next; then [`Self::flush`].
+    pub(crate) fn sync(&mut self, records: &Records<'_>, due: RecordsDue) -> Result<()> {
+        let mut owed: Vec<PathBuf> = self
+            .made
+            .drain()
+            .filter(|path| !self.failed.contains(path))
+            .collect();
+        if due == RecordsDue::All {
+            owed.extend(
+                self.behind
+                    .drain()
+                    .filter(|path| !self.failed.contains(path)),
+            );
+        }
+        for path in super::record::append_records(records, &owed) {
+            if !self.written.contains(&path) {
+                self.written.insert(path);
+            }
+        }
+        self.flush()
+    }
+
+    /// Flush the folders of blobs moved in whole ([`Self::add_moved`]). Such
+    /// moves write nothing to a blob, so they owe no record.
+    pub(crate) fn sync_moves(&mut self) -> Result<()> {
+        debug_assert!(self.written.is_empty(), "a written blob is recorded");
+        self.flush()
     }
 
     /// Flush every staged blob, then [`Self::folders`]. A blob or folder that
@@ -554,7 +692,7 @@ impl StagedBlobs {
     /// fails moves to the failed set, and the error is returned once every
     /// other blob is flushed. A folder whose flush fails moves every blob
     /// staged under it to the failed set.
-    pub(crate) fn sync(&mut self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         let mut first_error = None;
         for path in &self.written {
             if let Err(error) = flush_present(crate::paths::sync_file_durable(path)) {
@@ -682,7 +820,7 @@ pub fn write_logical_file(
     let mutation = if count == 0 {
         ChunkBlobMutation::default()
     } else {
-        let mut blob = open_blob(store_dir, &file_id, true, logical_path)?;
+        let mut blob = OpenBlob::create(blob_path(store_dir, &file_id)?)?;
         let written = (|| {
             for (chunk_index, slice) in plaintext.chunks(chunk_size_usize).enumerate() {
                 let (version, offset) = append_chunk(
@@ -1105,6 +1243,32 @@ pub(crate) fn record_imported_file(
     if let Some((retired, _)) = &previous {
         index.writes.forget_stream(&retired.file_id);
     }
+    let mut node = imported_node(
+        logical_path,
+        file_id,
+        file_size,
+        chunk_versions,
+        chunk_offsets,
+        content_sha256,
+    );
+    if let Some(created_at) = created_at {
+        node.created_at = created_at;
+    }
+    index.put(node);
+    Ok(previous.map(|(retired, _)| retired))
+}
+
+/// The entry of a file whose chunks an import sealed into its blob, as
+/// [`record_imported_file`] names it: made now, with the plaintext digest when
+/// the sealer took one. A file it replaces keeps its creation time.
+pub(crate) fn imported_node(
+    logical_path: &str,
+    file_id: String,
+    file_size: u64,
+    chunk_versions: Vec<ChunkVersion>,
+    chunk_offsets: Vec<u64>,
+    content_sha256: Option<String>,
+) -> VaultNode {
     let mut node = VaultNode::file(
         logical_path,
         file_id,
@@ -1112,14 +1276,10 @@ pub(crate) fn record_imported_file(
         chunk_versions,
         chunk_offsets,
     );
-    if let Some(created_at) = created_at {
-        node.created_at = created_at;
-    }
     if let Some(sha256) = content_sha256 {
         node.bind_digest(sha256);
     }
-    index.put(node);
-    Ok(previous.map(|(retired, _)| retired))
+    node
 }
 
 fn append_chunk(
@@ -1327,7 +1487,13 @@ pub fn write_logical_range(
     let union_end = write_end;
     let written = (|| {
         if union_end > union_start {
-            let mut blob = open_blob(store_dir, &file_id, old_count == 0, logical_path)?;
+            let mut blob = open_blob(
+                store_dir,
+                &file_id,
+                old_count == 0,
+                logical_path,
+                &mut index.writes,
+            )?;
             let first = (union_start / u64::from(chunk_size)) as u32;
             let last = ((union_end - 1) / u64::from(chunk_size)) as u32;
             let mut abandoned: Vec<(u64, u64)> = Vec::new();
@@ -1370,6 +1536,7 @@ pub fn write_logical_range(
                             occupied_spans(&offsets, &plain_lens, blob.position, slot);
                         occupied.extend(abandoned.iter().copied());
                         protect_unsealed(index, &file_id, &mut occupied);
+                        blob.protect_record(&mut occupied);
                         let (version, chunk_offset) = place_chunk(
                             &mut blob,
                             header,
@@ -1626,7 +1793,8 @@ pub fn truncate_logical_file(
             if last_len < old_last_len {
                 let previous_version = versions[last as usize];
                 let previous_offset = offsets[last as usize];
-                let mut blob = open_blob(store_dir, &file_id, false, logical_path)?;
+                let mut blob =
+                    open_blob(store_dir, &file_id, false, logical_path, &mut index.writes)?;
                 let appended = (|| -> Result<()> {
                     let mut buf = decrypt_from_open(
                         &mut blob,
@@ -1654,6 +1822,7 @@ pub fn truncate_logical_file(
                         .collect();
                     let mut occupied = occupied_spans(&offsets, &plain_lens, blob.position, slot);
                     protect_unsealed(index, &file_id, &mut occupied);
+                    blob.protect_record(&mut occupied);
                     let (version, chunk_offset) = place_chunk(
                         &mut blob,
                         header,
@@ -1696,6 +1865,9 @@ pub fn truncate_logical_file(
     // The dropped chunks stay in the blob until a pack. Empty, it is superseded.
     if new_count > 0 {
         index.writes.rewritten_blobs.insert(file_id.clone());
+        if let Ok(path) = blob_path(store_dir, &file_id) {
+            mutation.trimmed.push(path);
+        }
     }
     // Emptied, the file has a known digest and appends start a new one.
     let empty = (new_size == 0 && index.writes.track_digests).then(Sha256::new);
@@ -1755,10 +1927,14 @@ struct BlobMeasure {
     live: u64,
 }
 
+/// The live chunks of `node`'s blob and the rest of its bytes. Its newest
+/// recovery record is neither: every blob carries one, so it never counts as
+/// waste, and the older records do.
 fn measure_blob(
     store_dir: &Path,
     header: &VaultHeader,
     node: &VaultNode,
+    writes: &SessionWrites,
 ) -> Result<Option<BlobMeasure>> {
     let Some((file_id, size, versions)) = node.as_file() else {
         return Ok(None);
@@ -1775,18 +1951,19 @@ fn measure_blob(
     let count = chunk_count(size, header.chunk_size);
     require_chunk_lists(&node.path, count, versions, offsets)?;
     let path = blob_path(store_dir, file_id)?;
-    let meta = crate::host_fs::symlink_metadata(&path)
+    let mut file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::Read)
         .map_err(|error| blob_open_error(&node.path, error))?;
-    if meta.file_type().is_symlink() || !meta.host_is_file() {
-        return Err(unreadable(&node.path, FileProblem::Damaged));
-    }
+    let len = file.metadata()?.len();
+    let record = super::record::newest_record_span(&mut file, len)
+        .or_else(|| writes.records.get(file_id).copied())
+        .map_or(0, |(_, record_len)| record_len);
     let mut live = 0u64;
     for index in 0..count {
         live =
             live.saturating_add(cipher_len(chunk_plain_len(size, index, header.chunk_size)) as u64);
     }
     Ok(Some(BlobMeasure {
-        dead: meta.len().saturating_sub(live),
+        dead: len.saturating_sub(live).saturating_sub(record),
         live,
     }))
 }
@@ -1811,7 +1988,7 @@ pub(crate) fn blobs_need_pack(
         }
         // A blob that cannot be measured cannot be packed either.
         matches!(
-            measure_blob(store_dir, header, node),
+            measure_blob(store_dir, header, node, &index.writes),
             Ok(Some(measure)) if should_pack(mode, measure.dead, measure.live)
         )
     })
@@ -1876,12 +2053,22 @@ pub(crate) fn pack_blob_waste(
                 continue;
             }
             let repacked =
-                measure_blob(store_dir, header, node).and_then(|measure| match measure {
-                    Some(measure) if should_pack(mode, measure.dead, measure.live) => {
-                        repack_live_blob(store_dir, header, content_key, node, file_id, size, mode)
+                measure_blob(store_dir, header, node, &index.writes).and_then(|measure| {
+                    match measure {
+                        Some(measure) if should_pack(mode, measure.dead, measure.live) => {
+                            repack_live_blob(
+                                store_dir,
+                                header,
+                                content_key,
+                                node,
+                                file_id,
+                                size,
+                                mode,
+                            )
                             .map(Some)
+                        }
+                        _ => Ok(None),
                     }
-                    _ => Ok(None),
                 });
             match repacked {
                 Ok(Some(item)) => {
@@ -1988,7 +2175,7 @@ fn repack_live_blob(
         return Err(unreadable(&node.path, problem));
     }
     let new_file_id = Uuid::new_v4().to_string();
-    let mut dst = open_blob(store_dir, &new_file_id, true, &node.path)?;
+    let mut dst = OpenBlob::create(blob_path(store_dir, &new_file_id)?)?;
     let new_path = dst.path.clone();
     let mut new_offsets = Vec::with_capacity(count as usize);
     let mut new_versions = Vec::with_capacity(count as usize);
@@ -2048,7 +2235,7 @@ pub(crate) fn mutation_blob_ids(mutation: &ChunkBlobMutation) -> Vec<String> {
 }
 
 /// The file id a blob path names (`<file_id>.blob`).
-fn blob_file_id(path: &Path) -> Option<&str> {
+pub(super) fn blob_file_id(path: &Path) -> Option<&str> {
     let id = path.file_name()?.to_str()?.strip_suffix(BLOB_FILE_SUFFIX)?;
     Uuid::parse_str(id).is_ok().then_some(id)
 }
@@ -2131,6 +2318,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
+        let opened = crate::store::open_store(&dir, PW).unwrap();
         let data = dir.join(DATA_DIR_NAME);
         let (aa, bb) = (data.join("aa"), data.join("bb"));
 
@@ -2141,7 +2329,7 @@ mod tests {
         let mut folders = staged.folders();
         folders.sort();
         assert_eq!(folders, vec![data.as_path(), aa.as_path(), bb.as_path()]);
-        staged.sync().unwrap();
+        staged.sync(&opened.records(), RecordsDue::Made).unwrap();
 
         // Whoever made the shard folder, `data/` is flushed with it again.
         staged.clear();
@@ -2149,7 +2337,7 @@ mod tests {
         let mut folders = staged.folders();
         folders.sort();
         assert_eq!(folders, vec![data.as_path(), aa.as_path()]);
-        staged.sync().unwrap();
+        staged.sync(&opened.records(), RecordsDue::Made).unwrap();
     }
 
     #[test]
@@ -2157,6 +2345,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
+        let opened = crate::store::open_store(&dir, PW).unwrap();
         let grown = blob_path(&dir, IN_AA).unwrap();
         new_blob(&dir, IN_AA);
         let gone = new_blob(&dir, IN_BB);
@@ -2169,7 +2358,7 @@ mod tests {
         assert!(staged.folders().is_empty());
         staged.add(&gone);
         crate::host_fs::remove_file(&gone.created[0]).unwrap();
-        staged.sync().unwrap();
+        staged.sync(&opened.records(), RecordsDue::All).unwrap();
     }
 
     fn file_chunk_meta(
@@ -2645,6 +2834,131 @@ mod tests {
         assert_eq!(got, want);
     }
 
+    /// Where the newest record of the blob at `path` sits, and its bytes.
+    fn newest_record(path: &Path) -> ((u64, u64), Vec<u8>) {
+        let mut file = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read).unwrap();
+        let len = file.metadata().unwrap().len();
+        let (start, record_len) =
+            super::super::record::newest_record_span(&mut file, len).expect("a record");
+        let bytes = crate::host_fs::read(path).unwrap();
+        let record = bytes[start as usize..(start + record_len) as usize].to_vec();
+        ((start, record_len), record)
+    }
+
+    /// `path` written whole and recorded, as the seal that names it does,
+    /// then sealed. Returns its blob and id.
+    fn write_recorded(
+        dir: &Path,
+        opened: &mut crate::store::OpenedStore,
+        path: &str,
+        body: &[u8],
+    ) -> (PathBuf, String) {
+        let (_, made) = write_logical_file(
+            dir,
+            &opened.header,
+            &opened.content_key,
+            &mut opened.index,
+            path,
+            body,
+        )
+        .unwrap();
+        made.sync_before_index(&opened.records()).unwrap();
+        flush_index(dir, opened).unwrap();
+        let file_id = opened.index.find(path).unwrap().as_file().unwrap().0;
+        (blob_path(dir, file_id).unwrap(), file_id.to_string())
+    }
+
+    #[test]
+    fn chunk_placement_keeps_off_the_newest_record_after_chunks_follow_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
+        create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
+        let mut opened = open_store(&dir, PW).unwrap();
+        // Chunks of 64 bytes: the record of ten of them spans several chunk
+        // slots, so a chunk could fit where it is.
+        opened.header.chunk_size = 64;
+        let body: Vec<u8> = (0..640u32).map(|n| n as u8).collect();
+        let (blob, file_id) = write_recorded(&dir, &mut opened, "f.bin", &body);
+        let (span, before) = newest_record(&blob);
+        assert!(span.1 > 2 * cipher_len(64) as u64);
+
+        let write = |opened: &mut crate::store::OpenedStore, at: u64, data: &[u8]| {
+            write_logical_range(
+                &dir,
+                &opened.header,
+                &opened.content_key,
+                &mut opened.index,
+                "f.bin",
+                at,
+                data,
+            )
+            .unwrap();
+        };
+        // A chunk after the record: the blob no longer ends with it.
+        write(&mut opened, 640, &[7u8; 64]);
+        flush_index(&dir, &mut opened).unwrap();
+        // Five chunks written again in one batch each need a new slot.
+        write(&mut opened, 0, &[1u8; 5 * 64]);
+        let bytes = crate::host_fs::read(&blob).unwrap();
+        assert_eq!(&bytes[span.0 as usize..(span.0 + span.1) as usize], before);
+        let record = super::super::record::read_record(
+            &blob,
+            &file_id,
+            &opened.header,
+            &opened.record_key,
+            true,
+        )
+        .unwrap();
+        assert_eq!(record.node.as_file().unwrap().1, 640);
+    }
+
+    #[test]
+    fn the_newest_record_is_not_waste_and_an_older_one_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
+        create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
+        let mut opened = open_store(&dir, PW).unwrap();
+        let (blob, _) = write_recorded(&dir, &mut opened, "note.txt", b"a short note");
+        let need_pack = |opened: &crate::store::OpenedStore| {
+            blobs_need_pack(
+                &dir,
+                &opened.header,
+                &opened.index,
+                BlobPackMode::Close,
+                None,
+            )
+        };
+        assert!(!need_pack(&opened), "a small file with only its record");
+
+        // The record a close writes leaves the first one as waste.
+        let node = opened.index.find("note.txt").unwrap().clone();
+        let record_key = &opened.record_key;
+        super::super::record::append_record(&blob, &opened.header, record_key, &node, 9, None)
+            .unwrap();
+        assert!(need_pack(&opened));
+
+        // Packing copies the chunks to a new blob, which gets one record.
+        let packed = pack_blob_waste(
+            &dir,
+            &opened.header,
+            &opened.content_key,
+            &mut opened.index,
+            BlobPackMode::Close,
+            None,
+        )
+        .unwrap()
+        .mutation;
+        packed.sync_before_index(&opened.records()).unwrap();
+        flush_index(&dir, &mut opened).unwrap();
+        for id in packed.superseded_ids() {
+            remove_file_chunks(&dir, &id).unwrap();
+        }
+        assert!(!need_pack(&opened));
+        let file_id = opened.index.find("note.txt").unwrap().as_file().unwrap().0;
+        let (span, _) = newest_record(&blob_path(&dir, file_id).unwrap());
+        assert_eq!(span.0, cipher_len(12) as u64);
+    }
+
     /// No drive has an exbibyte free, so each way of asking for one is
     /// refused before a byte of it is written.
     #[test]
@@ -2867,16 +3181,24 @@ mod tests {
         .unwrap()
         .mutation;
         assert!(!packed.created.is_empty(), "dead ciphertext must be packed");
-        packed.sync_before_index().unwrap();
+        packed.sync_before_index(&opened.records()).unwrap();
         flush_index(&dir, &mut opened).unwrap();
         for id in packed.superseded_ids() {
             remove_file_chunks(&dir, &id).unwrap();
         }
         let file_id = opened.index.find("notes.txt").unwrap().as_file().unwrap().0;
-        let len = crate::host_fs::metadata(blob_path(&dir, file_id).unwrap())
-            .unwrap()
-            .len();
-        assert_eq!(len, cipher_len(b"generation-two".len() as u32) as u64);
+        let path = blob_path(&dir, file_id).unwrap();
+        let mut blob =
+            crate::paths::open_nofollow(&path, crate::paths::NofollowMode::Read).unwrap();
+        let len = blob.metadata().unwrap().len();
+        let (record_start, record_len) =
+            super::super::record::newest_record_span(&mut blob, len).expect("its record");
+        // The live chunk, then its record: no dead ciphertext.
+        assert_eq!(
+            record_start,
+            cipher_len(b"generation-two".len() as u32) as u64
+        );
+        assert_eq!(record_start + record_len, len);
         let reopened = open_store(&dir, PW).unwrap();
         let got = read_logical_file(
             &dir,

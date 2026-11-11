@@ -14,8 +14,9 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
   const { t } = useTranslation();
   const folder = useExportFolder(t("modal.data_folder_export.picker_title"));
   const [zipName, setZipName] = useState(() => dataFolderZipDefaultName(new Date()));
+  const [includeBackups, setIncludeBackups] = useState(true);
 
   const resetZipName = useCallback(() => setZipName(dataFolderZipDefaultName(new Date())), []);
 
-  return { folder, zipName, setZipName, resetZipName };
+  return { folder, zipName, setZipName, resetZipName, includeBackups, setIncludeBackups };
 }

@@ -2,6 +2,7 @@ import type { StorageMode } from "../vault/types";
 import type { KdfUnlockPreset } from "./kdf";
 import { normalizeStoredName } from "../format/storedName";
 import { normalizeWorkspaceTable, vaultMountForDaemon, type WorkspaceTable } from "../workspace";
+import { normalizeVaultBackupFolders, type VaultBackupFolders } from "../backups/folders";
 
 export type { KdfParams, KdfUnlockPreset } from "./kdf";
 export {
@@ -103,6 +104,7 @@ export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): Vault
       display_name: normalizeStoredName(config.vault.display_name),
     },
     mount: normalizeWorkspaceTable(config.mount, "vault"),
+    backup: { ...config.backup, ...normalizeVaultBackupFolders(config.backup) },
     seven_zip: normalizeSevenZipSection(config.seven_zip),
   };
 }
@@ -165,7 +167,7 @@ export interface VaultSettingsConfig {
     keep_last: number;
     /** Close skips a zip when vault files match the last backup still on disk. */
     skip_unchanged: boolean;
-  };
+  } & VaultBackupFolders;
   security: {
     wipe_passes: number;
     wipe_pattern: WipePattern;

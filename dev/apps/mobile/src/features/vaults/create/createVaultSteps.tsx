@@ -7,13 +7,13 @@ import {
   createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
   createVaultImportSelectionPatch,
+  createVaultSetsPassword,
   createVaultSettingsLocked,
   importExtractApplies,
   importExtractEnabled,
   importKeepSettingsApplies,
   importKeepWorkspaceApplies,
   validateCreateVaultStep,
-  importSetsVaultPassword,
   importZipWrapsDocuments,
   isHiddenGroup,
   groupsForAssignmentPicker,
@@ -25,6 +25,7 @@ import {
   type CreateVaultDraft,
   type CreateVaultStepId,
   type CreateVaultValidationCode,
+  type PasswordWeakness,
   type VaultGroup,
   type WorkspaceTable,
 } from "@upriv/shared";
@@ -39,7 +40,13 @@ import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { LongTextInput } from "@/components/LongTextInput";
 import { PathField } from "@/components/PathField";
-import { Button, ElapsedTime, JobStopButton, Select } from "@/components/ui";
+import {
+  Button,
+  ElapsedTime,
+  JobStopButton,
+  PasswordWeaknessNotice,
+  Select,
+} from "@/components/ui";
 import { IntegerInput, PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
 import {
   FieldHint,
@@ -460,12 +467,14 @@ function CreateVaultIdentityStep({
   );
 }
 
-/** The `.7z` password test: it has no time limit, and its Stop ends it. */
+/** The password step: the `.7z` test (no time limit, its Stop ends it) and the weakness line. */
 interface PasswordTestProps {
   onTestImportPassword?: () => void;
   onStopTestImportPassword?: () => void;
   testingPassword?: boolean;
   passwordTestStartedAt?: number | null;
+  /** What is wrong with the new password; `null` when nothing is. */
+  passwordWeakness?: PasswordWeakness | null;
 }
 
 function CreateVaultPasswordStep({
@@ -476,6 +485,7 @@ function CreateVaultPasswordStep({
   onStopTestImportPassword,
   testingPassword = false,
   passwordTestStartedAt = null,
+  passwordWeakness = null,
   bindFieldRef,
   onFieldFocus,
   onFieldSubmit,
@@ -484,7 +494,7 @@ function CreateVaultPasswordStep({
   const { colors, typography } = useTheme();
   const isImport = draft.source === "import";
   const wrapsDocuments = importZipWrapsDocuments(draft);
-  const setsVaultPassword = !isImport || importSetsVaultPassword(draft);
+  const setsVaultPassword = createVaultSetsPassword(draft);
   const needsArchivePassword = createVaultImportNeedsArchivePassword(draft);
   const showPassword = setsVaultPassword || needsArchivePassword;
   const hintLocked = createVaultSettingsLocked(draft);
@@ -522,6 +532,7 @@ function CreateVaultPasswordStep({
               })
             }
           />
+          {setsVaultPassword ? <PasswordWeaknessNotice weakness={passwordWeakness} /> : null}
         </>
       ) : null}
       <FieldErrors errors={createVaultErrorsForField(errors, "password")} />
