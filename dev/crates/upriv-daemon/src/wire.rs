@@ -62,7 +62,6 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
         "vault_close"
             | "vault_delete"
             | "vault_discard_import"
-            | "vault_plain_confirm"
             | "vault_plain_sync"
             | "vault_plain_deletions"
             | "vault_plain_send"
@@ -99,18 +98,24 @@ pub fn is_pack_io_method(method: &str) -> bool {
     )
 }
 
-/// The small calls that reach a chosen backup folder: listing, deleting, and
-/// pinning backups, and checking a folder. That folder can be a sleeping or
-/// dead drive, so they stay off stdin, where a stop and Close now arrive. The
-/// backups themselves run on the close and pack lanes.
-pub fn is_backup_folder_method(method: &str) -> bool {
+/// The calls that reach a folder of a list: the status of a row, the search
+/// for a data folder that answers, an encrypted vault's unlocked folder
+/// after its open, and listing, deleting, pinning, naming, and forgetting
+/// backups. A folder can be a sleeping or dead drive, so they stay off stdin,
+/// where a stop and Close now arrive, on a lane of several threads, so the
+/// rows of a list check side by side. The backups themselves run on the
+/// close and pack lanes.
+pub fn is_folder_method(method: &str) -> bool {
     matches!(
         method,
-        "backup_list"
+        "folder_status"
+            | "data_folder_search"
+            | "vault_unlocked_folder_attach"
+            | "backup_list"
             | "backup_delete"
             | "backup_promote"
-            | "backup_folder_check"
-            | "backup_folder_reuse"
+            | "backup_rename"
+            | "backup_folder_forget"
     )
 }
 
@@ -122,11 +127,11 @@ pub fn is_import_io_method(method: &str) -> bool {
 }
 
 /// The zip of the whole data folder, and the copy of a phone's private data
-/// folder into the one it granted. Own worker: an import, export, or backup it
+/// folder into the one it selects. Own worker: an import, export, or backup it
 /// refuses answers at once instead of queuing behind a copy of every vault.
 pub fn is_data_folder_io_method(method: &str, params: &Value) -> bool {
     method == "data_folder_export"
-        || (method == "vault_root_setup_path"
+        || (method == "data_folder_apply"
             && params.get("adoptPrivateRoot").and_then(Value::as_bool) == Some(true))
 }
 
@@ -141,7 +146,7 @@ pub enum HeavyLane {
     Pack,
     Import,
     DataFolder,
-    BackupFolder,
+    Folder,
 }
 
 pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
@@ -169,8 +174,8 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     if is_data_folder_io_method(method, params) {
         return Some(HeavyLane::DataFolder);
     }
-    if is_backup_folder_method(method) {
-        return Some(HeavyLane::BackupFolder);
+    if is_folder_method(method) {
+        return Some(HeavyLane::Folder);
     }
     None
 }
@@ -276,15 +281,18 @@ mod tests {
         assert_eq!(heavy_lane("backup_save", &empty), Some(HeavyLane::Pack));
         assert_eq!(heavy_lane("backup_export", &empty), Some(HeavyLane::Pack));
         for method in [
+            "folder_status",
+            "data_folder_search",
+            "vault_unlocked_folder_attach",
             "backup_list",
             "backup_delete",
             "backup_promote",
-            "backup_folder_check",
-            "backup_folder_reuse",
+            "backup_rename",
+            "backup_folder_forget",
         ] {
             assert_eq!(
                 heavy_lane(method, &empty),
-                Some(HeavyLane::BackupFolder),
+                Some(HeavyLane::Folder),
                 "{method}"
             );
         }
@@ -298,12 +306,12 @@ mod tests {
             heavy_lane("vault_import_probe", &empty),
             Some(HeavyLane::Import)
         );
-        let adopting = serde_json::json!({ "path": "/upriv-saf-root", "adoptPrivateRoot": true });
+        let adopting = serde_json::json!({ "adoptPrivateRoot": true, "job": "copy" });
         assert_eq!(
-            heavy_lane("vault_root_setup_path", &adopting),
+            heavy_lane("data_folder_apply", &adopting),
             Some(HeavyLane::DataFolder)
         );
-        assert_eq!(heavy_lane("vault_root_setup_path", &empty), None);
+        assert_eq!(heavy_lane("data_folder_apply", &empty), None);
         // Progress and stop answer at once, beside the job they name.
         assert_eq!(heavy_lane("job_status", &empty), None);
         assert_eq!(heavy_lane("job_cancel", &empty), None);
@@ -357,12 +365,14 @@ mod tests {
         let expected = [
             "backup_delete",
             "backup_export",
-            "backup_folder_check",
-            "backup_folder_reuse",
+            "backup_folder_forget",
             "backup_list",
             "backup_promote",
+            "backup_rename",
             "backup_save",
             "data_folder_export",
+            "data_folder_search",
+            "folder_status",
             "vault_change_kdf",
             "vault_change_password",
             "vault_close",
@@ -378,7 +388,6 @@ mod tests {
             "vault_import_zip",
             "vault_ingest_open",
             "vault_open",
-            "vault_plain_confirm",
             "vault_plain_deletions",
             "vault_plain_remove",
             "vault_plain_send",
@@ -386,6 +395,7 @@ mod tests {
             "vault_plain_unsend",
             "vault_rebuild",
             "vault_unfinished_sweep",
+            "vault_unlocked_folder_attach",
         ];
         let expected: std::collections::BTreeSet<_> = expected
             .iter()

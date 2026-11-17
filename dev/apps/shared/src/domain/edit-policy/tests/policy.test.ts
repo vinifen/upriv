@@ -59,7 +59,7 @@ describe("a backup export of the vault's backups", () => {
 
   it("leaves the folder, the mode, and the rest editable", () => {
     expect(vaultConfigEditAllowed("storage.mode", row, exporting)).toBe(true);
-    expect(vaultConfigEditAllowed("mount.workspace_path", row, exporting)).toBe(true);
+    expect(vaultConfigEditAllowed("unlocked_folder", row, exporting)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_password", row, exporting)).toBe(true);
   });
 
@@ -182,8 +182,9 @@ describe("configEditGateAllows", () => {
     const open = vaultRowFixture({ id: "b", session: "open" });
     expect(appConfigEditAllowed("data_folder", [closed])).toBe(true);
     expect(appConfigEditAllowed("data_folder", [open])).toBe(false);
-    expect(appConfigEditAllowed("workspace.path", [closed])).toBe(true);
-    expect(appConfigEditAllowed("workspace.path", [open])).toBe(false);
+    expect(appConfigEditAllowed("unlocked_folders", [closed])).toBe(true);
+    expect(appConfigEditAllowed("unlocked_folders", [open])).toBe(false);
+    expect(appConfigEditAllowed("unlocked_folders.other_devices", [open])).toBe(true);
   });
 
   it("root_idle waits for a data-folder export, with or without vaults", () => {

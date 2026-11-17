@@ -19,6 +19,8 @@ import {
 
 /** Below Modal (`z-[100]`), above vault/group cards. */
 const ANCHORED_MENU_Z_INDEX = 90;
+/** A picker or menu opened from inside a modal (`z-[100]` / `z-[200]`). */
+export const ABOVE_MODAL_Z_INDEX = 250;
 const DEFAULT_GAP_PX = 8;
 const EDGE_PX = 8;
 const PANEL_HEIGHT_ESTIMATE = 240;

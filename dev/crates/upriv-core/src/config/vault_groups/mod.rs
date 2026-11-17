@@ -150,7 +150,7 @@ fn plan_set_grouped_vaults_hidden(
         if !dir.host_is_dir() {
             continue;
         }
-        let config = crate::config::vault_config::load_vault_config_raw(&dir)?;
+        let config = crate::config::vault_config::load_vault_config(&dir)?;
         if config.vault.hidden != hidden {
             planned.push((dir, config.vault.hidden));
         }
@@ -1599,12 +1599,12 @@ grouped_vault_sort_direction = "asc"
     }
 
     #[test]
-    fn hiding_group_skips_mount_revalidation() {
+    fn hiding_a_group_keeps_a_vault_whose_row_path_does_not_validate() {
         let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
         create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
         crate::host_fs::write(
             root.vault_dir("taxes").unwrap().join("config.toml"),
-            "[vault]\nid = \"taxes\"\ndisplay_name = \"taxes\"\n[mount.linux]\npath = \"relative\"\n[mount.windows]\npath = \"relative\"\n[mount.macos]\npath = \"relative\"\n[mount.android]\npath = \"relative\"\n[mount.ios]\npath = \"relative\"\n",
+            "[vault]\nid = \"taxes\"\ndisplay_name = \"taxes\"\n[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64]\nsystem = \"linux\"\nselected = 1\nnext_number = 2\n[[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64.rows]]\nnumber = 1\npath = \"not/absolute\"\n",
         )
         .unwrap();
         update_vault_group(
@@ -1621,7 +1621,7 @@ grouped_vault_sort_direction = "asc"
     }
 
     fn vault_hidden_raw(root: &VaultRoot, id: &str) -> bool {
-        crate::config::vault_config::load_vault_config_raw(root.vault_dir(id).unwrap())
+        crate::config::vault_config::load_vault_config(root.vault_dir(id).unwrap())
             .unwrap()
             .vault
             .hidden

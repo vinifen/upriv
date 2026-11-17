@@ -6,7 +6,7 @@ import { normalizeStoredName } from "../format/storedName";
 import { isWindowsReservedName } from "../format/windowsReserved";
 import type { JobProgress, JobProgressCopy } from "../jobs/progress";
 import { isLifecyclePasswordPresent } from "../vault-create/validate";
-import { exportFolderIssue, type ExportFolderIssue } from "../workspace";
+import { exportFolderIssue, type ExportFolderIssue } from "../export-folder";
 
 export type VaultExportFormat = "store_zip" | "seven_zip" | "plain_zip";
 

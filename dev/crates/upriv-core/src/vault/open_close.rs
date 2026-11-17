@@ -1,27 +1,25 @@
 //! Open / close against `store/` with an in-process session.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::{load_app_settings_at, load_vault_config, VaultStorageMode};
+use crate::config::{load_vault_config, VaultStorageMode};
 use crate::error::{Result, UprivError};
+use crate::folder_list::{Switch, UNLOCKED_CONTAINER};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use crate::lockfile::{acquire_vault_lock, wait_for_lock_holder};
 use crate::logging::{log_event, LogLevel};
-use crate::paths::{
-    encrypted_shortcut_active, resolve_vault_mount_point, resolved_workspace_parent, VaultRoot,
-    WorkspaceSystem,
-};
+use crate::paths::VaultRoot;
 use crate::runtime_state::{
     mark_session_closed, mark_session_open, release_recorded_mount, vault_held_elsewhere,
 };
 use crate::session::{
     any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
     is_vault_closing_at, is_vault_open_at, open_session_ids_under, record_unlock_failure,
-    record_unlock_success, take_session, vault_close_phase_at, with_open_session, with_unlock_lock,
+    record_unlock_success, take_session, vault_close_phase_at, with_unlock_lock,
     with_vault_dir_lock, ClosePhase, ClosingGuard, Job, JobKind, OpenSession, PreparingGuard,
 };
 use crate::store::{
@@ -31,8 +29,8 @@ use crate::store::{
 };
 
 use super::backup::{
-    backup_on_close, backup_zips_newest_first, discard_unfinished_backups, last_backup_is_kept,
-    list_backups, promote_backup_save,
+    backup_on_close, backup_zips_newest_first, close_backup_is_kept, discard_unfinished_backups,
+    list_backups, promote_backup_save, LastBackup,
 };
 use super::persistence::{
     load_vault_persistence, save_vault_persistence, update_vault_persistence, VaultPersistence,
@@ -42,17 +40,18 @@ use crate::failure::classify_write_failure;
 /// How often quit looks for closes still running on other threads.
 const CLOSE_WAIT_POLL: Duration = Duration::from_millis(20);
 
-/// Unmount, then start thumbnail cleanup for that path.
+/// Unmount, then start thumbnail cleanup for that path, which it returns.
 /// The cache lives outside the mount. Cleanup returns immediately, so a bad
 /// cache cannot hold this close open.
-fn discard_mount(mount: Option<crate::mount::MountedVault>) {
+fn discard_mount(mount: Option<crate::mount::MountedVault>) -> Option<PathBuf> {
     let path = mount
         .as_ref()
         .map(|mounted| mounted.mount_point().to_path_buf());
     drop(mount);
-    if let Some(path) = path {
-        crate::mount::purge_folder_thumbnails(&path);
+    if let Some(path) = &path {
+        crate::mount::purge_folder_thumbnails(path);
     }
+    path
 }
 
 /// Match `data/` and `held/` of the vault at `vault_dir` with the tree just
@@ -91,102 +90,23 @@ fn vault_dir_or_not_found(root: &VaultRoot, vault_id: &str) -> Result<std::path:
     Ok(dir)
 }
 
-fn try_attach_mount(root: &VaultRoot, vault_id: &str, vault_dir: &std::path::Path) -> Result<()> {
-    let config = match load_vault_config(vault_dir) {
-        Ok(config) => config,
-        Err(_) => return Ok(()),
-    };
-    let app = load_app_settings_at(root.root())
-        .map(|loaded| loaded.settings.workspace.0)
-        .unwrap_or_default();
-    let system = WorkspaceSystem::current();
-    if !encrypted_shortcut_active(&app, &config.mount, system) {
-        return Ok(());
-    }
-    let own_folder = !config.mount.row(system).path.trim().is_empty();
-    let parent = resolved_workspace_parent(&app, &config.mount, system, root.root());
-    let Some(mount_point) =
-        resolve_vault_mount_point(&parent, &config.vault.display_name, own_folder)
-    else {
-        return Ok(());
-    };
-    match crate::mount::mount_encrypted_dir(root.clone(), vault_id.to_string(), mount_point.clone())
-    {
-        Ok(mounted) => {
-            let path = mounted.mount_point().display().to_string();
-            match with_open_session(vault_dir, |session| {
-                session.mount = Some(mounted);
-                Ok(())
-            }) {
-                Ok(()) => {
-                    if let Err(error) = mark_session_open(root, vault_id, Some(path)) {
-                        let mount =
-                            with_open_session(vault_dir, |session| Ok(session.mount.take()))
-                                .ok()
-                                .flatten();
-                        discard_mount(mount);
-                        let _ = take_session(vault_dir);
-                        let _ = mark_session_closed(root, vault_id);
-                        return Err(error);
-                    }
-                    Ok(())
-                }
-                Err(error) => {
-                    log_event(LogLevel::Warn, "vault_mount_failed", &[("id", vault_id)]);
-                    let mount = with_open_session(vault_dir, |session| Ok(session.mount.take()))
-                        .ok()
-                        .flatten();
-                    discard_mount(mount);
-                    let _ = take_session(vault_dir);
-                    let _ = mark_session_closed(root, vault_id);
-                    Err(error)
-                }
-            }
-        }
-        Err(error) => {
-            let detail = match &error {
-                UprivError::VaultMountFailed(detail) => detail.clone(),
-                other => other.to_string(),
-            };
-            log_event(
-                LogLevel::Warn,
-                "vault_mount_failed",
-                &[("id", vault_id), ("detail", detail.as_str())],
-            );
-            let _ = with_open_session(vault_dir, |session| {
-                session.mount_failure = Some(detail);
-                Ok(())
-            });
-            Ok(())
-        }
-    }
+/// What an open did beyond the unlock.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultOpened {
+    /// Selections a plain-text vault's open switched because a folder failed.
+    pub switches: Vec<Switch>,
 }
 
-/// What [`open_vault`] did. A plaintext vault whose place is not yet confirmed
-/// stays unlocked until [`confirm_plain_destination`] or close.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OpenVaultOutcome {
-    Opened,
-    /// Unlock succeeded. Nothing was written. Confirm this path, or close.
-    PlainConfirm {
-        path: std::path::PathBuf,
-        class: super::plain::PlainFolderClass,
-    },
-}
-
-/// Unlock into a RAM session. An encrypted vault attaches its file-manager
-/// mount when that is on; a plaintext vault fills its folder. Password bytes
-/// are used exactly as given. Refused with [`UprivError::VaultLocked`] while
-/// the core of an app that went away still holds the vault: only a job, which
-/// can be stopped, waits for it ([`open_vault_as_job`]).
-pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<OpenVaultOutcome> {
-    open_unlocked_session(
-        root,
-        vault_id,
-        password,
-        OpenKind::User { consent: None },
-        &Job::untracked(),
-    )
+/// Unlock into a RAM session. A plaintext vault fills its unlocked folder on
+/// this device; an encrypted vault's unlocked folder is attached afterwards
+/// ([`crate::vault::attach_unlocked_folder`]), so the open never waits for a
+/// folder. Password bytes are used exactly as given. Refused with
+/// [`UprivError::VaultLocked`] while the core of an app that went away still
+/// holds the vault: only a job, which can be stopped, waits for it
+/// ([`open_vault_as_job`]).
+pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<VaultOpened> {
+    open_unlocked_session(root, vault_id, password, OpenKind::User, &Job::untracked())
 }
 
 /// [`open_vault`] as the job `job_id`. The wait for an app that is still
@@ -199,16 +119,10 @@ pub fn open_vault_as_job(
     vault_id: &str,
     password: &[u8],
     job_id: &str,
-) -> Result<OpenVaultOutcome> {
+) -> Result<VaultOpened> {
     wait_for_previous_app(root, vault_id, job_id)?;
     Job::run(job_id, JobKind::VaultOpen, Some(vault_id), |job| {
-        open_unlocked_session(
-            root,
-            vault_id,
-            password,
-            OpenKind::User { consent: None },
-            job,
-        )
+        open_unlocked_session(root, vault_id, password, OpenKind::User, job)
     })
 }
 
@@ -230,72 +144,8 @@ pub fn wait_for_previous_app(root: &VaultRoot, vault_id: &str, job_id: &str) -> 
     Ok(())
 }
 
-/// Fill the folder of a plaintext vault that is already unlocked, once the
-/// user agreed to `plain_path`, as the job `job_id`. Close drops the keys if
-/// they cancel; a stop wipes what was written and closes the vault.
-pub fn confirm_plain_destination(
-    root: &VaultRoot,
-    vault_id: &str,
-    plain_path: &Path,
-    job_id: &str,
-) -> Result<()> {
-    Job::run(job_id, JobKind::PlainFill, Some(vault_id), |job| {
-        confirm_plain_destination_in(root, vault_id, plain_path, job)
-    })
-}
-
-fn confirm_plain_destination_in(
-    root: &VaultRoot,
-    vault_id: &str,
-    plain_path: &Path,
-    job: &Job,
-) -> Result<()> {
-    let vault_dir = vault_dir_or_not_found(root, vault_id)?;
-    if !is_vault_open_at(&vault_dir) {
-        return Err(UprivError::VaultNotOpen(vault_id.to_string()));
-    }
-    let already = with_open_session(&vault_dir, |session| Ok(session.plain.is_some()))?;
-    if already {
-        return Ok(());
-    }
-    if let Err(error) = super::plain::activate(root, vault_id, &vault_dir, Some(plain_path), job) {
-        drop_unfinished_session(root, vault_id, &vault_dir);
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// [`open_vault`] once the user agreed to put a plaintext vault's files at
-/// `plain_path`, the path [`UprivError::PlainDestinationUnconfirmed`] named,
-/// as the job `job_id`.
-pub fn open_vault_confirmed(
-    root: &VaultRoot,
-    vault_id: &str,
-    password: &[u8],
-    plain_path: &Path,
-    job_id: &str,
-) -> Result<OpenVaultOutcome> {
-    let vault_dir = root.vault_dir(vault_id)?;
-    if is_vault_open_at(&vault_dir) {
-        confirm_plain_destination(root, vault_id, plain_path, job_id)?;
-        return Ok(OpenVaultOutcome::Opened);
-    }
-    wait_for_previous_app(root, vault_id, job_id)?;
-    Job::run(job_id, JobKind::VaultOpen, Some(vault_id), |job| {
-        open_unlocked_session(
-            root,
-            vault_id,
-            password,
-            OpenKind::User {
-                consent: Some(plain_path),
-            },
-            job,
-        )
-    })
-}
-
 /// Unlock for an in-process ingest (an import). Nothing appears outside the
-/// app: no FUSE mount a file manager can block on, and no plaintext folder.
+/// app: no unlocked folder of any kind.
 pub(crate) fn open_vault_for_ingest(
     root: &VaultRoot,
     vault_id: &str,
@@ -311,10 +161,10 @@ pub(crate) fn open_vault_for_ingest(
     .map(|_| ())
 }
 
-#[derive(Clone, Copy)]
-enum OpenKind<'a> {
-    /// The user opens the vault. `consent` confirms a plaintext folder.
-    User { consent: Option<&'a Path> },
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenKind {
+    /// The person opens the vault: an unlocked folder may follow.
+    User,
     /// An import streams files into a vault it just made.
     Ingest,
 }
@@ -326,9 +176,9 @@ fn open_unlocked_session(
     root: &VaultRoot,
     vault_id: &str,
     password: &[u8],
-    kind: OpenKind<'_>,
+    kind: OpenKind,
     job: &Job,
-) -> Result<OpenVaultOutcome> {
+) -> Result<VaultOpened> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
@@ -339,11 +189,8 @@ fn open_unlocked_session(
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
         let config = load_vault_config(&vault_dir)?;
-        let consent = match kind {
-            OpenKind::User { consent } => Some(consent),
-            OpenKind::Ingest => None,
-        };
-        let plain = consent.is_some() && config.storage_mode() == VaultStorageMode::UprivPlain;
+        let user = kind == OpenKind::User;
+        let plain = user && config.storage_mode() == VaultStorageMode::UprivPlain;
         // A vault another process holds is not a leftover: the lock below
         // refuses it with the right error.
         if plain && !crate::runtime_state::vault_is_live(root, vault_id) {
@@ -402,29 +249,20 @@ fn open_unlocked_session(
             session.index.writes.track_digests =
                 config.backup.enabled && config.backup.skip_unchanged;
             session.lock = Some(lock);
-            session.skip_close_backup = consent.is_none();
+            session.skip_close_backup = !user;
             insert_session(session)?;
             if let Err(error) = mark_session_open(root, vault_id, None) {
                 let _ = take_session(&vault_dir);
                 return Err(error);
             }
-            if consent.is_some() && !plain {
-                forget_plain_place(&vault_dir, vault_id);
-                try_attach_mount(root, vault_id, &vault_dir)?;
-            }
             Ok(())
         })?;
-        if let (true, Some(consent)) = (plain, consent) {
-            // Outside the unlock lock: filling a folder can take minutes, and
-            // other vaults must still open meanwhile.
-            match super::plain::activate(root, vault_id, &vault_dir, consent, job) {
-                Ok(()) => {}
-                Err(UprivError::PlainDestinationUnconfirmed { path, class })
-                    if consent.is_none() =>
-                {
-                    log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
-                    return Ok(OpenVaultOutcome::PlainConfirm { path, class });
-                }
+        // Outside the unlock lock: filling a folder can take minutes, and
+        // other vaults must still open meanwhile.
+        let mut opened = VaultOpened::default();
+        if plain {
+            match super::plain::activate(root, vault_id, &vault_dir, job) {
+                Ok(switches) => opened.switches = switches,
                 Err(error) => {
                     drop_unfinished_session(root, vault_id, &vault_dir);
                     return Err(error);
@@ -432,20 +270,8 @@ fn open_unlocked_session(
             }
         }
         log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
-        Ok(OpenVaultOutcome::Opened)
+        Ok(opened)
     })
-}
-
-/// An unlock in encrypted mode forgets the plaintext place the user agreed
-/// to, so switching back to plain text asks again.
-fn forget_plain_place(vault_dir: &Path, vault_id: &str) {
-    if with_open_session(vault_dir, super::plain::forget_plain_policy).is_err() {
-        log_event(
-            LogLevel::Warn,
-            "vault_plain_policy_kept",
-            &[("id", vault_id)],
-        );
-    }
 }
 
 /// Drop a session whose open did not finish.
@@ -485,14 +311,13 @@ impl CloseKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloseVaultOutcome {
     pub backup_failed: bool,
     /// `disk_full`, `permission`, or `other` when the close backup was not written.
     pub backup_failure: Option<&'static str>,
-    /// Why the close backup went to the data folder and not to the chosen one
-    /// ([`super::backup_folder::BackupFolderStatus::as_str`]).
-    pub backup_fallback: Option<&'static str>,
+    /// Selections the close backup switched because a backup folder failed.
+    pub backup_switches: Vec<Switch>,
     /// What happened to a plaintext vault's folder.
     pub plain: Option<super::plain::PlainCloseSummary>,
 }
@@ -503,7 +328,7 @@ fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
     match list_backups(root, vault_id) {
         Ok(entries) => match entries.first() {
             Some(entry) if entry.saved => true,
-            Some(entry) => promote_backup_save(root, vault_id, &entry.key()).is_ok(),
+            Some(entry) => promote_backup_save(root, vault_id, &entry.key).is_ok(),
             None => false,
         },
         Err(_) => false,
@@ -514,16 +339,16 @@ fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
 struct BackupDue {
     /// The tree's contents id, when an unchanged vault may skip its zip.
     logical_hash: Option<String>,
-    /// This machine's last backup: its contents id and its stamp.
+    /// This machine's last backup: its contents id, and its zip.
     last_hash: Option<String>,
-    last_stamp: Option<String>,
+    last: Option<LastBackup>,
 }
 
 /// How the backup of a close that sealed ended.
 #[derive(Default)]
 struct CloseBackupReport {
     failure: Option<&'static str>,
-    fallback: Option<&'static str>,
+    switches: Vec<Switch>,
 }
 
 /// Write the close backup. A backup is ciphertext and needs no key, so a close
@@ -540,9 +365,9 @@ fn write_close_backup(
     let unchanged = due.logical_hash.is_some() && due.logical_hash == due.last_hash;
     let already_backed_up = unchanged
         && due
-            .last_stamp
-            .as_deref()
-            .is_some_and(|stamp| last_backup_is_kept(root, vault_id, stamp));
+            .last
+            .as_ref()
+            .is_some_and(|last| close_backup_is_kept(root, vault_id, last));
     if already_backed_up {
         return CloseBackupReport::default();
     }
@@ -551,9 +376,11 @@ fn write_close_backup(
         Ok(Some(written)) => {
             if let Some(hash) = due.logical_hash {
                 let recorded = update_vault_persistence(vault_dir, vault_id, |persistence| {
-                    let record = persistence.this_host_record_mut();
-                    record.index_hash = Some(hash);
-                    record.stamp = Some(written.stamp.clone());
+                    if let Some(record) = persistence.this_device_record_mut() {
+                        record.index_hash = Some(hash);
+                        record.stamp = Some(written.stamp.clone());
+                        record.folder = Some(written.folder.clone());
+                    }
                 });
                 if recorded.is_err() {
                     log_event(
@@ -565,7 +392,7 @@ fn write_close_backup(
             }
             CloseBackupReport {
                 failure: None,
-                fallback: written.fell_back.map(|status| status.as_str()),
+                switches: written.switches,
             }
         }
         // Close now ended it; the next normal close writes it.
@@ -584,7 +411,7 @@ fn write_close_backup(
             log_event(LogLevel::Warn, "vault_backup_on_close_failed", &fields);
             CloseBackupReport {
                 failure: Some(class.reason),
-                fallback: None,
+                switches: Vec::new(),
             }
         }
     }
@@ -650,6 +477,7 @@ fn close_vault_inner(
 ) -> Result<CloseVaultOutcome> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     let closing = ClosingGuard::enter(&vault_dir);
+    super::unlocked_folder::stop_attach(&vault_dir);
     let hurry = Arc::clone(closing.hurry());
     if kind.immediate() {
         hurry.store(true, Ordering::Relaxed);
@@ -783,16 +611,22 @@ fn close_vault_inner(
         let logical_hash =
             (skip_when_unchanged && !skip_backup).then(|| index_logical_hash(&session.index));
         let previous = load_vault_persistence(&vault_dir).ok().flatten();
-        let this_machine = previous.as_ref().and_then(|saved| saved.this_host_record());
+        let this_device = previous
+            .as_ref()
+            .and_then(|saved| saved.this_device_record());
         let due = BackupDue {
             logical_hash,
-            last_hash: this_machine.and_then(|record| record.index_hash.clone()),
-            last_stamp: this_machine.and_then(|record| record.stamp.clone()),
+            last_hash: this_device.and_then(|record| record.index_hash.clone()),
+            last: this_device.and_then(|record| {
+                Some(LastBackup {
+                    stamp: record.stamp.clone()?,
+                    folder: record.folder.clone()?,
+                })
+            }),
         };
-        // A config whose mount does not validate still names the vault.
         let display_name = match config {
             Some(config) => config.vault.display_name,
-            None => crate::config::load_vault_config_raw(&vault_dir)
+            None => crate::config::load_vault_config(&vault_dir)
                 .map(|c| c.vault.display_name)
                 .unwrap_or_else(|_| session.vault_id.clone()),
         };
@@ -801,6 +635,7 @@ fn close_vault_inner(
             VaultPersistence::closed(session.vault_id.clone(), String::new(), None)
         });
         persistence.mark_closed(session.vault_id.clone(), display_name, hash);
+        persistence.files_bytes = Some(super::files_bytes(&session.index));
         save_vault_persistence(&vault_dir, &persistence)?;
         if pin_backup {
             backup_pinned = pin_newest_backup(root, vault_id);
@@ -852,7 +687,14 @@ fn close_vault_inner(
     // closing mark, so nothing can open, export, or change this vault under it.
     let lock = session.lock.take();
     drop(session);
-    discard_mount(mount);
+    if let Some(container) = discard_mount(mount)
+        .as_deref()
+        .and_then(Path::parent)
+        .filter(|parent| crate::folder_list::names_folder(parent, UNLOCKED_CONTAINER))
+    {
+        // `upriv-unlocked` goes with its last vault folder.
+        super::release_unlocked_container(root, container);
+    }
     #[cfg(test)]
     AT_CLOSE_BACKUP.with(|slot| {
         if let Some(run) = slot.borrow_mut().take() {
@@ -873,7 +715,7 @@ fn close_vault_inner(
     Ok(CloseVaultOutcome {
         backup_failed: report.failure.is_some(),
         backup_failure: report.failure,
-        backup_fallback: report.fallback,
+        backup_switches: report.switches,
         plain,
     })
 }
@@ -1075,7 +917,7 @@ mode = "encrypted_dir"
         std::thread::sleep(Duration::from_millis(300));
         assert!(!opens.is_finished());
         drop(previous);
-        assert_eq!(opens.join().unwrap().unwrap(), OpenVaultOutcome::Opened);
+        opens.join().unwrap().unwrap();
         assert!(is_vault_open_at(&vault_dir));
         // This session's own lock is no other process's.
         assert!(!vault_held_elsewhere(&root, "notes"));
@@ -1868,11 +1710,12 @@ mode = "encrypted_dir"
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         // The second piece rewrites chunk 0, so close packs this small blob.
         write_in_pieces(&root, "/a.txt", b"hello world", 5);
-        let before_pack = with_open_session(&root.vault_dir("notes").unwrap(), |session| {
-            let node = session.index.find("a.txt").unwrap();
-            Ok(node.as_file().unwrap().0.to_string())
-        })
-        .unwrap();
+        let before_pack =
+            crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+                let node = session.index.find("a.txt").unwrap();
+                Ok(node.as_file().unwrap().0.to_string())
+            })
+            .unwrap();
         close_vault(&root, "notes").unwrap();
         let store = root
             .vault_dir("notes")

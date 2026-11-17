@@ -12,3 +12,9 @@ export { SettingsAccordionSection } from "./SettingsAccordionSection";
 export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
 export { VaultChangePasswordFields } from "./VaultChangePasswordFields";
 export { VaultSettingsSevenZipSection } from "./VaultSettingsSevenZipSection";
+export {
+  AppBackupsSection,
+  AppUnlockedFoldersSection,
+  VaultBackupFolderField,
+  VaultUnlockedFolderSection,
+} from "./folderListSections";

@@ -1,134 +1,163 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AppState, Platform, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, StyleSheet, Text, View } from "react-native";
 import {
+  DATA_FOLDER_LIST_FILE,
+  JOB_ERROR_CODES,
   SUPPORTED_LOCALES,
-  VAULT_ROOT_ALIAS_FILE,
   VAULT_ROOT_ERROR_CODES,
-  VAULT_ROOT_GATE_IDLE,
+  choiceNameLabel,
+  dataFolderChangeMessage,
   isRpcError,
-  sameVaultRootPath,
-  type AppDistribution,
+  newJobId,
+  type ChoiceName,
+  type FolderState,
+  type FolderSwitch,
   type LocaleId,
-  type VaultRootMode,
-  type VaultRootPresentationState,
-  type VaultRootSettingsGate,
 } from "@upriv/shared";
-import { useVaultRootService } from "@/platform/services";
+import { hereDevice, useDataFolderList, useDeviceInfo, useToast } from "@upriv/shared/react";
+import { useDeviceService, useJobService, useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
-import { useTranslation, type I18nKey } from "@/i18n";
+import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useToast } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
-import { Modal, Select, type SelectOption } from "@/components/ui";
+import { Button, ElapsedTime, Modal, Select, type SelectOption } from "@/components/ui";
+import { ModalFooterActions } from "@/components/ui/ModalFooterActions";
 import { Toast } from "@/components/ui/Toast";
-import { alertIfPrivateRootLeftBehind, pickDocumentsUprivFolder } from "./dataFolderGrant";
-import { VaultRootLocationSection } from "./VaultRootLocationSection";
+import { DataFolderListSection } from "./DataFolderListSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 import { useDataFolderCopy } from "./useDataFolderCopy";
 
+/** Why the Gate blocks with the data folder list. */
+export type SetupScreen =
+  /** Default is selected and holds no data folder: Continue makes one there. */
+  | { kind: "first_run" }
+  /**
+   * The selected choice did not answer, at launch or once the data folder
+   * in use was lost (a drive away, a grant gone): a search looks for one
+   * that does.
+   */
+  | { kind: "selected_failed"; choice: ChoiceName; reason: FolderState }
+  /** The selected folder holds a broken `.upriv/`. */
+  | { kind: "repair" }
+  /** The list file cannot be read. */
+  | { kind: "list_invalid" };
+
+/** The search after the selected choice did not answer. */
+type Search =
+  | { state: "running"; job: string; startedAt: number }
+  | { state: "found_none" }
+  | { state: "stopped" };
+
 interface VaultRootSetupScreenProps {
   open: boolean;
-  presentation?: VaultRootPresentationState;
-  distribution: AppDistribution;
-  onConfigured: () => void;
+  screen: SetupScreen | null;
+  /** The vaults that ended with a lost data folder, as the resolve named them. */
+  ended: readonly string[];
+  /** Ask resolve again (Retry on an unreadable list). */
+  onRetry: () => void;
   /**
-   * The saved Custom folder could not be reached (drive unplugged).
-   * Custom stays selected. Opening the app again with the drive connected
-   * continues when this choice is unchanged.
+   * A data folder is in use: the apply, or the search's switch to one that
+   * answers, with the vaults that closed with a lost data folder.
    */
-  reconnectNotice?: boolean;
-  onReconnect?: () => Promise<void> | void;
+  onConfigured: (change: FolderSwitch | null, ended: readonly string[]) => void;
 }
 
 /**
- * Blocking first-run screen when no vault-root is found.
- *
- * Full desktop parity: shared `VaultRootLocationSection` (default / custom
- * radios + live inspect + SAF-aware picker), two-step `VaultRootConfirmFooter`,
- * pre-root locale selector, disk-applied cache to avoid duplicate `setup*`
- * calls, and busy-budget timeout that clears state.
+ * The Gate's blocking screen on a phone: the data folder list, with Continue
+ * opening (or making) the folder it selects in one apply. It repairs a
+ * broken `.upriv/`, shows the search after the selected folder did not
+ * answer, and copies a data folder kept in the private app folder into the
+ * folder chosen, as a job with Stop.
  */
 export function VaultRootSetupScreen({
   open,
-  presentation,
-  distribution,
+  screen,
+  ended: resolveEnded,
+  onRetry,
   onConfigured,
-  reconnectNotice = false,
-  onReconnect,
 }: VaultRootSetupScreenProps) {
   const { t } = useTranslation();
-  const { toast, show: showToast, dismiss: dismissToast } = useToast();
   const { colors, typography } = useTheme();
+  const { toast, show: showToast, dismiss: dismissToast } = useToast();
   const vaultRoot = useVaultRootService();
-  const { settings, patchSettings } = useAppSettingsContext();
+  const jobs = useJobService();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
+  const { settings, patchSettings, adoptDataFolder } = useAppSettingsContext();
   const dataFolderCopy = useDataFolderCopy((stopError) =>
     showToast(t(mobileErrorI18nKey(stopError, "error.job_not_stoppable"))),
   );
-  const aliasPath = presentation?.aliasPath ?? "";
-  const [mode, setMode] = useState<VaultRootMode>("default_root");
-  const [path, setPath] = useState("");
-  const [gate, setGate] = useState<VaultRootSettingsGate>(VAULT_ROOT_GATE_IDLE);
+  const kind = screen?.kind ?? null;
+  const [newList, setNewList] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [inspectNonce, setInspectNonce] = useState(0);
+  const [search, setSearch] = useState<Search | null>(null);
+  /** The search's names of the vaults that ended, once it found none: they include the resolve's. */
+  const [searchEnded, setSearchEnded] = useState<readonly string[] | null>(null);
+  const ended = searchEnded ?? resolveEnded;
+  const searchRef = useRef(search);
+  searchRef.current = search;
   const submitLock = useRef(false);
+  /** Bumped when a screen goes or a wait passes its limit: a late answer changes nothing. */
   const busyGen = useRef(0);
-  const diskApplied = useRef<{ rootPath: string; mode: VaultRootMode } | null>(null);
-  const gateRef = useRef(gate);
-  gateRef.current = gate;
+  const onConfiguredRef = useRef(onConfigured);
+  onConfiguredRef.current = onConfigured;
 
-  const openedSessionRef = useRef(false);
-  /** Custom folder this screen was opened on. Resume only while the draft still matches. */
-  const reconnectBaselineRef = useRef<{ mode: VaultRootMode; path: string } | null>(null);
-  const modeRef = useRef(mode);
-  const pathRef = useRef(path);
-  modeRef.current = mode;
-  pathRef.current = path;
-  const onReconnectRef = useRef(onReconnect);
-  onReconnectRef.current = onReconnect;
+  const list = useDataFolderList({
+    service: vaultRoot,
+    here,
+    active: open && screen !== null && (kind !== "list_invalid" || newList),
+    opening: true,
+    primaryAction: "continue",
+    newList,
+    initialReplacePolicy: kind === "repair" ? "reset_settings" : null,
+  });
 
-  useLayoutEffect(() => {
-    if (!open) {
-      openedSessionRef.current = false;
-      reconnectBaselineRef.current = null;
-      return;
-    }
-    if (openedSessionRef.current) return;
-    openedSessionRef.current = true;
-    const remembered = presentation?.rememberedAliasTarget?.trim() ?? "";
-    setMode(reconnectNotice ? "custom_root" : "default_root");
-    setPath(reconnectNotice ? remembered : "");
-    reconnectBaselineRef.current = reconnectNotice
-      ? { mode: "custom_root", path: remembered }
-      : null;
-    setGate(VAULT_ROOT_GATE_IDLE);
+  const stopSearch = useCallback(() => {
+    const current = searchRef.current;
+    if (current?.state !== "running") return;
+    setSearch({ state: "stopped" });
+    void jobs.cancel(current.job, "user").catch(() => undefined);
+  }, [jobs]);
+
+  // Each screen starts clean; the search runs once per failed launch.
+  useEffect(() => {
+    busyGen.current += 1;
+    submitLock.current = false;
     setBusy(false);
     setError(null);
     setConfirmOpen(false);
-    setInspectNonce(0);
-    submitLock.current = false;
-    busyGen.current += 1;
-    diskApplied.current = null;
-  }, [open, presentation, reconnectNotice]);
-
-  useEffect(() => {
-    setConfirmOpen(false);
-  }, [mode, path, gate.replacePolicy, gate.disk]);
-
-  const onVaultRootGateChange = useCallback((next: VaultRootSettingsGate) => {
-    setGate(next);
-  }, []);
-
-  const onDraftChange = useCallback(
-    (patch: { vault_root_mode?: VaultRootMode; upriv_root_path?: string }) => {
-      if (patch.vault_root_mode != null) setMode(patch.vault_root_mode);
-      if (patch.upriv_root_path != null) setPath(patch.upriv_root_path);
-      setError(null);
-    },
-    [],
-  );
+    setNewList(false);
+    setSearch(null);
+    setSearchEnded(null);
+    if (!open || kind !== "selected_failed") return;
+    const gen = busyGen.current;
+    const job = newJobId();
+    setSearch({ state: "running", job, startedAt: Date.now() });
+    vaultRoot.search(job).then(
+      async (result) => {
+        if (gen !== busyGen.current || searchRef.current?.state !== "running") return;
+        if (!result.found) {
+          setSearch({ state: "found_none" });
+          setSearchEnded(result.ended);
+          return;
+        }
+        await adoptDataFolder();
+        onConfiguredRef.current(result.switch, result.ended);
+      },
+      (caught: unknown) => {
+        if (gen !== busyGen.current) return;
+        if (isRpcError(caught) && caught.code === JOB_ERROR_CODES.CANCELLED) return;
+        setSearch({ state: "found_none" });
+      },
+    );
+    return () => {
+      const current = searchRef.current;
+      if (current?.state === "running")
+        void jobs.cancel(current.job, "user").catch(() => undefined);
+    };
+  }, [adoptDataFolder, jobs, kind, open, vaultRoot]);
 
   const handleLocaleChange = useCallback(
     (locale: LocaleId) => {
@@ -138,203 +167,65 @@ export function VaultRootSetupScreen({
     [patchSettings, settings.ui.locale],
   );
 
-  const finish = useCallback(
-    async (rootPath: string, nextMode: VaultRootMode, gen: number) => {
-      diskApplied.current = { rootPath, mode: nextMode };
-      const saved = await patchSettings(
-        {
-          app: {
-            vault_root_mode: nextMode,
-            upriv_root_path: nextMode === "custom_root" ? rootPath : "",
-          },
-        },
-        { vaultRootAlreadyApplied: true },
-      );
-      if (gen !== busyGen.current) return;
-      if (!saved) {
-        throw new Error("settings_save_failed");
-      }
-      onConfigured();
-    },
-    [onConfigured, patchSettings],
-  );
+  const onEdit = useCallback(() => {
+    // A pick stops the search; Continue then waits only for that folder's check.
+    stopSearch();
+    setConfirmOpen(false);
+    setError(null);
+  }, [stopSearch]);
 
-  const requestContinue = useCallback(() => {
-    const current = gateRef.current;
-    if (busy || current.blocksPrimary || confirmOpen) return;
+  const requestContinue = () => {
+    if (busy || list.blocksPrimary || confirmOpen) return;
     setConfirmOpen(true);
-  }, [busy, confirmOpen]);
+  };
 
-  const commitContinue = useCallback(() => {
-    const current = gateRef.current;
-    if (current.blocksPrimary || busy || submitLock.current) return;
-
-    if (mode === "default_root") {
-      const gen = ++busyGen.current;
-      submitLock.current = true;
-      setBusy(true);
-      setError(null);
-      void (async () => {
-        if (Platform.OS === "android") {
-          const suggested = await vaultRoot.suggestedCustomRootPath().catch(() => "");
-          const picked = await pickDocumentsUprivFolder(
-            (initial, title) => vaultRoot.pickFolder(initial, title),
-            suggested || null,
-            t("modal.vault_root_setup.pick_folder_title"),
-          );
-          if (gen !== busyGen.current) return;
-          if (picked.status === "cancelled") {
-            setConfirmOpen(false);
-            return;
-          }
-          const { rootPath, privateRoot } = await vaultRoot
-            .setupAtPath(picked.uri, {
-              replaceIncomplete: current.replacePolicy != null,
-              replacePolicy: current.replacePolicy,
-              bootstrap: { locale: settings.ui.locale },
-              job: dataFolderCopy.begin(picked.uri),
-            })
-            .finally(dataFolderCopy.end);
-          if (gen !== busyGen.current) return;
-          alertIfPrivateRootLeftBehind(
-            privateRoot,
-            t("modal.vault_root_setup.title"),
-            t("modal.vault_root_setup.private_root_left_behind"),
-          );
-          await finish(rootPath, "custom_root", gen);
-          return;
-        }
-        if (diskApplied.current?.mode === "default_root") {
-          if (gen !== busyGen.current) return;
-          await finish(diskApplied.current.rootPath, "default_root", gen);
-          return;
-        }
-        const { rootPath } = await vaultRoot.setupDefaultRoot({
-          replaceIncomplete: current.replacePolicy != null,
-          replacePolicy: current.replacePolicy,
-          bootstrap: { locale: settings.ui.locale },
-        });
-        if (gen !== busyGen.current) return;
-        await finish(rootPath, "default_root", gen);
-      })()
-        .catch((caught) => {
-          if (gen !== busyGen.current) return;
-          if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
-            setInspectNonce((n) => n + 1);
-            setError(null);
-            return;
-          }
-          setError(t(mobileErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
-        })
-        .finally(() => {
-          if (gen !== busyGen.current) return;
-          submitLock.current = false;
-          setBusy(false);
-        });
-      return;
-    }
-
-    const nextPath = path.trim();
-    if (!nextPath) {
-      setConfirmOpen(false);
-      setError(t("modal.vault_root_setup.error_path_required"));
-      return;
-    }
-
+  const commitContinue = () => {
+    if (busy || list.blocksPrimary || submitLock.current) return;
+    stopSearch();
     const gen = ++busyGen.current;
     submitLock.current = true;
     setBusy(true);
     setError(null);
+    const job = dataFolderCopy.begin();
     void (async () => {
-      const applied = diskApplied.current;
-      if (
-        applied?.mode === "custom_root" &&
-        current.replacePolicy == null &&
-        sameVaultRootPath(applied.rootPath, nextPath)
-      ) {
-        if (gen !== busyGen.current) return;
-        await finish(applied.rootPath, "custom_root", gen);
-        return;
-      }
-      if (applied && !sameVaultRootPath(applied.rootPath, nextPath)) {
-        diskApplied.current = null;
-      }
-      const { rootPath, privateRoot } = await vaultRoot
-        .setupAtPath(nextPath, {
-          replaceIncomplete: current.replacePolicy != null,
-          replacePolicy: current.replacePolicy,
-          bootstrap: { locale: settings.ui.locale },
-          job: dataFolderCopy.begin(nextPath),
-        })
-        .finally(dataFolderCopy.end);
+      const applied = await vaultRoot.apply({
+        changes: list.changes,
+        newList,
+        replacePolicy: list.replacePolicy ?? undefined,
+        bootstrap: { locale: settings.ui.locale },
+        job,
+      });
       if (gen !== busyGen.current) return;
-      alertIfPrivateRootLeftBehind(
-        privateRoot,
-        t("modal.vault_root_setup.title"),
-        t("modal.vault_root_setup.private_root_left_behind"),
-      );
-      await finish(rootPath, "custom_root", gen);
+      if (applied.privateRoot === "left_behind") {
+        Alert.alert(
+          t("modal.vault_root_setup.title"),
+          t("modal.vault_root_setup.private_root_left_behind"),
+        );
+      }
+      await adoptDataFolder();
+      onConfiguredRef.current(null, applied.ended);
     })()
-      .catch((caught) => {
+      .catch((caught: unknown) => {
         if (gen !== busyGen.current) return;
-        if (
-          current.replacePolicy == null &&
-          isRpcError(caught) &&
-          caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE
-        ) {
-          setInspectNonce((n) => n + 1);
-          setError(null);
-          return;
-        }
+        setConfirmOpen(false);
+        list.retryStatuses();
+        // Documents was not confirmed, or the copy was stopped: the screen stays as it was.
+        if (isRpcError(caught) && caught.code === JOB_ERROR_CODES.CANCELLED) return;
+        if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) return;
         setError(t(mobileErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
       })
       .finally(() => {
+        dataFolderCopy.end();
         if (gen !== busyGen.current) return;
         submitLock.current = false;
         setBusy(false);
       });
-  }, [busy, dataFolderCopy, finish, mode, path, settings.ui.locale, t, vaultRoot]);
+  };
 
-  const reconnectBaseline = reconnectBaselineRef.current;
-  const reconnectUnchanged =
-    reconnectNotice &&
-    reconnectBaseline != null &&
-    mode === reconnectBaseline.mode &&
-    path.trim() === reconnectBaseline.path;
+  if (!open || !screen) return null;
 
-  const reconnectToastShownRef = useRef(false);
-  useEffect(() => {
-    if (!open) {
-      reconnectToastShownRef.current = false;
-      return;
-    }
-    if (!reconnectNotice || reconnectToastShownRef.current) return;
-    if (gate.disk !== "unreachable") return;
-    reconnectToastShownRef.current = true;
-    showToast(t("modal.vault_root_setup.error_unreachable"));
-  }, [open, reconnectNotice, gate.disk, showToast, t]);
-
-  useEffect(() => {
-    if (!open || !reconnectNotice) return;
-    const sub = AppState.addEventListener("change", (next) => {
-      if (next !== "active") return;
-      const baseline = reconnectBaselineRef.current;
-      if (!baseline || !baseline.path) return;
-      if (modeRef.current !== baseline.mode || pathRef.current.trim() !== baseline.path) return;
-      void onReconnectRef.current?.();
-    });
-    return () => sub.remove();
-  }, [open, reconnectNotice]);
-
-  const setupBodyKey: I18nKey =
-    distribution === "installed"
-      ? "modal.vault_root_setup.body_installed"
-      : distribution === "dev"
-        ? "modal.vault_root_setup.body_dev"
-        : "modal.vault_root_setup.body_portable";
-
-  if (!open) return null;
-
+  const listShown = kind !== "list_invalid" || newList;
+  const repair = kind === "repair";
   const localeOptions: SelectOption<LocaleId>[] = SUPPORTED_LOCALES.map((loc) => ({
     value: loc as LocaleId,
     label: t(`modal.app_settings.option.locale.${loc}`),
@@ -342,9 +233,9 @@ export function VaultRootSetupScreen({
 
   return (
     <Modal
-      open={open}
-      title={t("modal.vault_root_setup.title")}
-      titleIcon="folder"
+      open
+      title={t(repair ? "modal.vault_root_repair.title" : "modal.vault_root_setup.title")}
+      titleIcon={repair ? "refresh" : "folder"}
       onClose={() => undefined}
       dismissible={false}
       panelClassName="max-w-lg"
@@ -362,61 +253,64 @@ export function VaultRootSetupScreen({
         </View>
       }
       footer={
-        <VaultRootConfirmFooter
-          busy={busy}
-          blocked={gate.blocksPrimary}
-          confirmOpen={confirmOpen}
-          noteKeys={gate.confirmNotes}
-          confirmDanger={gate.replacePolicy === "delete"}
-          onRequestPrimary={requestContinue}
-          onConfirmPrimary={commitContinue}
-          onCancelConfirm={() => setConfirmOpen(false)}
-          onBusyTimeout={() => {
-            busyGen.current += 1;
-            submitLock.current = false;
-            setBusy(false);
-            setConfirmOpen(false);
-            setError(t("loading.timed_out"));
-          }}
-          copy={dataFolderCopy.copy}
-          onStopCopy={dataFolderCopy.stop}
-        />
+        listShown ? (
+          <VaultRootConfirmFooter
+            busy={busy}
+            blocked={list.blocksPrimary}
+            confirmOpen={confirmOpen}
+            noteKeys={list.gate.confirmNotes}
+            confirmDanger={list.replacePolicy === "delete"}
+            onRequestPrimary={requestContinue}
+            onConfirmPrimary={commitContinue}
+            onCancelConfirm={() => setConfirmOpen(false)}
+            onBusyTimeout={() => {
+              busyGen.current += 1;
+              submitLock.current = false;
+              setBusy(false);
+              setConfirmOpen(false);
+              setError(t("loading.timed_out"));
+            }}
+            copy={dataFolderCopy.copy}
+            onStopCopy={dataFolderCopy.stop}
+          />
+        ) : (
+          <ModalFooterActions layout="confirm">
+            <Button label={t("action.retry")} variant="primary" onPress={onRetry} />
+            <Button
+              label={t("modal.vault_root_setup.action_new_list")}
+              variant="secondary"
+              onPress={() => setNewList(true)}
+            />
+          </ModalFooterActions>
+        )
       }
     >
       <View style={styles.body}>
-        <Text style={typography.bodyMuted}>{t(setupBodyKey)}</Text>
-
-        {reconnectUnchanged && gate.disk === "unreachable" ? (
-          <Text
-            style={[typography.body, { color: colors.onErrorContainer }]}
-            accessibilityRole="alert"
-          >
-            {t("modal.vault_root_setup.error_unreachable")}
-          </Text>
+        <SetupBody screen={screen} newList={newList} />
+        {kind === "selected_failed" && search?.state === "running" ? (
+          <View>
+            <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.searching")}</Text>
+            <ElapsedTime startedAt={search.startedAt} />
+          </View>
         ) : null}
-
-        <VaultRootLocationSection
-          config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
-          onChange={onDraftChange}
-          savedVaultRootMode="default_root"
-          savedRootPath=""
-          forceDirty
-          primaryAction="continue"
-          controlsDisabled={busy}
-          inspectNonce={inspectNonce}
-          onVaultRootGateChange={onVaultRootGateChange}
-          customRootNotice={
-            aliasPath ? (
-              <Text style={typography.caption}>
-                {t("modal.vault_root_setup.alias_notice", {
-                  file: VAULT_ROOT_ALIAS_FILE,
-                  aliasPath,
-                })}
-              </Text>
-            ) : undefined
-          }
-        />
-
+        {kind === "selected_failed" && search?.state === "found_none" ? (
+          <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.search_found_none")}</Text>
+        ) : null}
+        {ended.length > 0 ? (
+          <Text style={typography.bodyMuted}>{dataFolderChangeMessage(null, ended, t)}</Text>
+        ) : null}
+        {listShown ? (
+          <DataFolderListSection
+            list={list}
+            here={here}
+            showInUse={false}
+            disabled={busy}
+            onEdit={onEdit}
+          />
+        ) : null}
+        {repair ? (
+          <Text style={typography.caption}>{t("modal.vault_root_repair.inspect_hint")}</Text>
+        ) : null}
         {error ? (
           <Text
             style={[typography.body, { color: colors.onErrorContainer }]}
@@ -428,6 +322,37 @@ export function VaultRootSetupScreen({
       </View>
     </Modal>
   );
+}
+
+function SetupBody({ screen, newList }: { screen: SetupScreen; newList: boolean }) {
+  const { t } = useTranslation();
+  const { typography } = useTheme();
+  switch (screen.kind) {
+    case "first_run":
+      return <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.body_android")}</Text>;
+    case "selected_failed":
+      return (
+        <Text style={typography.bodyMuted}>
+          {t("modal.vault_root_setup.body_selected_failed", {
+            choice: choiceNameLabel(screen.choice, t),
+            reason: t(`folder_list.status.${screen.reason}`),
+          })}
+        </Text>
+      );
+    case "repair":
+      return <Text style={typography.bodyMuted}>{t("modal.vault_root_repair.body")}</Text>;
+    case "list_invalid":
+      return newList ? null : (
+        <>
+          <Text style={typography.body} accessibilityRole="alert">
+            {t("modal.data_folder.list_invalid")}
+          </Text>
+          <Text style={typography.bodyMuted}>
+            {t("modal.vault_root_setup.list_invalid_hint", { file: DATA_FOLDER_LIST_FILE })}
+          </Text>
+        </>
+      );
+  }
 }
 
 const styles = StyleSheet.create({

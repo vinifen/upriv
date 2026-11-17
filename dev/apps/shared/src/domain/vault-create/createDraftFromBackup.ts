@@ -1,4 +1,4 @@
-import { backupEntryFileName, backupEntryKey, type BackupLocation } from "../backups";
+import type { VaultBackupEntry } from "../backups";
 import { backupVaultDisplayName } from "../vault/displayName";
 import { createEmptyCreateVaultDraft } from "./defaults";
 import type { CreateVaultDraft } from "./types";
@@ -11,30 +11,29 @@ export function groupIdContainingVault(
   return groups.find((group) => group.groupedVaults.includes(vaultId))?.id ?? null;
 }
 
-/** Seed for create-vault wizard when user picks a backup row (new vault — no in-place restore). */
+/**
+ * Seed for the create-vault wizard when the person picks a backup (a new
+ * vault, never an in-place restore). The backup's key names its folder, so
+ * core finds it wherever it is.
+ */
 export function createDraftFromBackup(
-  stamp: string,
+  backup: Pick<VaultBackupEntry, "key" | "fileName">,
   sourceVaultId: string,
   sourceDisplayName: string,
   existingOrders: readonly number[],
   existingDisplayNames: readonly string[] = [],
   sourceGroupId?: string | null,
-  snapshotFileName?: string,
-  saved = false,
-  location: BackupLocation = "data_folder",
 ): CreateVaultDraft {
   const draft = createEmptyCreateVaultDraft(existingOrders);
   const displayName = backupVaultDisplayName(sourceDisplayName, existingDisplayNames);
   const groupId = sourceGroupId?.trim() ?? "";
-  const fileName = backupEntryFileName({ stamp, fileName: snapshotFileName }, sourceVaultId);
-  const key = backupEntryKey({ stamp, fileName: snapshotFileName, saved, location }, sourceVaultId);
 
   return {
     ...draft,
     source: "import",
     importKind: "backup",
-    importFileName: fileName,
-    importFilePath: `vaults/${sourceVaultId}/backups/${key}`,
+    importFileName: backup.fileName,
+    importFilePath: `vaults/${sourceVaultId}/backups/${backup.key}`,
     displayName,
     groupMode: groupId ? "existing" : "none",
     groupId,

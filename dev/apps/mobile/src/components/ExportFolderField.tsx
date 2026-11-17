@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from "react-native";
-import { workspacePathDisplay } from "@upriv/shared";
+import { shownPath } from "@/components/folder-list";
 import { PathField } from "@/components/PathField";
 import { FieldHint, FieldLabel } from "@/components/settings";
 import { Button } from "@/components/ui";
@@ -36,7 +36,7 @@ export function ExportFolderField({
       <FieldLabel>{t("modal.export_folder.label")}</FieldLabel>
       {hint ? <FieldHint>{hint}</FieldHint> : null}
       <PathField
-        value={workspacePathDisplay(folder.path)}
+        value={shownPath(folder.path)}
         openPath={folder.path}
         editable={false}
         placeholder={t("modal.export_folder.none")}

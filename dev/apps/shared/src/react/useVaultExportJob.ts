@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { VaultExportFormat, VaultExportRequest, VaultExportResult, VaultRow } from "../domain";
 import type { JobService, VaultService } from "../services";
-import { useCoreJob, type CoreJob } from "./useCoreJob";
+import { useCoreJob } from "./useCoreJob";
 
 /** What a vault export was started for. */
 export interface VaultExportTarget {
@@ -9,9 +9,6 @@ export interface VaultExportTarget {
   displayName: string;
   format: VaultExportFormat;
 }
-
-/** The vault export in flight. */
-export type VaultExportJob = CoreJob<VaultExportTarget>;
 
 export interface VaultExportJobEvents {
   onExported: (result: VaultExportResult, target: VaultExportTarget) => void;

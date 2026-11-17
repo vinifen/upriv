@@ -1,23 +1,17 @@
 //! System / app settings: load / save `.upriv/settings.toml` (`[ui]`, `[logging]`, `[app]`).
 //!
 //! This is **not** per-vault `config.toml` (see [`crate::config::vault_config`]).
-//!
-//! Vault-root **mode and path are not stored in TOML**. They live in the app-home
-//! `.upriv-data-folder` pointer (`status=active|inactive` + `data_folder=`). The wire/`AppSettings`
-//! fields `vault_root_mode` and `upriv_root_path` are derived on load and
-//! drive alias updates on save.
+//! Which data folder a device uses is not in it either: that is the data
+//! folder list in the app home ([`crate::folder_list::data_folder`]).
 
 mod load_save;
 mod toml;
 mod types;
 
+pub(crate) use load_save::update_app_settings;
 pub use load_save::{
-    discover_bootstrap_root, load_app_settings, load_app_settings_at, save_app_settings,
-    save_app_settings_session, save_app_settings_session_with_alias_sync,
-    save_app_settings_with_alias_sync, sync_alias_with_app_settings,
+    discover_bootstrap_root, load_app_settings, load_app_settings_at, save_app_settings_at,
+    save_app_settings_session,
 };
 pub use toml::{parse_settings_toml_str, serialize_settings_toml_str};
-pub use types::{
-    AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
-    WorkspaceSettings,
-};
+pub use types::{AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings};

@@ -1,4 +1,4 @@
-import { isAbsoluteOsFilesystemPath, isContentUri } from "../workspace";
+import { isAbsoluteOsFilesystemPath, isContentUri } from "../folder-lists";
 import type { InfoField } from "./types";
 
 function hasControlChar(value: string): boolean {

@@ -19,12 +19,17 @@ describe("createVaultErrorsForField", () => {
     expect(createVaultErrorsForField(["password_empty"], "storage")).toEqual([]);
   });
 
-  it("keeps mount path codes under mount", () => {
-    expect(
-      createVaultErrorsForField(
-        ["mount_path_empty", "mount_path_not_absolute", "password_empty"],
-        "mount",
-      ),
-    ).toEqual(["mount_path_empty", "mount_path_not_absolute"]);
+  it("keeps each list's row code under its own field", () => {
+    const codes = [
+      "unlocked_folder_row_invalid",
+      "backup_folder_row_invalid",
+      "password_empty",
+    ] as const;
+    expect(createVaultErrorsForField([...codes], "unlockedFolder")).toEqual([
+      "unlocked_folder_row_invalid",
+    ]);
+    expect(createVaultErrorsForField([...codes], "backupFolder")).toEqual([
+      "backup_folder_row_invalid",
+    ]);
   });
 });

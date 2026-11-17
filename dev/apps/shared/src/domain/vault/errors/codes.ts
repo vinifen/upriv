@@ -20,9 +20,15 @@ export const VAULT_ERROR_CODES = {
   /** Corrupt `.upriv/vault_groups.toml` (list soft-fails with `invalid: true`; mutations may Err). */
   GROUPS_INVALID: "vault_groups_invalid",
   GROUP_NOT_FOUND: "vault_group_not_found",
-  PLAIN_DESTINATION_UNCONFIRMED: "plain_destination_unconfirmed",
   PLAIN_DESTINATION_INVALID: "plain_destination_invalid",
   PLAIN_LEFTOVER: "plain_leftover",
+  /**
+   * Another device still has a plain-text folder of this vault on record
+   * (`details.device`, `details.system`, `details.path`): the vault cannot be deleted yet.
+   */
+  PLAIN_ELSEWHERE: "vault_plain_elsewhere",
+  /** This device has no ID for this run: a plain-text vault does not open. */
+  DEVICE_UNKNOWN: "device_unknown",
   PLAIN_NAMES_UNSUPPORTED: "plain_names_unsupported",
   PLAIN_SPACE_SHORT: "plain_space_short",
   PLAIN_FOLDER_UNWRITABLE: "plain_folder_unwritable",
@@ -69,6 +75,33 @@ export const VAULT_ERROR_CODES = {
   EXPORT_DESTINATION_RESERVED: "export_destination_reserved",
   /** Delete or pin of a backup a backup export is reading. */
   BACKUP_EXPORTING: "backup_exporting",
+  /** A folder list change core cannot apply as it is (a row number or a selection it does not know). */
+  FOLDER_LIST_INVALID: "folder_list_invalid",
+  /** A row path this device's system cannot hold, or an empty one (`details.path`). */
+  FOLDER_PATH_INVALID: "folder_path_invalid",
+  /** A row path inside a `.upriv` (`details.path`). */
+  FOLDER_PATH_RESERVED: "folder_path_reserved",
+  /** A row path already in the group, or a fixed choice's folder (`details.path`). */
+  FOLDER_PATH_DUPLICATE: "folder_path_duplicate",
+  /** A row inside a folder Upriv makes for another list (`details.path`). */
+  FOLDER_OVERLAP: "folder_overlap",
+  /** An unlocked folder row a vault is open in cannot be deleted (`details.path`). */
+  FOLDER_IN_USE: "folder_in_use",
+  /**
+   * A plain-text folder on record cannot be reached here (`details.device`,
+   * `details.system`, `details.path`).
+   */
+  PLAIN_FOLDER_UNREACHABLE: "plain_folder_unreachable",
+  /** A plain-text open with nothing selected on this device. */
+  UNLOCKED_FOLDER_UNSET: "unlocked_folder_unset",
+  /** No choice of the unlocked folder chain can take this vault (`details.path`). */
+  UNLOCKED_FOLDER_UNAVAILABLE: "unlocked_folder_unavailable",
+  /** FUSE or WinFsp is not installed. */
+  MOUNT_DRIVER_MISSING: "vault_mount_driver_missing",
+  /** No backup folder of the chain, the data folder included, can take the zip (`details.reason`). */
+  BACKUP_UNAVAILABLE: "backup_unavailable",
+  /** A backup name that is too long or holds only characters a system refuses. */
+  BACKUP_NAME_INVALID: "backup_name_invalid",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];

@@ -59,7 +59,7 @@ describe("FileEditorPane preview notice", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Send to folder" }));
     expect(sendToFolder).toHaveBeenCalledWith("/notes.md");
-    expect(screen.queryByRole("button", { name: "Open in file manager" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show in unlocked folder" })).toBeNull();
   });
 
   it("opens a file the folder holds from the disk", async () => {
@@ -69,7 +69,7 @@ describe("FileEditorPane preview notice", () => {
       osFolderAvailable: true,
       openInSystemFileManager,
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Open in file manager" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show in unlocked folder" }));
     expect(openInSystemFileManager).toHaveBeenCalledWith("/notes.md");
   });
 
@@ -77,7 +77,7 @@ describe("FileEditorPane preview notice", () => {
     renderUnshown({ folderPresence: null, osFolderAvailable: false });
     expect(await screen.findByText(/too large for the memory available/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send to folder" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open in file manager" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show in unlocked folder" })).toBeNull();
   });
 });
 

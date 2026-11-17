@@ -1,8 +1,15 @@
 import type { StorageMode } from "../vault/types";
 import type { KdfUnlockPreset } from "./kdf";
 import { normalizeStoredName } from "../format/storedName";
-import { normalizeWorkspaceTable, vaultMountForDaemon, type WorkspaceTable } from "../workspace";
-import { normalizeVaultBackupFolders, type VaultBackupFolders } from "../backups/folders";
+import {
+  VAULT_BACKUP_LIST,
+  VAULT_UNLOCKED_LIST,
+  parseDeviceGroups,
+  type DeviceGroups,
+  type EncryptedFolderSwitch,
+  type VaultBackupChoice,
+  type VaultUnlockedFolder,
+} from "../folder-lists";
 
 export type { KdfParams, KdfUnlockPreset } from "./kdf";
 export {
@@ -24,7 +31,7 @@ export {
 export const VAULT_SETTINGS_SECTIONS = [
   "vault",
   "storage",
-  "mount",
+  "unlocked_folder",
   "backup",
   "auto_close",
 ] as const;
@@ -95,23 +102,27 @@ export function sevenZipPatchFromCompressionPreset(
   }
 }
 
-/** Normalize display name, mount path, and seven_zip. */
+const ENCRYPTED_SWITCHES = new Set<EncryptedFolderSwitch>(["inherit", "on", "off"]);
+
+/** Normalize display name, the lists, and seven_zip. */
 export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): VaultSettingsConfig {
+  const encrypted = config.unlocked_folder?.encrypted;
   return {
     ...config,
     vault: {
       ...config.vault,
       display_name: normalizeStoredName(config.vault.display_name),
     },
-    mount: normalizeWorkspaceTable(config.mount, "vault"),
-    backup: { ...config.backup, ...normalizeVaultBackupFolders(config.backup) },
+    unlocked_folder: {
+      encrypted: encrypted && ENCRYPTED_SWITCHES.has(encrypted) ? encrypted : "inherit",
+      devices: parseDeviceGroups(config.unlocked_folder?.devices, VAULT_UNLOCKED_LIST),
+    },
+    backup: {
+      ...config.backup,
+      devices: parseDeviceGroups(config.backup?.devices, VAULT_BACKUP_LIST),
+    },
     seven_zip: normalizeSevenZipSection(config.seven_zip),
   };
-}
-
-/** Daemon JSON stores `app_file_manager_folder` and `custom_file_manager_folder` once. */
-export function vaultSettingsForDaemon(settings: VaultSettingsConfig) {
-  return { ...settings, mount: vaultMountForDaemon(settings.mount) };
 }
 
 /** Apply storage mode change. */
@@ -154,20 +165,17 @@ export interface VaultSectionConfig {
 export interface VaultSettingsConfig {
   vault: VaultSectionConfig;
   storage: { mode: StorageMode; plain_files: PlainFiles };
-  /**
-   * Per-system folder path. Empty path follows the app place. `app_file_manager_folder`
-   * and `custom_file_manager_folder` are stored once. `app_file_manager_folder` is `inherit`, `on`,
-   * or `off` for Use the app folder and starts `inherit`. `custom_file_manager_folder`
-   * is the another-folder switch and starts off.
-   */
-  mount: WorkspaceTable;
+  /** `[unlocked_folder]`: the encrypted switch, and the vault's list per device. */
+  unlocked_folder: VaultUnlockedFolder;
   backup: {
     enabled: boolean;
     mode: BackupMode;
     keep_last: number;
     /** Close skips a zip when vault files match the last backup still on disk. */
     skip_unchanged: boolean;
-  } & VaultBackupFolders;
+    /** The vault's backup folder list, per device. */
+    devices: DeviceGroups<VaultBackupChoice>;
+  };
   security: {
     wipe_passes: number;
     wipe_pattern: WipePattern;

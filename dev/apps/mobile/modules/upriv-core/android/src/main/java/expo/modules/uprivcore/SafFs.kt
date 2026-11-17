@@ -18,11 +18,54 @@ import org.json.JSONObject
  */
 internal object SafFs : SafTreeFs("data folder", documentsHoldsUpriv = true)
 
+/** One other tree the person picked: a row of a folder list, or an export's folder. */
+internal class PickedTreeFs : SafTreeFs("picked folder", documentsHoldsUpriv = false)
+
 /**
- * The folder picked for Export data folder. Rust addresses it as
- * `/upriv-saf-export` and writes the zip straight into it.
+ * Every other tree the person picked, one [PickedTreeFs] each. Rust reaches
+ * each at its own root (`/upriv-saf-tree/<key>`) while it is mounted here.
+ * A mount only binds the tree: it does no I/O.
  */
-internal object SafExportFs : SafTreeFs("export folder", documentsHoldsUpriv = false)
+internal object SafTrees {
+  private val mounted = ConcurrentHashMap<String, PickedTreeFs>()
+
+  /** The root Rust reaches each mounted tree at, by tree URI. */
+  private val roots = ConcurrentHashMap<String, String>()
+
+  /** The tree's file system, made and bound when it is not mounted yet. */
+  fun bind(context: Context, uri: String): PickedTreeFs =
+    mounted.computeIfAbsent(uri.trim()) { tree ->
+      PickedTreeFs().also { it.bind(context, tree) }
+    }
+
+  /** Remember where Rust reaches `uri`, so a path under that root opens in the Files app. */
+  fun rememberRoot(uri: String, root: String) {
+    roots[uri.trim()] = root.trimEnd('/')
+  }
+
+  fun unbind(uri: String) {
+    roots.remove(uri.trim())
+    mounted.remove(uri.trim())?.clear()
+  }
+
+  /** The mounted tree a Rust path is under, and the path inside it; `null` outside every tree. */
+  fun treeOf(path: String): Pair<String, String>? {
+    val normalized = path.trimEnd('/')
+    for ((uri, root) in roots) {
+      if (normalized == root) return uri to ""
+      if (normalized.startsWith("$root/")) return uri to normalized.removePrefix("$root/")
+    }
+    return null
+  }
+
+  /** True while the tree is mounted for Rust. */
+  fun isMounted(uri: String): Boolean =
+    mounted.keys().asSequence().any { SafVaultRoot.sameTreeUri(it, uri) }
+
+  /** True when the tree's own document answers a query. */
+  fun isReachable(context: Context, uri: String): Boolean =
+    PickedTreeFs().isReachable(context, uri.trim())
+}
 
 /**
  * One mounted storage-access tree. [what] names it in error messages. When
@@ -80,6 +123,9 @@ internal abstract class SafTreeFs(
     }
   }
 
+  /** The tree bound now; empty while none is. */
+  fun boundTree(): String = treeUri.get()
+
   fun dispatch(op: String, payload: String): String =
     synchronized(gate) { dispatchLocked(op, payload) }
 
@@ -134,6 +180,7 @@ internal abstract class SafTreeFs(
         "rename" -> rename(context, tree, json.optString("from"), json.optString("to"))
         "list" -> list(context, tree, json.optString("rel"))
         "open" -> open(context, tree, json)
+        "space" -> space(context, tree)
         else -> err("other", "unknown data folder operation")
       }
     } catch (error: SecurityException) {
@@ -145,6 +192,28 @@ internal abstract class SafTreeFs(
   }
 
   private data class Node(val uri: Uri, val dir: Boolean, val len: Long)
+
+  /**
+   * Free bytes of the storage the tree is on, as its provider reports them
+   * for the tree's root. Left out when the provider does not say.
+   */
+  private fun space(context: Context, tree: String): String {
+    val parsed = Uri.parse(tree)
+    val rootId = DocumentsContract.getTreeDocumentId(parsed).substringBefore(':')
+    val roots = DocumentsContract.buildRootsUri(parsed.authority)
+    val columns = arrayOf(
+      DocumentsContract.Root.COLUMN_ROOT_ID,
+      DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
+    )
+    context.contentResolver.query(roots, columns, null, null, null)?.use { cursor ->
+      while (cursor.moveToNext()) {
+        if (cursor.getString(0) == rootId && !cursor.isNull(1)) {
+          return ok(JSONObject().put("free", cursor.getLong(1)))
+        }
+      }
+    }
+    return ok()
+  }
 
   private fun stat(context: Context, tree: String, rel: String): String {
     val node = resolve(context, tree, rel, createParents = false)

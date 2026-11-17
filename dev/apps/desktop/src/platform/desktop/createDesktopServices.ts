@@ -3,6 +3,8 @@ import { desktopAppSettingsService } from "./services/appSettingsService";
 import { desktopBackupService } from "./services/backupService";
 import { desktopCreateVaultService } from "./services/createVaultService";
 import { desktopDataFolderService } from "./services/dataFolderService";
+import { desktopDeviceService } from "./services/deviceService";
+import { desktopFolderListService } from "./services/folderListService";
 import { desktopJobService } from "./services/jobService";
 import { desktopLogService } from "./services/logService";
 import { desktopVaultFileSystemService } from "./services/vaultFileSystemService";
@@ -15,7 +17,9 @@ import { desktopVaultService } from "./services/vaultService";
 /** Desktop adapters → upriv-daemon. */
 export function createDesktopServices(): AppServices {
   return {
+    device: desktopDeviceService,
     vaultRoot: desktopVaultRootService,
+    folderLists: desktopFolderListService,
     appSettings: desktopAppSettingsService,
     logs: desktopLogService,
     vault: desktopVaultService,

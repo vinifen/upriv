@@ -1,63 +1,37 @@
 import { StyleSheet, Text, View } from "react-native";
-import {
-  VAULT_ROOT_ALIAS_FILE,
-  type IncompleteReplacePolicy,
-  type VaultRootConfirmAction,
-} from "@upriv/shared";
+import type { IncompleteReplacePolicy } from "@upriv/shared";
 import { PolicyRadioOption } from "@/components/settings/PolicyRadioOption";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 
-type IncompleteContext = { kind: "default_root" } | { kind: "custom_root"; path: string };
-
 interface VaultRootIncompleteReplacePanelProps {
-  context: IncompleteContext;
+  /** The folder whose `.upriv/` is broken, as the screen names it. */
+  folder: string;
   replacePolicy: IncompleteReplacePolicy | null;
   onReplacePolicyChange: (policy: IncompleteReplacePolicy) => void;
-  /**
-   * Setup / Repair / Recovery use `"continue"`; Data folder uses `"apply"`.
-   * Required so Apply/Continue copy cannot drift by accident.
-   */
-  primaryAction: VaultRootConfirmAction;
-  /** Disable the policy radios while parent commit is busy or blocked. */
+  /** Disable the policy radios while the window's work runs. */
   disabled?: boolean;
 }
 
 /**
- * Shared "incomplete `.upriv/`" panel (Data folder, Setup, Repair).
- * Reset settings / rename / delete radios under the active vault-root option — not a separate modal step.
+ * The choice for a broken `.upriv/` in the folder the data folder list
+ * selects (Setup, Repair, the Data folder window): reset its settings,
+ * rename it aside, or delete it. The primary action waits until one is chosen.
  */
 export function VaultRootIncompleteReplacePanel({
-  context,
+  folder,
   replacePolicy,
   onReplacePolicyChange,
-  primaryAction,
   disabled = false,
 }: VaultRootIncompleteReplacePanelProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
-  const isApply = primaryAction === "apply";
-
-  const notice =
-    context.kind === "default_root"
-      ? t(
-          isApply
-            ? "modal.app_settings.upriv_root.switch_default_root_replace_notice_apply"
-            : "modal.app_settings.upriv_root.switch_default_root_replace_notice_continue",
-          { file: VAULT_ROOT_ALIAS_FILE },
-        )
-      : t(
-          isApply
-            ? "modal.app_settings.apply_confirm_custom_incomplete"
-            : "modal.app_settings.continue_confirm_custom_incomplete",
-          { path: context.path.trim() || "…" },
-        );
 
   return (
     <View style={styles.wrap}>
       <Text style={typography.caption} accessibilityRole="text">
-        {notice}
+        {t("modal.data_folder.incomplete_notice", { path: folder })}
       </Text>
       <View
         accessibilityRole="radiogroup"

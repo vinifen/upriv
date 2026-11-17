@@ -5,7 +5,6 @@ export type {
   LocaleId,
   LogLevel,
   UiTheme,
-  VaultRootMode,
 } from "./types";
 export { APP_SETTINGS_SECTIONS, DEFAULT_UI_THEME, appSettingsEqual } from "./types";
 export { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
@@ -26,6 +25,5 @@ export {
   createDefaultAppSettings,
   normalizeAppSettings,
   normalizeVaultListSearch,
-  normalizeVaultRootMode,
 } from "./normalize";
 export { APP_SETTINGS_ERROR_I18N_KEYS } from "./errorMessages";

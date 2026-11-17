@@ -40,9 +40,10 @@ import {
   vaultCanExport,
   vaultCanSaveBackupNow,
   RpcError,
+  isRpcError,
   shouldBumpVaultRootEpoch,
   isVaultRootGoneError,
-  isVaultRootUnreachableError,
+  VAULT_ROOT_ERROR_CODES,
   shouldRecordVaultHidden,
   validateDisplayName,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -431,7 +432,8 @@ export function useVaultListScreen() {
         // The data folder changed under this reload; the new one loads on its own.
       } else if (
         !settingsOnDisk &&
-        (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))
+        (isVaultRootGoneError(error) ||
+          (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.UNREACHABLE))
       ) {
         // Children stay mounted under Gate. First-run and an already-unplugged
         // folder are not a new integrity failure (that would loop the epoch).
@@ -473,6 +475,19 @@ export function useVaultListScreen() {
     }
     return userRefreshRef.current;
   }, [reload]);
+
+  /** Drop a plain-text folder on record; its files stay where they are. */
+  const forgetPlainRecord = useCallback(
+    (vault: VaultListItem, token: string) => {
+      void lifecycleService
+        .forgetPlainRecord(vault.id, token)
+        .then(() => refresh())
+        .catch((error: unknown) => {
+          show(t(mobileErrorI18nKey(error, "toast.plain_record_forget_failed")));
+        });
+    },
+    [lifecycleService, refresh, show, t],
+  );
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -723,6 +738,7 @@ export function useVaultListScreen() {
   );
 
   const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineStatus);
+  const outsideBackupVaults = vaults.filter((vault) => vault.outsideBackups).length;
   const dataFolderExportControls = useMemo<DataFolderExportControls | undefined>(
     () =>
       dataFolderService
@@ -734,6 +750,7 @@ export function useVaultListScreen() {
             onStart: (destDir, name, includeBackups) =>
               dataFolderExportCanStart && startDataFolderExport(destDir, name, includeBackups),
             onStop: stopDataFolderExport,
+            outsideBackups: outsideBackupVaults,
           }
         : undefined,
     [
@@ -742,6 +759,7 @@ export function useVaultListScreen() {
       dataFolderExportJob,
       dataFolderExportWritten,
       dataFolderService,
+      outsideBackupVaults,
       startDataFolderExport,
       stopDataFolderExport,
     ],
@@ -1148,7 +1166,7 @@ export function useVaultListScreen() {
     );
   };
 
-  const handleVaultDelete = async (vaultId: string) => {
+  const handleVaultDelete = async (vaultId: string, outsideBackups: boolean) => {
     if (isVaultPipelineBusy(vaultId)) {
       show(t("toast.pipeline_busy"));
       return;
@@ -1168,7 +1186,10 @@ export function useVaultListScreen() {
 
     groupBusyGenRef.current += 1;
     try {
-      await vaultService.unregisterSettings(vaultId);
+      const deleted = await vaultService.unregisterSettings(vaultId, outsideBackups);
+      const params = { name: target?.displayName ?? vaultId, folder: deleted.folder ?? "" };
+      if (deleted.outside === "kept") show(t("toast.vault_deleted_outside_kept", params));
+      if (deleted.outside === "failed") show(t("toast.vault_deleted_outside_failed", params));
     } catch (error) {
       if (shouldBumpVaultRootEpoch(error)) {
         void reportVaultRootIntegrityFailure(error);
@@ -1486,6 +1507,7 @@ export function useVaultListScreen() {
     lifecycle,
     reload,
     refresh,
+    forgetPlainRecord,
     openCreate,
     closeCreate,
     pipelineStatus,

@@ -125,6 +125,8 @@ export function VaultListPage() {
           onUnlockVault={list.onUnlockVault}
           onCloseNow={list.onCloseNow}
           onStopWork={list.onStopWork}
+          onPlainRecordRetry={list.onPlainRecordRetry}
+          onPlainRecordForget={list.onPlainRecordForget}
         />
         {importDrop.isImportDropActive ? (
           <div
@@ -208,7 +210,12 @@ export function VaultListPage() {
         onClose={appSettings.onClose}
         onDirtyChange={appSettings.onDirtyChange}
         onNotice={appSettings.onNotice}
-        hasOpenVault={!appConfigEditAllowed("workspace.path", list.vaults, list.pipelineListStatus)}
+        hasOpenVault={
+          !appConfigEditAllowed("unlocked_folders", list.vaults, list.pipelineListStatus)
+        }
+        vaultName={(vaultId) =>
+          list.vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId
+        }
       />
       <VaultGroupsModal
         open={groupsModal.open}

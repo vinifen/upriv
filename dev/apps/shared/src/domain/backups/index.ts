@@ -1,33 +1,11 @@
 export type {
-  BackupLocation,
-  ChosenBackupFolder,
+  BackupSectionKind,
   VaultBackupEntry,
   VaultBackupListing,
   VaultBackupSaved,
+  VaultBackupSection,
 } from "./types";
-export {
-  BACKUP_FOLDER_SYSTEMS,
-  appBackupFolders,
-  backupFellBackToastKey,
-  backupFolderIssue,
-  backupFolderLeftBehind,
-  backupFolderStatusI18nKey,
-  backupFolderSystem,
-  closeAllFellBackToast,
-  normalizeAppBackupFolders,
-  normalizeVaultBackupFolders,
-  parseBackupFolderStatus,
-  vaultBackupFolders,
-  type BackupFellBack,
-  type BackupFolderStatus,
-  type BackupFolderSystem,
-  type BackupFolderTable,
-  type BackupPlace,
-  type VaultBackupFolderRow,
-  type VaultBackupFolders,
-  type VaultBackupPlace,
-} from "./folders";
-export { parseBackupFolderCheck, parseBackupListing, parseBackupSaved } from "./parse";
+export { parseBackupEntry, parseBackupListing, parseBackupSaved } from "./parse";
 export {
   backupListSections,
   backupSectionSelection,
@@ -37,12 +15,11 @@ export {
   type BackupTierGroup,
 } from "./sections";
 export {
-  backupEntryFileName,
-  backupEntryKey,
+  BACKUP_NAME_MAX_CHARS,
   backupExportFilename,
   backupExportRowKey,
-  backupSnapshotFileName,
   formatBackupDate,
+  normalizeBackupName,
 } from "./format";
 export { backupDeleteConfirmPhrase, matchesBackupDeleteConfirmation } from "./deleteConfirm";
 export { BACKUP_EXPORT_PROGRESS_COPY } from "./exportProgress";

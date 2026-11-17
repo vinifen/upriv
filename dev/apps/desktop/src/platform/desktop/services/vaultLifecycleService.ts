@@ -5,33 +5,24 @@ import {
   LIVE_CLOSING_PIPELINE_STEP_COUNT,
   LIVE_OPENING_PIPELINE_STEP_COUNT,
   borrowSessionRamPassword,
-  currentWorkspaceSystem,
-  encryptedShortcutActive,
-  finishPlainOpen,
   isLifecyclePasswordPresent,
   isVaultPipelineError,
-  parsePendingPlainConfirm,
-  resolveVaultMountPoint,
   waitForClose,
   type VaultLifecycleService,
 } from "@upriv/shared";
-import { isElectronRenderer } from "@/lib/invoke";
 import {
-  rpcAppSettingsGet,
+  rpcPlainRecordForget,
   rpcVaultClose,
   rpcVaultCloseHurry,
   rpcVaultClosePhase,
-  rpcVaultConfigGet,
   rpcVaultOpen,
-  rpcVaultPlainConfirm,
-  rpcWinFspInstall,
-  rpcWinFspStatus,
+  rpcVaultUnlockedFolderAttach,
 } from "@/lib/rpc";
 
 /** Session RAM only — never persist. */
 const vaultPasswordInRam = new Map<string, string>();
 
-/** Desktop → daemon `vault_open` / `vault_close`. */
+/** Desktop → daemon `vault_open` / `vault_close`, and the unlocked folder after an open. */
 export const desktopVaultLifecycleService: VaultLifecycleService = {
   hasPasswordInSession(vaultId) {
     return vaultPasswordInRam.has(vaultId);
@@ -50,19 +41,11 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
 
   async runOpeningPipeline(vaultId, onStep, job) {
     onStep(0);
-    await installWinFspWhenFolderNeeded(vaultId);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
-    await finishPlainOpen({
-      vaultId,
-      password,
-      job,
-      open: rpcVaultOpen,
-      confirm: rpcVaultPlainConfirm,
-      close: (id) => rpcVaultClose(id, "user").then(() => undefined),
-      pendingOf: parsePendingPlainConfirm,
-    });
+    const switches = await rpcVaultOpen(vaultId, password, job);
     // Hooks put the string back after a successful open.
     onStep(1);
+    return switches;
   },
 
   async runClosingPipeline(vaultId, onStep, reason = "user") {
@@ -80,8 +63,12 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     return rpcVaultCloseHurry(vaultId);
   },
 
-  resolveWorkspacePath(displayName, parentPath) {
-    return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";
+  attachUnlockedFolder(vaultId, job) {
+    return rpcVaultUnlockedFolderAttach(vaultId, job);
+  },
+
+  forgetPlainRecord(vaultId, token) {
+    return rpcPlainRecordForget(vaultId, token);
   },
 
   validateLifecyclePassword(password) {
@@ -94,21 +81,3 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     return error.code;
   },
 };
-
-/**
- * A vault that already wants the file manager folder asks for the driver here.
- * Declining leaves the saved switch unchanged and the vault still opens in the app.
- */
-async function installWinFspWhenFolderNeeded(vaultId: string): Promise<void> {
-  if (currentWorkspaceSystem() !== "windows" || !isElectronRenderer()) return;
-  try {
-    const status = await rpcWinFspStatus();
-    if (!status.applicable || status.installed) return;
-    const [app, vault] = await Promise.all([rpcAppSettingsGet(), rpcVaultConfigGet(vaultId)]);
-    if (vault.storage.mode !== "encrypted_dir") return;
-    if (!encryptedShortcutActive(app.settings.workspace, vault.mount, "windows")) return;
-    await rpcWinFspInstall();
-  } catch {
-    // Open continues. A missing driver leaves the in-app file manager.
-  }
-}

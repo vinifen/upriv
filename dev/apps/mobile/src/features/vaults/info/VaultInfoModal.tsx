@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Platform, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { SettingsAccordionSection } from "@/components/settings";
 import { InfoFieldList } from "@/features/system/info/InfoFieldList";
 import { Button, ContentSkeleton, Modal } from "@/components/ui";
@@ -16,6 +16,7 @@ import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import {
   useBackupService,
+  useFolderListService,
   useVaultLifecycleService,
   useVaultRootService,
   useVaultService,
@@ -43,6 +44,7 @@ export function VaultInfoModal({
   const backupService = useBackupService();
   const lifecycleService = useVaultLifecycleService();
   const vaultRootService = useVaultRootService();
+  const folderListService = useFolderListService();
   const { snapshot, loadError, loadFailure, retryLoad } = useVaultInfoData({
     vault,
     open,
@@ -52,10 +54,8 @@ export function VaultInfoModal({
     backupService,
     lifecycleService,
     vaultRootService,
-    vaultRootMode: settings.app.vault_root_mode,
-    workspace: settings.workspace,
+    folderListService,
     fallbackVaultRootBase: "",
-    host: Platform.OS,
   });
 
   useVaultRootIntegrityClose(open, loadFailure, reportVaultRootIntegrityFailure, onClose);

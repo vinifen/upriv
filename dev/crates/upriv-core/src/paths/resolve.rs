@@ -1,96 +1,77 @@
-//! Resolve vault-root on launch: explicit → (`custom_root`: active alias) →
-//! (`default_root`: default_root only).
+//! Resolve the data folder on launch: an explicit path, then this device's
+//! choice in the data folder list.
 //!
-//! `UPRIV_VAULT_ROOT` (or caller `explicit`) always wins over wire mode/path.
+//! `UPRIV_VAULT_ROOT` (or a caller's explicit path) always wins, and nothing
+//! is written for it. Otherwise the list in the app home
+//! (`.upriv-data-folder`, [`crate::folder_list::data_folder`]) says what this
+//! device uses:
+//! - Default (a device with no group too): the folder beside the app for a
+//!   portable copy, the per-user app folder for an installed one. No `.upriv`
+//!   there is the first run, or, while this device has rows to try,
+//!   `SelectedFailed`.
+//! - A row: its folder. One that does not answer is `SelectedFailed`.
 //!
-//! Alias file (`.upriv-data-folder`) lives in the **app home**:
+//! On `SelectedFailed` the UI searches this device's rows and Default
+//! ([`crate::search_data_folder`]) while the person may pick. A data folder
+//! lost while Upriv runs stays selected, so the next resolve lands here too.
+//!
+//! The app home:
 //! - **Portable / AppImage** (writable folder): directory of `$APPIMAGE` / exe
 //! - **System install** (e.g. `/opt`, Program Files): user data dir
 //!   (`$XDG_DATA_HOME/upriv`, `%LOCALAPPDATA%\Upriv`, …)
-//! - **Electron `--dev`:** `UPRIV_DEFAULT_ROOT_ANCHOR` (`upriv/dev/`) — same
-//!   place as “create structure here”, so the simulation stays consistent
+//! - **Electron `--dev`:** `UPRIV_DEFAULT_ROOT_ANCHOR` (`upriv/dev/`)
 //!
 //! Electron sets `UPRIV_DEFAULT_ROOT_ANCHOR` after a writability probe; when unset,
 //! [`app_home_dir`] applies the same fallback.
 //!
-//! The file is created only when the user picks another folder. Switching back
-//! to `default_root` **deactivates** it (keeps the path); it is not deleted.
-//! One `key=value` per line: `status=active` → `custom_root` (`data_folder=` in
-//! use); `status=inactive` → `default_root` mode. Android also stores the last
-//! Custom folder on an `android_custom_folder=` line (`content://`).
+//! ## Incomplete `.upriv/`
 //!
-//! **On-disk source of truth for vault-root mode/path is `.upriv-data-folder`**, not
-//! `settings.toml` (which never stores `vault_root_mode` / `upriv_root_path`).
-//! Wire fields are derived from the alias on load; when mode is
-//! [`VaultRootMode::DefaultRoot`], resolve ignores an active alias and uses
-//! default_root only (UI/settings intent for that session).
-//!
-//! ## Incomplete `.upriv/` policy
-//!
-//! - At the **primary default_root anchor** (or any path in the strict/`starts`
-//!   exact check): [`UprivError::VaultRootIncomplete`] **propagates** so Gate/Repair
-//!   can offer rename/delete.
-//! - When a candidate is found only via **upward/sibling walk** (not the start
-//!   directory itself): Incomplete is **skipped** and search continues — a corrupt
-//!   sibling must not block finding another valid root.
+//! A selected folder whose `.upriv` is incomplete propagates
+//! [`UprivError::VaultRootIncomplete`] so the Gate offers Repair; it never
+//! hands over. When Default is found by the upward or sibling walk (not the
+//! start directory itself), an incomplete candidate is skipped and the walk
+//! goes on.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
+use crate::device::{this_device, DeviceSystem};
 use crate::error::{Result, UprivError};
+use crate::folder_list::data_folder::{load_data_folder_list, selected_place, DataFolderPlace};
+use crate::folder_list::{path_issue, ListKind, Row};
+use crate::folder_probe::FolderState;
 use crate::paths::fs_env::{
     cleanup_stale_write_probes, dir_is_writable, env_appimage_dir, env_default_root_anchor,
     is_inside_macos_app_bundle, same_dir,
 };
 use crate::paths::{is_vault_root_marker, VaultRoot};
 
-/// How the app locates the vault-root (wire: `"default_root"` | `"custom_root"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VaultRootMode {
-    /// Create/use `.upriv/` at the distribution default root; active alias is ignored.
-    #[default]
-    DefaultRoot,
-    /// Use the absolute path stored in `.upriv-data-folder` (alias).
-    CustomRoot,
-}
-
-/// Dotfile in the app home — path pointer to a vault-root (not a vault itself).
-pub const VAULT_ROOT_ALIAS_FILE: &str = ".upriv-data-folder";
-
 /// Max parent levels walked upward by [`discover_vault_root_upward`].
 /// Caps the walk so a misplaced install under `$HOME` does not scan the whole tree
 /// (PRD portable layout: root is at the app home, not arbitrarily deep).
 const PARENT_WALK_MAX_DEPTH: usize = 8;
 
-/// Parsed `.upriv-data-folder` contents.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VaultRootAlias {
-    /// Absolute path to the folder that contains `.upriv/settings.toml`.
-    /// On Android this is the logical mount `/upriv-saf-root` while a grant is in use.
-    pub path: PathBuf,
-    /// `true` = `custom_root` mode uses this path; `false` = remembered but unused.
-    pub active: bool,
-    /// Last Custom folder on Android (`content://` tree). Kept while the default
-    /// Documents folder is the one in use. Absent on desktop.
-    pub custom_uri: Option<String>,
-}
-
-/// How the vault-root was located (wire: `"explicit"` | `"custom_root"` | `"default_root"`).
-///
-/// Distinct from [`VaultRootMode`]: **mode** is the user preference; **source** is how
-/// resolve found the root this launch. Never treat a mode value as a source (or vice versa).
+/// How the data folder was found this launch (wire: `"explicit"` |
+/// `"default"` | `"row"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultRootSource {
     /// `UPRIV_VAULT_ROOT`, or an explicit path from the caller.
     Explicit,
-    /// Active `.upriv-data-folder` pointer in the app home (`custom_root` mode).
-    CustomRoot,
-    /// Marker found at the distribution `default_root` anchor (`default_root` mode).
-    DefaultRoot,
+    /// Default: beside the app, or the per-user app folder.
+    Default,
+    /// A row of this device's data folder list.
+    Row,
+}
+
+impl VaultRootSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Default => "default",
+            Self::Row => "row",
+        }
+    }
 }
 
 /// Outcome of launch-time resolution.
@@ -100,17 +81,18 @@ pub enum ResolveVaultRoot {
         root: VaultRoot,
         source: VaultRootSource,
     },
-    /// No valid root — UI should offer create `default_root` vs choose-path (+ alias).
-    ///
-    /// **Invariant:** `alias_path.parent() == Some(default_root_anchor.as_path())` —
-    /// both are the app home. Wire keeps `defaultRootAnchor` / `aliasPath` (not a renamed
-    /// `appHome`) so UI and docs stay aligned with the `default_root` mode name.
+    /// The first run: Default is selected, holds no `.upriv`, and this device
+    /// has no row to try. Setup shows the list, and Continue makes one there.
     NeedsSetup {
-        /// Absolute path of the `.upriv-data-folder` file (under app home).
-        alias_path: PathBuf,
-        /// Folder for “create `.upriv/` here” — same app home as `alias_path`'s parent.
+        /// Where Default is: the folder beside the app, or the per-user app folder.
         default_root_anchor: PathBuf,
         distribution: crate::paths::AppDistribution,
+    },
+    /// The selected choice did not answer as a data folder. The UI shows the
+    /// list while [`crate::search_data_folder`] looks for one that does.
+    SelectedFailed {
+        place: DataFolderPlace,
+        reason: FolderState,
     },
 }
 
@@ -119,11 +101,8 @@ pub enum ResolveVaultRoot {
 pub struct ResolveVaultRootOptions {
     /// Highest priority: CLI / env / caller override.
     pub explicit: Option<PathBuf>,
-    /// [`VaultRootMode::DefaultRoot`] (default): search default_root only (active `.upriv-data-folder` is ignored).
-    /// [`VaultRootMode::CustomRoot`]: use `.upriv-data-folder` path, ignoring default_root.
-    pub mode: VaultRootMode,
     /// Directory that contains the executable (tests inject a temp dir).
-    /// When set, becomes the app home (alias + default_root) and env override is ignored.
+    /// When set, becomes the app home (list + Default) and env override is ignored.
     pub binary_dir: Option<PathBuf>,
 }
 
@@ -175,8 +154,8 @@ fn prefer_writable_app_home(candidate: PathBuf) -> Result<PathBuf> {
 
 /// User-owned app home for system installs (`/opt`, Program Files, …).
 ///
-/// Pure path resolution — does **not** create the directory. Call
-/// [`ensure_user_data_app_home`] before writing under this path.
+/// Pure path resolution — does **not** create the directory: the first
+/// write under it does.
 pub(crate) fn resolve_user_data_app_home() -> Result<PathBuf> {
     let path = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA")
@@ -209,270 +188,6 @@ pub(crate) fn resolve_user_data_app_home() -> Result<PathBuf> {
     })
 }
 
-/// Resolve then create the user-data app home (first write under installed home).
-pub(crate) fn ensure_user_data_app_home() -> Result<PathBuf> {
-    let path = resolve_user_data_app_home()?;
-    crate::host_fs::create_dir_all(&path)?;
-    crate::paths::fs_env::cleanup_stale_write_probes(&path);
-    Ok(path)
-}
-
-/// Absolute path of the alias file in `home` (app home or test dir).
-pub fn vault_root_alias_path(home: impl AsRef<Path>) -> PathBuf {
-    home.as_ref().join(VAULT_ROOT_ALIAS_FILE)
-}
-
-const STATUS_KEY: &str = "status=";
-/// The folder chosen under "Another folder" (it holds `.upriv/`).
-const DATA_FOLDER_KEY: &str = "data_folder=";
-/// The last Android Custom folder (`content://` tree).
-const ANDROID_CUSTOM_FOLDER_KEY: &str = "android_custom_folder=";
-
-/// One `key=value` per line, and a comment only for what applies: desktop
-/// gets no Android lines.
-fn alias_file_contents(path: &Path, active: bool, custom_uri: Option<&str>) -> Result<String> {
-    let path_str = path_as_alias_line(path)?;
-    let mut text = String::from(
-        "# Upriv data folder pointer. Not a vault; holds no secrets.\n\
-         # status=active: Upriv opens data_folder. status=inactive: Upriv opens the default data folder and keeps data_folder for later.\n",
-    );
-    if path == Path::new(crate::host_fs::SAF_VAULT_ROOT) {
-        text.push_str("# /upriv-saf-root is the Android folder you granted, not a real path.\n");
-    }
-    let custom = custom_uri.filter(|uri| !uri.is_empty());
-    if custom.is_some() {
-        text.push_str(
-            "# android_custom_folder is the last Custom folder, kept while Documents/Upriv is in use.\n",
-        );
-    }
-    let status = if active { "active" } else { "inactive" };
-    text.push_str(&format!("{STATUS_KEY}{status}\n"));
-    if let Some(uri) = custom {
-        text.push_str(&format!("{ANDROID_CUSTOM_FOLDER_KEY}{uri}\n"));
-    }
-    text.push_str(&format!("{DATA_FOLDER_KEY}{path_str}\n"));
-    Ok(text)
-}
-
-/// Android Custom folder pointer. Empty clears it. Anything else must be a `content://` tree.
-fn parse_custom_uri(value: &str) -> Result<Option<String>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    if !trimmed.starts_with("content://")
-        || trimmed.len() > 4096
-        || trimmed.chars().any(|c| c.is_whitespace())
-    {
-        return Err(UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "custom folder must be a content URI",
-        )));
-    }
-    Ok(Some(trimmed.to_string()))
-}
-
-/// UTF-8 path for the alias file line — rejects non-UTF-8, newlines, and relative paths.
-fn path_as_alias_line(path: &Path) -> Result<String> {
-    if !path.is_absolute() {
-        return Err(UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "vault-root path must be absolute",
-        )));
-    }
-    let Some(s) = path.to_str() else {
-        return Err(UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "vault-root path is not valid UTF-8",
-        )));
-    };
-    if s.contains('\n') || s.contains('\r') {
-        return Err(UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "vault-root path must not contain newline characters",
-        )));
-    }
-    Ok(s.to_string())
-}
-
-/// Read `.upriv-data-folder` if present. Missing file → `Ok(None)`.
-///
-/// Lines starting with `#` are comments. `status=active|inactive` sets the flag
-/// (default **inactive** when omitted — fail closed). `data_folder=` is the
-/// absolute vault-root path. A file without one, or with any other line,
-/// → [`UprivError::VaultRootAliasInvalid`].
-pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootAlias>> {
-    let path = vault_root_alias_path(home);
-    let raw = match crate::host_fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let mut active = false;
-    let mut saw_status = false;
-    let mut normalize_unknown_status = false;
-    let mut custom_uri: Option<String> = None;
-    let mut target: Option<PathBuf> = None;
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix(ANDROID_CUSTOM_FOLDER_KEY) {
-            custom_uri = match parse_custom_uri(value) {
-                Ok(uri) => uri,
-                Err(_) => return Err(UprivError::VaultRootAliasInvalid(path)),
-            };
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix(DATA_FOLDER_KEY) {
-            target = Some(PathBuf::from(value.trim()));
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix(STATUS_KEY) {
-            saw_status = true;
-            active = match value.trim().to_ascii_lowercase().as_str() {
-                "active" => true,
-                "inactive" => false,
-                other => {
-                    // Rare typo / corruption: fail closed and rewrite as inactive (no UI).
-                    eprintln!(
-                        "upriv-core: .upriv-data-folder has unknown status={other:?}; rewriting as inactive"
-                    );
-                    crate::logging::log_event(
-                        crate::logging::LogLevel::Warn,
-                        "vault_root_alias_healed",
-                        &[("reason", "unknown_status")],
-                    );
-                    normalize_unknown_status = true;
-                    false
-                }
-            };
-            continue;
-        }
-        return Err(UprivError::VaultRootAliasInvalid(path));
-    }
-    let Some(target) = target else {
-        return Err(UprivError::VaultRootAliasInvalid(path));
-    };
-    if !target.is_absolute() {
-        return Err(UprivError::VaultRootAliasInvalid(path));
-    }
-    if normalize_unknown_status {
-        // Best-effort heal; still return inactive even if the rewrite fails.
-        if let Ok(contents) = alias_file_contents(&target, false, custom_uri.as_deref()) {
-            if let Err(error) = write_alias_file_atomic(&path, &contents) {
-                eprintln!("upriv-core: failed to rewrite .upriv-data-folder as inactive: {error}");
-            }
-        }
-    }
-    Ok(Some(VaultRootAlias {
-        path: target,
-        // No status= line → inactive (fail closed).
-        active: if saw_status { active } else { false },
-        custom_uri,
-    }))
-}
-
-/// Atomically write `.upriv-data-folder` (temp + `sync_all` + rename) so a crash cannot
-/// leave a 0-byte alias that the next launch treats as missing. A settings save
-/// passes through here every time, so a file that already says this is left alone.
-fn write_alias_file_atomic(alias_path: &Path, contents: &str) -> Result<()> {
-    if crate::host_fs::read_to_string(alias_path).is_ok_and(|current| current == contents) {
-        return Ok(());
-    }
-    crate::paths::write_bytes_atomic(alias_path, contents.as_bytes())
-}
-
-/// Write / rewrite the alias as **active** (custom_root mode). `target` must be a vault-root.
-pub fn write_vault_root_alias(home: impl AsRef<Path>, target: impl AsRef<Path>) -> Result<()> {
-    let root = VaultRoot::discover(target.as_ref())?;
-    write_vault_root_alias_for_root(home, &root)
-}
-
-/// Write active alias using an already-validated [`VaultRoot`] (avoids a second discover).
-/// An `android_custom_folder=` line already in the file is kept.
-pub fn write_vault_root_alias_for_root(home: impl AsRef<Path>, root: &VaultRoot) -> Result<()> {
-    write_vault_root_alias_for_root_with_custom(home, root, None)
-}
-
-/// Write the active alias. `custom_uri` `None` keeps an `android_custom_folder=` line already in the file.
-/// `Some("")` clears it. A non-empty value must be a `content://` tree.
-pub fn write_vault_root_alias_for_root_with_custom(
-    home: impl AsRef<Path>,
-    root: &VaultRoot,
-    custom_uri: Option<&str>,
-) -> Result<()> {
-    let home = home.as_ref();
-    if resolve_user_data_app_home()
-        .ok()
-        .is_some_and(|ud| same_dir(&ud, home))
-    {
-        let _ = ensure_user_data_app_home()?;
-    } else {
-        crate::host_fs::create_dir_all(home)?;
-    }
-    let kept = match custom_uri {
-        Some(value) => parse_custom_uri(value)?,
-        None => read_vault_root_alias(home)?.and_then(|alias| alias.custom_uri),
-    };
-    let alias = vault_root_alias_path(home);
-    write_alias_file_atomic(
-        &alias,
-        &alias_file_contents(root.root(), true, kept.as_deref())?,
-    )
-}
-
-/// Record the Android Custom folder on the existing `.upriv-data-folder` without changing mode.
-/// Missing alias file is left missing — setup writes the line with the folder.
-pub fn remember_vault_root_custom_uri(uri: &str) -> Result<()> {
-    let home = app_home_dir()?;
-    let Some(alias) = read_vault_root_alias(&home)? else {
-        return Ok(());
-    };
-    let custom = parse_custom_uri(uri)?.ok_or_else(|| {
-        UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "custom folder is required",
-        ))
-    })?;
-    let file = vault_root_alias_path(&home);
-    write_alias_file_atomic(
-        &file,
-        &alias_file_contents(&alias.path, alias.active, Some(&custom))?,
-    )
-}
-
-/// Mark an existing alias **inactive** (default-root mode in use). Keeps the path.
-/// Missing file is OK (never created).
-///
-/// No file lock: safe under the desktop single-instance assumption (one daemon writer).
-/// Concurrent writers could race; do not call from multiple processes without external locking.
-pub(crate) fn deactivate_vault_root_alias(home: impl AsRef<Path>) -> Result<()> {
-    let home = home.as_ref();
-    let Some(alias) = read_vault_root_alias(home)? else {
-        return Ok(());
-    };
-    let file = vault_root_alias_path(home);
-    write_alias_file_atomic(
-        &file,
-        &alias_file_contents(&alias.path, false, alias.custom_uri.as_deref())?,
-    )
-}
-
-/// Mark the app home's alias inactive (default-root mode in use).
-///
-/// See [`deactivate_vault_root_alias`] for single-instance / no-flock assumptions.
-pub fn deactivate_app_home_alias() -> Result<()> {
-    deactivate_vault_root_alias(app_home_dir()?)
-}
-
-/// Walk parents upward from `start` looking for `.upriv/settings.toml`.
-///
-/// At the **starting** directory only, also checks one level of child folders
-/// (portable layout: binary folder beside a sibling vault-root). Parent dirs are
-/// checked themselves but not their siblings — avoids picking up unrelated
-/// roots under `/tmp` or the home directory.
 pub fn discover_vault_root_upward(start: impl AsRef<Path>) -> Option<PathBuf> {
     let start = start.as_ref().canonicalize().ok()?;
     let mut current = start.clone();
@@ -503,7 +218,7 @@ pub fn discover_vault_root_upward(start: impl AsRef<Path>) -> Option<PathBuf> {
 ///
 /// [`VaultRoot::discover`] only returns `Io`, [`UprivError::VaultRootNotFound`], or
 /// [`UprivError::VaultRootIncomplete`] — unexpected variants propagate as `Err`.
-pub(crate) fn open_default_root_candidate(path: &Path) -> Result<Option<VaultRoot>> {
+fn open_default_root_candidate(path: &Path) -> Result<Option<VaultRoot>> {
     match VaultRoot::discover(path) {
         Ok(root) => Ok(Some(root)),
         Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
@@ -535,63 +250,169 @@ fn resolve_app_home(options: &ResolveVaultRootOptions) -> Result<PathBuf> {
     app_home_dir()
 }
 
-/// Resolve the vault-root for app launch.
-///
-/// Order: explicit (`UPRIV_VAULT_ROOT` / caller) → (`custom_root`: active alias) →
-/// (`default_root`: default_root only). See crate README for strict/loose.
+/// The explicit path that wins over the list: the caller's, or `UPRIV_VAULT_ROOT`.
+pub fn explicit_data_folder() -> Option<PathBuf> {
+    env_vault_root_explicit()
+}
+
+/// Resolve the data folder for app launch: explicit, then this device's
+/// choice in the list. Reads only.
 pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVaultRoot> {
-    use crate::paths::{detect_app_distribution, AppDistribution};
-
     let app_home = resolve_app_home(&options)?;
-    let default_root_anchor =
-        crate::paths::default_vault_root_anchor_for(options.binary_dir.as_deref())?;
-    let alias_path = vault_root_alias_path(&app_home);
-    let distribution = detect_app_distribution();
+    let default_root_anchor = match options.binary_dir.as_deref() {
+        Some(dir) => crate::paths::default_vault_root_anchor_for(Some(dir))?,
+        None => default_data_folder()?,
+    };
+    let distribution = crate::paths::detect_app_distribution();
 
-    let explicit = options.explicit.clone().or_else(env_vault_root_explicit);
-
-    if let Some(explicit) = explicit.as_ref() {
-        let root = open_or_classify(explicit)?;
+    if let Some(explicit) = options.explicit.clone().or_else(env_vault_root_explicit) {
+        let root = open_or_classify(&explicit)?;
         return Ok(ResolveVaultRoot::Found {
             root,
             source: VaultRootSource::Explicit,
         });
     }
 
-    let needs_setup = || ResolveVaultRoot::NeedsSetup {
-        alias_path: alias_path.clone(),
-        default_root_anchor: default_root_anchor.clone(),
-        distribution,
-    };
-
-    if options.mode == VaultRootMode::CustomRoot {
-        return match try_open_alias(&app_home)? {
+    let list = load_data_folder_list(&app_home)?;
+    let device = this_device();
+    match selected_place(&list, device) {
+        DataFolderPlace::Default => match find_default_root(&options, &default_root_anchor)? {
             Some(root) => Ok(ResolveVaultRoot::Found {
                 root,
-                source: VaultRootSource::CustomRoot,
+                source: VaultRootSource::Default,
             }),
-            None => Ok(needs_setup()),
-        };
+            // A row may hold the data folder Default lost: search before Setup.
+            None if !list.devices.rows_here(device).is_empty() => {
+                Ok(ResolveVaultRoot::SelectedFailed {
+                    place: DataFolderPlace::Default,
+                    reason: FolderState::Missing,
+                })
+            }
+            None => Ok(ResolveVaultRoot::NeedsSetup {
+                default_root_anchor,
+                distribution,
+            }),
+        },
+        DataFolderPlace::Row(row) => {
+            let system = list
+                .devices
+                .here(device)
+                .map_or(DeviceSystem::current(), |group| group.system);
+            if path_issue(system, ListKind::DataFolder, &row.path).is_some() {
+                return Ok(ResolveVaultRoot::SelectedFailed {
+                    place: DataFolderPlace::Row(row),
+                    reason: FolderState::Refused,
+                });
+            }
+            let folder = data_folder_in_use(&row);
+            if crate::host_fs::is_unmounted_saf_root(&folder) {
+                // The platform could not mount the row's tree: its drive is
+                // away or its grant is gone.
+                return Ok(ResolveVaultRoot::SelectedFailed {
+                    place: DataFolderPlace::Row(row),
+                    reason: FolderState::Missing,
+                });
+            }
+            match open_default_root_candidate(&folder) {
+                Ok(Some(root)) => Ok(ResolveVaultRoot::Found {
+                    root,
+                    source: VaultRootSource::Row,
+                }),
+                Ok(None) => Ok(ResolveVaultRoot::SelectedFailed {
+                    place: DataFolderPlace::Row(row),
+                    reason: FolderState::Missing,
+                }),
+                Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
+                Err(UprivError::Io(error)) => Ok(ResolveVaultRoot::SelectedFailed {
+                    place: DataFolderPlace::Row(row),
+                    reason: FolderState::of_io(&error),
+                }),
+                Err(error) => Err(error),
+            }
+        }
+    }
+}
+
+/// Where the data folder of a selected row is used: its folder on a
+/// computer; on a phone the tree the platform mounted for it as the data
+/// folder.
+pub(crate) fn data_folder_in_use(row: &Row) -> PathBuf {
+    if crate::paths::is_content_uri(row.path.trim()) {
+        PathBuf::from(crate::host_fs::SAF_VAULT_ROOT)
+    } else {
+        PathBuf::from(row.path.trim())
+    }
+}
+
+/// The data folder this device uses now, without the explicit override:
+/// `None` when its choice holds no data folder yet.
+pub(crate) fn chosen_data_folder() -> Result<Option<VaultRoot>> {
+    if let Some(explicit) = env_vault_root_explicit() {
+        return open_or_classify(&explicit).map(Some);
+    }
+    match resolve_vault_root(ResolveVaultRootOptions::default())? {
+        ResolveVaultRoot::Found { root, .. } => Ok(Some(root)),
+        ResolveVaultRoot::NeedsSetup { .. } | ResolveVaultRoot::SelectedFailed { .. } => Ok(None),
+    }
+}
+
+/// Default's folder on this device: the folder beside the app for a portable
+/// copy, the per-user app folder for an installed one. On a phone it is
+/// Documents/Upriv, which the platform mounts as the data folder.
+pub(crate) fn default_data_folder() -> Result<PathBuf> {
+    if DeviceSystem::current() == DeviceSystem::Android {
+        Ok(PathBuf::from(crate::host_fs::SAF_VAULT_ROOT))
+    } else {
+        setup_default_root_anchor()
+    }
+}
+
+/// The folder this device's selection names, for a message about it.
+fn selected_folder() -> Result<PathBuf> {
+    let list = load_data_folder_list(&app_home_dir()?)?;
+    match selected_place(&list, this_device()) {
+        DataFolderPlace::Row(row) => Ok(PathBuf::from(row.path)),
+        DataFolderPlace::Default => default_data_folder(),
+    }
+}
+
+/// The error of a data folder lost while Upriv ran (case B). The selection
+/// stays as it is: the UI resolves again, as at launch, and the search finds
+/// another data folder or the person picks one.
+pub fn data_folder_lost() -> UprivError {
+    let path = selected_folder().unwrap_or_default();
+    UprivError::VaultRootNotFound(path.join(crate::paths::VAULT_ROOT_SETTINGS_REL))
+}
+
+/// Default: the anchor, or for a portable copy without Electron's anchor
+/// the walk up from it and from the working directory. On a phone, the
+/// Documents/Upriv tree once the platform mounted it.
+fn find_default_root(
+    options: &ResolveVaultRootOptions,
+    default_root_anchor: &Path,
+) -> Result<Option<VaultRoot>> {
+    use crate::paths::AppDistribution;
+
+    if options.binary_dir.is_none() && DeviceSystem::current() == DeviceSystem::Android {
+        if crate::host_fs::is_unmounted_saf_root(default_root_anchor) {
+            return Ok(None);
+        }
+        return open_default_root_candidate(default_root_anchor);
     }
 
     // Installed packages never walk; Electron always sets `UPRIV_DEFAULT_ROOT_ANCHOR`, so
     // portable/dev are also exact-anchor only when that env is present.
-    let only_default_root_anchor = options.binary_dir.is_none()
+    let distribution = crate::paths::detect_app_distribution();
+    let only_anchor = options.binary_dir.is_none()
         && (distribution == AppDistribution::Installed || env_default_root_anchor().is_some());
-    if only_default_root_anchor {
-        return match open_default_root_candidate(&default_root_anchor)? {
-            Some(root) => Ok(ResolveVaultRoot::Found {
-                root,
-                source: VaultRootSource::DefaultRoot,
-            }),
-            None => Ok(needs_setup()),
-        };
+    if only_anchor {
+        return open_default_root_candidate(default_root_anchor);
     }
 
-    let mut starts = vec![default_root_anchor.clone()];
+    let mut starts = vec![default_root_anchor.to_path_buf()];
     if options.binary_dir.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
-            if !same_dir(&cwd, &default_root_anchor) {
+            if !same_dir(&cwd, default_root_anchor) {
                 starts.push(cwd);
             }
         }
@@ -600,29 +421,36 @@ pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVau
     for start in starts {
         // Incomplete at a primary start (anchor/cwd) propagates — Gate/Repair.
         if let Some(root) = open_default_root_candidate(&start)? {
-            return Ok(ResolveVaultRoot::Found {
-                root,
-                source: VaultRootSource::DefaultRoot,
-            });
+            return Ok(Some(root));
         }
         if let Some(found) = discover_vault_root_upward(&start) {
             if !same_dir(&found, &start) {
-                // Incomplete on a walk sibling is skipped (see module Incomplete policy).
+                // Incomplete on a walk sibling is skipped (see the module's Incomplete policy).
                 match open_default_root_candidate(&found) {
-                    Ok(Some(root)) => {
-                        return Ok(ResolveVaultRoot::Found {
-                            root,
-                            source: VaultRootSource::DefaultRoot,
-                        });
-                    }
+                    Ok(Some(root)) => return Ok(Some(root)),
                     Ok(None) | Err(UprivError::VaultRootIncomplete { .. }) => {}
                     Err(error) => return Err(error),
                 }
             }
         }
     }
+    Ok(None)
+}
 
-    Ok(needs_setup())
+fn env_vault_root_explicit() -> Option<PathBuf> {
+    std::env::var_os("UPRIV_VAULT_ROOT").and_then(|value| {
+        let path = PathBuf::from(value);
+        if path.as_os_str().is_empty() || !path.is_absolute() {
+            None
+        } else {
+            Some(path)
+        }
+    })
+}
+
+/// Default's folder on a computer: beside the app, or the per-user app folder.
+pub fn setup_default_root_anchor() -> Result<PathBuf> {
+    crate::paths::default_vault_root_anchor()
 }
 
 #[cfg(test)]
@@ -650,17 +478,13 @@ mod starts_order_tests {
         std::env::set_var("APPIMAGE", &appimage);
         let prev_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(cwd_root.path()).unwrap();
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: None,
-        });
+        let resolved = resolve_vault_root(ResolveVaultRootOptions::default());
         let _ = std::env::set_current_dir(prev_cwd);
         std::env::remove_var("APPIMAGE");
 
         match resolved.unwrap() {
             ResolveVaultRoot::Found { root, source } => {
-                assert_eq!(source, VaultRootSource::DefaultRoot);
+                assert_eq!(source, VaultRootSource::Default);
                 assert_eq!(
                     root.root(),
                     appimage_dir.path().canonicalize().unwrap(),
@@ -672,184 +496,149 @@ mod starts_order_tests {
     }
 }
 
-/// The active alias is the logical storage-access root, and that grant is not mounted.
-///
-/// Settings can still read the pointer. Callers that already had a data folder
-/// must report the volume as unreachable, not as a missing `.upriv`.
-pub fn active_alias_is_unmounted_saf() -> bool {
-    let Ok(home) = app_home_dir() else {
-        return false;
-    };
-    match read_vault_root_alias(&home) {
-        Ok(Some(alias)) => alias.active && crate::host_fs::is_unmounted_saf_root(&alias.path),
-        _ => false,
-    }
-}
-
-fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
-    let Some(alias) = read_vault_root_alias(app_home)? else {
-        return Ok(None);
-    };
-    // Custom_root mode requires an *active* alias. Inactive = remembered path only
-    // (default_root in use) → treat as no alias for resolve (NeedsSetup).
-    if !alias.active {
-        return Ok(None);
-    }
-    if crate::host_fs::is_unmounted_saf_root(&alias.path) {
-        return Ok(None);
-    }
-    match VaultRoot::discover(&alias.path) {
-        Ok(root) => Ok(Some(root)),
-        Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
-        Err(UprivError::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(UprivError::VaultRootAliasInvalid(alias.path))
-        }
-        Err(error @ UprivError::Io(_)) => Err(error),
-        // `discover` does not return session/store errors. Anything else here is
-        // an unusable alias path — do not remap vault-open codes if this match
-        // is later reused around `open_vault`.
-        Err(_) => Err(UprivError::VaultRootAliasInvalid(alias.path)),
-    }
-}
-
-fn env_vault_root_explicit() -> Option<PathBuf> {
-    std::env::var_os("UPRIV_VAULT_ROOT").and_then(|value| {
-        let path = PathBuf::from(value);
-        if path.as_os_str().is_empty() || !path.is_absolute() {
-            None
-        } else {
-            Some(path)
-        }
-    })
-}
-
-/// Anchor for `vault_root_setup_default_root` / default_root status (distribution-aware).
-pub fn setup_default_root_anchor() -> Result<PathBuf> {
-    crate::paths::default_vault_root_anchor()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::folder_list::data_folder::{
+        save_data_folder_list, DataFolderChoice, DataFolderList,
+    };
+    use crate::folder_list::DeviceGroup;
+    use crate::folder_list::Selection;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::paths::initialize_vault_root;
     use crate::paths::ENV_LOCK;
 
+    fn bin_options(bin: &Path) -> ResolveVaultRootOptions {
+        ResolveVaultRootOptions {
+            explicit: None,
+            binary_dir: Some(bin.to_path_buf()),
+        }
+    }
+
+    /// The list in `home` with this device's rows, `selected` chosen.
+    fn list_with(home: &Path, rows: &[&Path], selected: Selection<DataFolderChoice>) {
+        let device = this_device();
+        let mut list = DataFolderList::default();
+        list.devices.0.insert(
+            device.id.clone().expect("tests need this device's ID"),
+            DeviceGroup {
+                rows: rows
+                    .iter()
+                    .zip(1..)
+                    .map(|(path, number)| Row {
+                        number,
+                        name: String::new(),
+                        path: path.display().to_string(),
+                    })
+                    .collect(),
+                selected,
+                next_number: rows.len() as u32 + 1,
+                ..DeviceGroup::for_device(device)
+            },
+        );
+        save_data_folder_list(home, &list).unwrap();
+    }
+
     #[test]
-    fn default_root_finds_root_at_anchor() {
+    fn default_finds_the_data_folder_at_the_anchor() {
         let dir = tempfile::tempdir().unwrap();
         let root = initialize_vault_root(dir.path()).unwrap();
         let nested = dir.path().join("bin");
         crate::host_fs::create_dir_all(&nested).unwrap();
 
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: Some(nested),
-        })
-        .unwrap();
-
-        match resolved {
+        match resolve_vault_root(bin_options(&nested)).unwrap() {
             ResolveVaultRoot::Found {
                 root: found,
                 source,
             } => {
-                assert_eq!(source, VaultRootSource::DefaultRoot);
+                assert_eq!(source, VaultRootSource::Default);
                 assert_eq!(found.root(), root.root());
             }
-            ResolveVaultRoot::NeedsSetup { .. } => panic!("expected default_root find"),
+            other => panic!("expected the anchor's data folder, got {other:?}"),
         }
     }
 
     #[test]
-    fn default_root_prefers_anchor_over_active_alias() {
-        let default_root_dir = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        let default_root = initialize_vault_root(default_root_dir.path()).unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        let bin = default_root_dir.path().join("bin");
-        crate::host_fs::create_dir_all(&bin).unwrap();
-        write_vault_root_alias(&bin, elsewhere.path()).unwrap();
+    fn default_with_no_data_folder_is_the_first_run() {
+        let bin = tempfile::tempdir().unwrap();
+        match resolve_vault_root(bin_options(bin.path())).unwrap() {
+            ResolveVaultRoot::NeedsSetup { .. } => {}
+            other => panic!("expected the first run, got {other:?}"),
+        }
+    }
 
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: Some(bin),
-        })
-        .unwrap();
-        match resolved {
+    #[test]
+    fn default_with_no_data_folder_and_rows_to_try_failed() {
+        let bin = tempfile::tempdir().unwrap();
+        let usb = tempfile::tempdir().unwrap();
+        initialize_vault_root(usb.path()).unwrap();
+        list_with(
+            bin.path(),
+            &[usb.path()],
+            Selection::Fixed(DataFolderChoice::Default),
+        );
+        match resolve_vault_root(bin_options(bin.path())).unwrap() {
+            ResolveVaultRoot::SelectedFailed { place, reason } => {
+                assert_eq!(place, DataFolderPlace::Default);
+                assert_eq!(reason, FolderState::Missing);
+            }
+            other => panic!("expected Default to fail, got {other:?}"),
+        }
+        assert!(!bin.path().join(".upriv").exists());
+    }
+
+    #[test]
+    fn a_selected_row_opens_its_data_folder() {
+        let bin = tempfile::tempdir().unwrap();
+        let usb = tempfile::tempdir().unwrap();
+        initialize_vault_root(usb.path()).unwrap();
+        initialize_vault_root(bin.path()).unwrap();
+        list_with(bin.path(), &[usb.path()], Selection::Row(1));
+        match resolve_vault_root(bin_options(bin.path())).unwrap() {
             ResolveVaultRoot::Found { root, source } => {
-                assert_eq!(source, VaultRootSource::DefaultRoot);
-                assert_eq!(root.root(), default_root.root());
+                assert_eq!(source, VaultRootSource::Row);
+                assert_eq!(root.root(), usb.path().canonicalize().unwrap());
             }
-            ResolveVaultRoot::NeedsSetup { .. } => {
-                panic!("expected default_root over active alias")
-            }
+            other => panic!("expected the row's data folder, got {other:?}"),
         }
     }
 
     #[test]
-    fn default_root_uses_anchor_when_alias_inactive() {
-        let default_root_dir = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        let default_root = initialize_vault_root(default_root_dir.path()).unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        write_vault_root_alias(default_root_dir.path(), elsewhere.path()).unwrap();
-        deactivate_vault_root_alias(default_root_dir.path()).unwrap();
-
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: Some(default_root_dir.path().to_path_buf()),
-        })
-        .unwrap();
-        match resolved {
-            ResolveVaultRoot::Found { root, source } => {
-                assert_eq!(source, VaultRootSource::DefaultRoot);
-                assert_eq!(root.root(), default_root.root());
+    fn a_selected_row_that_is_gone_failed_and_nothing_is_made() {
+        let bin = tempfile::tempdir().unwrap();
+        let gone = bin.path().join("unplugged");
+        list_with(bin.path(), &[&gone], Selection::Row(1));
+        match resolve_vault_root(bin_options(bin.path())).unwrap() {
+            ResolveVaultRoot::SelectedFailed { place, reason } => {
+                assert!(matches!(place, DataFolderPlace::Row(row) if row.number == 1));
+                assert_eq!(reason, FolderState::Missing);
             }
-            ResolveVaultRoot::NeedsSetup { .. } => {
-                panic!("expected default_root with inactive alias")
-            }
+            other => panic!("expected the selected row to fail, got {other:?}"),
         }
+        assert!(!gone.exists());
     }
 
     #[test]
-    fn default_root_ignores_active_alias_when_anchor_missing() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
-
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: Some(home.path().to_path_buf()),
-        })
-        .unwrap();
-        assert!(matches!(resolved, ResolveVaultRoot::NeedsSetup { .. }));
+    fn an_incomplete_selected_row_goes_to_repair() {
+        let bin = tempfile::tempdir().unwrap();
+        let broken = tempfile::tempdir().unwrap();
+        crate::host_fs::create_dir_all(broken.path().join(".upriv")).unwrap();
+        list_with(bin.path(), &[broken.path()], Selection::Row(1));
+        assert!(matches!(
+            resolve_vault_root(bin_options(bin.path())),
+            Err(UprivError::VaultRootIncomplete { .. })
+        ));
     }
 
     #[test]
-    fn default_root_ignores_inactive_alias() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
-        deactivate_vault_root_alias(home.path()).unwrap();
-
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: Some(home.path().to_path_buf()),
-        })
-        .unwrap();
-        assert!(matches!(resolved, ResolveVaultRoot::NeedsSetup { .. }));
-
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(!alias.active);
-        assert_eq!(alias.path, elsewhere.path().canonicalize().unwrap());
+    fn an_unreadable_list_stops_resolve() {
+        let bin = tempfile::tempdir().unwrap();
+        std::fs::write(bin.path().join(".upriv-data-folder"), "not a list").unwrap();
+        assert!(matches!(
+            resolve_vault_root(bin_options(bin.path())),
+            Err(UprivError::DataFolderListInvalid { .. })
+        ));
     }
 
     #[test]
@@ -858,40 +647,10 @@ mod tests {
         let missing = bin.path().join("no-root-here");
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(missing.clone()),
-            mode: VaultRootMode::DefaultRoot,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultRootNotFound(_)));
-    }
-
-    #[test]
-    fn custom_root_incomplete_alias_errors_incomplete() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        crate::host_fs::create_dir_all(elsewhere.path().join(".upriv")).unwrap();
-        crate::host_fs::write(
-            elsewhere.path().join(".upriv/settings.toml"),
-            "not valid toml {{{",
-        )
-        .unwrap();
-        // Bypass write_vault_root_alias (requires a valid marker).
-        crate::host_fs::write(
-            vault_root_alias_path(home.path()),
-            format!(
-                "status=active\ndata_folder={}\n",
-                elsewhere.path().display()
-            ),
-        )
-        .unwrap();
-
-        let err = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::CustomRoot,
-            binary_dir: Some(home.path().to_path_buf()),
-        })
-        .unwrap_err();
-        assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
 
     #[test]
@@ -903,7 +662,6 @@ mod tests {
 
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(broken.path().to_path_buf()),
-            mode: VaultRootMode::DefaultRoot,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap_err();
@@ -911,222 +669,16 @@ mod tests {
     }
 
     #[test]
-    fn custom_root_invalid_alias_errors() {
-        let home = tempfile::tempdir().unwrap();
-        let missing = home.path().join("gone");
-        crate::host_fs::write(
-            vault_root_alias_path(home.path()),
-            format!("status=active\ndata_folder={}\n", missing.display()),
-        )
-        .unwrap();
-        let err = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::CustomRoot,
-            binary_dir: Some(home.path().to_path_buf()),
-        })
-        .unwrap_err();
-        assert!(matches!(err, UprivError::VaultRootAliasInvalid(_)));
-    }
-
-    #[test]
-    fn custom_root_uses_alias_over_default_root() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(home.path()).unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
-
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::CustomRoot,
-            binary_dir: Some(home.path().to_path_buf()),
-        })
-        .unwrap();
-        match resolved {
-            ResolveVaultRoot::Found { root, source } => {
-                assert_eq!(source, VaultRootSource::CustomRoot);
-                assert_eq!(root.root(), elsewhere.path().canonicalize().unwrap());
-            }
-            _ => panic!("expected active alias over local .upriv"),
-        }
-    }
-
-    #[test]
-    fn custom_root_inactive_alias_needs_setup() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
-        deactivate_vault_root_alias(home.path()).unwrap();
-
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::CustomRoot,
-            binary_dir: Some(home.path().to_path_buf()),
-        })
-        .unwrap();
-        assert!(
-            matches!(resolved, ResolveVaultRoot::NeedsSetup { .. }),
-            "inactive alias must not open under custom_root mode"
-        );
-    }
-
-    #[test]
-    fn deactivate_keeps_path_and_reactivates() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
-        deactivate_vault_root_alias(home.path()).unwrap();
-
-        let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
-        assert!(raw.contains("status=inactive"));
-        // A desktop file carries no Android lines.
-        assert!(!raw.contains("android"), "{raw}");
-        assert!(!raw.contains("upriv-saf-root"), "{raw}");
-        assert!(vault_root_alias_path(home.path()).host_is_file());
-
-        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(alias.active);
-        assert!(alias.custom_uri.is_none());
-    }
-
-    #[test]
-    fn custom_folder_line_survives_deactivate() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        let root = VaultRoot::discover(elsewhere.path()).unwrap();
-        let uri = "content://com.android.externalstorage.documents/tree/ABCD-1234%3A";
-        write_vault_root_alias_for_root_with_custom(home.path(), &root, Some(uri)).unwrap();
-        let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
-        assert!(
-            raw.contains(&format!("\nandroid_custom_folder={uri}\n")),
-            "{raw}"
-        );
-        assert!(
-            raw.contains("# android_custom_folder is the last Custom folder"),
-            "{raw}"
-        );
-        deactivate_vault_root_alias(home.path()).unwrap();
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(!alias.active);
-        assert_eq!(alias.custom_uri.as_deref(), Some(uri));
-        write_vault_root_alias_for_root(home.path(), &root).unwrap();
-        let kept = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(kept.active);
-        assert_eq!(kept.custom_uri.as_deref(), Some(uri));
-    }
-
-    #[test]
-    fn missing_status_line_treated_as_inactive() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        let alias_path = vault_root_alias_path(home.path());
-        crate::host_fs::write(
-            &alias_path,
-            format!("data_folder={}\n", elsewhere.path().display()),
-        )
-        .unwrap();
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(!alias.active);
-        assert_eq!(alias.path, elsewhere.path());
-    }
-
-    #[test]
-    fn a_line_without_a_key_makes_the_pointer_invalid() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        let alias_path = vault_root_alias_path(home.path());
-        crate::host_fs::write(
-            &alias_path,
-            format!("status=active\n{}\n", elsewhere.path().display()),
-        )
-        .unwrap();
-        assert!(matches!(
-            read_vault_root_alias(home.path()),
-            Err(UprivError::VaultRootAliasInvalid(_))
-        ));
-    }
-
-    #[test]
-    fn unknown_alias_status_treated_as_inactive() {
-        let home = tempfile::tempdir().unwrap();
-        let elsewhere = tempfile::tempdir().unwrap();
-        initialize_vault_root(elsewhere.path()).unwrap();
-        let alias_path = vault_root_alias_path(home.path());
-        crate::host_fs::write(
-            &alias_path,
-            format!("status=actve\ndata_folder={}\n", elsewhere.path().display()),
-        )
-        .unwrap();
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(!alias.active);
-        assert_eq!(alias.path, elsewhere.path());
-        let raw = crate::host_fs::read_to_string(&alias_path).unwrap();
-        assert!(
-            raw.contains("status=inactive"),
-            "unknown status should be rewritten to inactive: {raw}"
-        );
-        assert!(!raw.contains("status=actve"));
-    }
-
-    #[test]
-    fn custom_root_uses_and_rewrites_alias() {
-        let bin = tempfile::tempdir().unwrap();
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        initialize_vault_root(first.path()).unwrap();
-        initialize_vault_root(second.path()).unwrap();
-
-        write_vault_root_alias(bin.path(), first.path()).unwrap();
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::CustomRoot,
-            binary_dir: Some(bin.path().to_path_buf()),
-        })
-        .unwrap();
-        match resolved {
-            ResolveVaultRoot::Found { root, source } => {
-                assert_eq!(source, VaultRootSource::CustomRoot);
-                assert_eq!(root.root(), first.path().canonicalize().unwrap());
-            }
-            _ => panic!("expected alias"),
-        }
-
-        write_vault_root_alias(bin.path(), second.path()).unwrap();
-        let again = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::CustomRoot,
-            binary_dir: Some(bin.path().to_path_buf()),
-        })
-        .unwrap();
-        match again {
-            ResolveVaultRoot::Found { root, .. } => {
-                assert_eq!(root.root(), second.path().canonicalize().unwrap());
-            }
-            _ => panic!("expected rewritten alias"),
-        }
-
-        crate::host_fs::remove_file(vault_root_alias_path(bin.path())).unwrap();
-        assert!(!vault_root_alias_path(bin.path()).host_is_file());
-    }
-
-    #[test]
-    fn explicit_wins() {
+    fn explicit_wins_over_the_list() {
         let bin = tempfile::tempdir().unwrap();
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
         initialize_vault_root(a.path()).unwrap();
         initialize_vault_root(b.path()).unwrap();
-        write_vault_root_alias(bin.path(), a.path()).unwrap();
+        list_with(bin.path(), &[a.path()], Selection::Row(1));
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(b.path().to_path_buf()),
-            mode: VaultRootMode::CustomRoot,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap();
@@ -1140,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn app_home_prefers_env_for_alias_and_default_root() {
+    fn app_home_prefers_env_for_the_list_and_default() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _env = crate::paths::EnvGuard::capture(&["UPRIV_DEFAULT_ROOT_ANCHOR", "APPIMAGE"]);
         let anchor = tempfile::tempdir().unwrap();
@@ -1149,8 +701,8 @@ mod tests {
         assert_eq!(app_home_dir().unwrap(), anchor.path());
         assert_eq!(setup_default_root_anchor().unwrap(), anchor.path());
         assert_eq!(
-            vault_root_alias_path(app_home_dir().unwrap()),
-            anchor.path().join(VAULT_ROOT_ALIAS_FILE)
+            crate::folder_list::data_folder::list_path(&app_home_dir().unwrap()),
+            anchor.path().join(".upriv-data-folder")
         );
     }
 
@@ -1194,11 +746,8 @@ mod tests {
         .unwrap();
         let home = app_home_dir().unwrap();
         assert_eq!(home, data.path().join("upriv"));
-        // Resolve is pure — directory is created on write via ensure_user_data_app_home.
-        assert!(!home.host_exists() || home.host_is_dir());
-        let ensured = ensure_user_data_app_home().unwrap();
-        assert_eq!(ensured, home);
-        assert!(ensured.host_is_dir());
+        // Resolve is pure: the first write under the home makes it.
+        assert!(!home.host_exists());
 
         crate::host_fs::set_permissions(
             install.path(),
@@ -1254,20 +803,13 @@ mod tests {
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", &appdata);
         std::env::remove_var("APPIMAGE");
 
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: None,
-        })
-        .unwrap();
+        let resolved = resolve_vault_root(ResolveVaultRootOptions::default()).unwrap();
         match resolved {
             ResolveVaultRoot::NeedsSetup {
-                alias_path,
                 default_root_anchor,
                 distribution,
             } => {
                 assert_eq!(distribution, AppDistribution::Installed);
-                assert_eq!(alias_path, appdata.join(".upriv-data-folder"));
                 assert_eq!(default_root_anchor, appdata);
             }
             _ => panic!("expected needs_setup"),
@@ -1311,43 +853,5 @@ mod tests {
 
         std::env::remove_var(ENV_DISTRIBUTION);
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
-    }
-
-    #[test]
-    fn alias_file_has_comments_and_readable_path() {
-        let home = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
-        initialize_vault_root(target.path()).unwrap();
-        write_vault_root_alias(home.path(), target.path()).unwrap();
-        let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
-        assert!(raw.contains("# Upriv data folder pointer"));
-        assert!(raw.contains("\nstatus=active\n"));
-        assert!(raw.contains(&format!(
-            "\ndata_folder={}\n",
-            target.path().canonicalize().unwrap().display()
-        )));
-        let parsed = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(parsed.active);
-        assert_eq!(parsed.path, target.path().canonicalize().unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn writing_the_same_alias_leaves_the_file_in_place() {
-        use std::os::unix::fs::MetadataExt;
-
-        let home = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
-        initialize_vault_root(target.path()).unwrap();
-        write_vault_root_alias(home.path(), target.path()).unwrap();
-        let alias = vault_root_alias_path(home.path());
-        let inode = std::fs::metadata(&alias).unwrap().ino();
-
-        write_vault_root_alias(home.path(), target.path()).unwrap();
-        assert_eq!(std::fs::metadata(&alias).unwrap().ino(), inode);
-
-        deactivate_vault_root_alias(home.path()).unwrap();
-        assert_ne!(std::fs::metadata(&alias).unwrap().ino(), inode);
-        assert!(!read_vault_root_alias(home.path()).unwrap().unwrap().active);
     }
 }

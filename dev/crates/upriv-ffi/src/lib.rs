@@ -138,23 +138,27 @@ pub fn unmount_saf_fs() {
     upriv_core::host_fs::unmount();
 }
 
-/// Mount `/upriv-saf-export` onto the folder picked for Export data folder.
-///
-/// `tree_uri` is that folder's `content://` tree. The export refuses it when
-/// it lies inside a `.upriv`. The data folder mount is left as it is.
+/// Mount another storage-access tree the person picked (a row of a folder
+/// list, an export's folder) at its own root, and return that root. Only
+/// registers the bridge: no I/O. The data folder mount is left as it is.
 #[uniffi::export]
-pub fn mount_saf_export_fs(tree_uri: String, callback: Box<dyn SafFsCallback>) {
+pub fn mount_saf_tree_fs(tree_uri: String, callback: Box<dyn SafFsCallback>) -> String {
     install_panic_hook();
-    upriv_core::host_fs::mount_export_bridge(
-        std::sync::Arc::new(SafFsAdapter(callback)),
-        &tree_uri,
-    );
+    upriv_core::host_fs::mount_tree(&tree_uri, std::sync::Arc::new(SafFsAdapter(callback)))
+        .to_string_lossy()
+        .into_owned()
 }
 
-/// Drop the export folder mount.
+/// Drop the tree `tree_uri`. Later I/O under its root fails.
 #[uniffi::export]
-pub fn unmount_saf_export_fs() {
-    upriv_core::host_fs::unmount_export();
+pub fn unmount_saf_tree_fs(tree_uri: String) {
+    upriv_core::host_fs::unmount_tree(&tree_uri);
+}
+
+/// The trees mounted now, so the platform module can drop those nothing names.
+#[uniffi::export]
+pub fn mounted_saf_trees() -> Vec<String> {
+    upriv_core::host_fs::mounted_trees()
 }
 
 /// True when the mounted folder can store a vault file (write + exclusive lock).

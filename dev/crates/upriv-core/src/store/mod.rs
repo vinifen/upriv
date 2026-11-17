@@ -57,7 +57,7 @@ pub use tree::{
     is_reserved_logical, is_skipped_on_import, mkdir_logical, move_logical_path, parent_logical,
     relocate_logical_path, relocate_replacing, rename_logical_path, to_ui_path, unique_file_name,
     unique_folder_name, FileTreeNode, EXPORT_CONFIG_DIR, INTERNAL_WORKSPACE_FILE, LOGICAL_NAME_MAX,
-    PLAIN_POLICY_FILE, PLAIN_RESERVED_PREFIX,
+    PLAIN_RESERVED_PREFIX,
 };
 
 pub(crate) use tree::require_parent_dir;
@@ -343,10 +343,10 @@ fn hash_header_and_index(header: &[u8], index: &[u8]) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-/// `.upriv-workspace.json` and the root plaintext policy: file-manager layout
-/// and the confirmed plaintext place are not vault changes.
+/// `.upriv-workspace.json` at the root: the file-manager layout is not a
+/// vault change.
 fn counts_as_vault_content(node: &VaultNode) -> bool {
-    node.path != INTERNAL_WORKSPACE_FILE && node.path != PLAIN_POLICY_FILE
+    node.path != INTERNAL_WORKSPACE_FILE
 }
 
 /// Stable id of the vault contents used to decide whether a close needs a new
@@ -553,39 +553,6 @@ mod tests {
             "sha256:bbbb",
         ));
         assert_ne!(index_logical_hash(&edited), same);
-    }
-
-    #[test]
-    fn index_logical_hash_ignores_the_root_plain_policy_only() {
-        let mut index = VaultIndex::empty();
-        index.push(digested(
-            VaultNode::file("note.txt", "file".into(), 4, vec![version(1)], vec![0]),
-            "sha256:aaaa",
-        ));
-        let before = index_logical_hash(&index);
-        let mut with_policy = index.clone();
-        with_policy.push(VaultNode::file(
-            PLAIN_POLICY_FILE,
-            "policy".into(),
-            9,
-            vec![version(5)],
-            vec![0],
-        ));
-        assert_eq!(index_logical_hash(&with_policy), before);
-
-        let mut nested = index;
-        nested.push(VaultNode::dir("docs"));
-        nested.push(digested(
-            VaultNode::file(
-                &format!("docs/{PLAIN_POLICY_FILE}"),
-                "nested".into(),
-                9,
-                vec![version(5)],
-                vec![0],
-            ),
-            "sha256:pppp",
-        ));
-        assert_ne!(index_logical_hash(&nested), before);
     }
 
     #[test]

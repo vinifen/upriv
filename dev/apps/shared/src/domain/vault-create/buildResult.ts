@@ -32,7 +32,7 @@ export function buildCreateVaultResult(
       hidden: draft.hidden,
     },
     storage: { ...draft.storage },
-    mount: { ...draft.mount },
+    unlocked_folder: { ...draft.unlocked_folder },
     backup: { ...draft.backup },
     security: {
       wipe_passes: draft.security.wipe_passes,

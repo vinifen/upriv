@@ -53,10 +53,6 @@ export function isRpcError(error: unknown): error is RpcError {
  */
 export const RPC_TIMEOUT_CODE = "rpc_timeout";
 
-export function isRpcTimeout(error: unknown): boolean {
-  return isRpcError(error) && error.code === RPC_TIMEOUT_CODE;
-}
-
 export function isRpcErrorBody(value: unknown): value is RpcErrorBody {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;

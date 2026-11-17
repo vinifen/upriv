@@ -149,7 +149,7 @@ enum ArchiveMember {
     File(String),
     /// `config.toml` of `.upriv-config/`, beside the vault folder.
     Settings,
-    /// `workspace.json` of `.upriv-config/`.
+    /// `.upriv-workspace.json` of `.upriv-config/`.
     Workspace,
     /// A file that is not vault data: the rest of `.upriv-config/`, or a
     /// name a vault never holds.
@@ -545,7 +545,10 @@ mod import_mem_tests {
             ArchiveMember::Settings
         ));
         assert!(matches!(
-            carried("Notes-sevenzip/.upriv-config/workspace.json", &mut walk),
+            carried(
+                "Notes-sevenzip/.upriv-config/.upriv-workspace.json",
+                &mut walk
+            ),
             ArchiveMember::Workspace
         ));
         assert!(matches!(

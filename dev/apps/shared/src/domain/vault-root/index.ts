@@ -1,18 +1,16 @@
 export type {
   AppDistribution,
+  DataFolderApplied,
+  DataFolderListView,
+  DataFolderSearchResult,
   IncompleteReplacePolicy,
   VaultRootBootstrapPrefs,
-  VaultRootDirStatus,
-  DefaultRootStatusResult,
-  VaultRootAliasInfo,
-  VaultRootInspectResult,
-  VaultRootPresentationState,
-  VaultRootResolveResult,
-  VaultRootResolveSource,
   VaultRootRelocateNotice,
   VaultRootPrivateRoot,
+  VaultRootResolveResult,
+  VaultRootResolveSource,
 } from "./types";
-export { VAULT_ROOT_ALIAS_FILE } from "./types";
+export { DATA_FOLDER_LIST_FILE } from "./types";
 export {
   isSafContentUri,
   SAF_VAULT_ROOT,
@@ -26,33 +24,27 @@ export {
   VAULT_ROOT_ERROR_CODES,
   isVaultRootErrorCode,
   isVaultRootGoneError,
-  isVaultRootUnreachableError,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
 } from "./errors";
 export type { VaultRootErrorCode, VaultRootIntegrityCode } from "./errors";
-export { VAULT_ROOT_ERROR_I18N_KEYS, vaultRootErrorI18nKey } from "./messages";
-export type { VaultRootErrorI18nKey } from "./messages";
-export { sameVaultRootPath, vaultRootPathKey } from "./pathKey";
+export { dataFolderChangeMessage } from "./change";
 export {
-  parseDefaultRootStatus,
-  parseVaultRootInspect,
-  parseVaultRootResolve,
+  VAULT_ROOT_ERROR_I18N_KEYS,
+  isVaultRootMessageCode,
+  vaultRootErrorI18nKey,
+} from "./messages";
+export type { VaultRootErrorI18nKey } from "./messages";
+export {
+  parseDataFolderApplied,
+  parseDataFolderList,
+  parseDataFolderSearch,
   parseVaultRootPrivateRoot,
+  parseVaultRootResolve,
 } from "./parse";
 export {
-  VAULT_ROOT_GATE_IDLE,
-  VAULT_ROOT_PATH_CHECK_DELAY_MS,
+  DATA_FOLDER_GATE_IDLE,
   confirmNotesForReplacePolicy,
-  isVaultRootDraftDirty,
-  diskFromDirStatus,
-  vaultRootDiskProblemKey,
-  vaultRootDraftKey,
-  vaultRootGateFromState,
-  visibleVaultRootDisk,
-} from "./settingsIntent";
-export type {
-  VaultRootConfirmAction,
-  VaultRootDiskStatus,
-  VaultRootSettingsGate,
-} from "./settingsIntent";
+  dataFolderGate,
+} from "./dataFolderIntent";
+export type { DataFolderGate, VaultRootConfirmAction } from "./dataFolderIntent";

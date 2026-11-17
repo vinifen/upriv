@@ -20,6 +20,10 @@ export function useServices(): AppServices {
   return ctx;
 }
 
+export function useDeviceService(): AppServices["device"] {
+  return useServices().device;
+}
+
 export function useVaultService(): AppServices["vault"] {
   return useServices().vault;
 }
@@ -62,6 +66,10 @@ export function useCreateVaultService(): AppServices["createVault"] {
 
 export function useVaultSecurityService(): AppServices["vaultSecurity"] {
   return useServices().vaultSecurity;
+}
+
+export function useFolderListService(): AppServices["folderLists"] {
+  return useServices().folderLists;
 }
 
 export function useVaultRootService(): AppServices["vaultRoot"] {

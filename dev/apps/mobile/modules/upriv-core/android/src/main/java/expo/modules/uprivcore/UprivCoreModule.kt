@@ -3,6 +3,7 @@ package expo.modules.uprivcore
 import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.Settings
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
@@ -20,11 +21,12 @@ import uniffi.upriv_ffi.appVersion
 import uniffi.upriv_ffi.configureRuntime
 import uniffi.upriv_ffi.importContentFd
 import uniffi.upriv_ffi.invoke
-import uniffi.upriv_ffi.mountSafExportFs
 import uniffi.upriv_ffi.mountSafFs
+import uniffi.upriv_ffi.mountSafTreeFs
+import uniffi.upriv_ffi.mountedSafTrees
 import uniffi.upriv_ffi.probeSafFs
-import uniffi.upriv_ffi.unmountSafExportFs
 import uniffi.upriv_ffi.unmountSafFs
+import uniffi.upriv_ffi.unmountSafTreeFs
 
 /**
  * Expo module wrapping UniFFI `upriv_ffi` (`libupriv_ffi.so`).
@@ -110,34 +112,12 @@ class UprivCoreModule : Module() {
     }
 
     /**
-     * Inspect `.upriv/settings.toml` at the SAF tree.
-     * Returns one of `"absent"|"valid"|"incomplete"|"unauthorized"|"unreadable"`
-     * (mirrors Rust `VaultRootDirStatus` plus `unauthorized`).
+     * The held grant Default's data folder lives in (Documents, or
+     * Documents/Upriv). Empty until the person confirms Documents once.
      */
-    Function("safInspectRoot") { treeUri: String ->
+    Function("safDocumentsGrant") {
       ensureRuntimeConfigured()
-      runSafOrThrow { SafVaultRoot.inspect(requireContext(), treeUri).wire() }
-    }
-
-    /** Read `.upriv/settings.toml` body as UTF-8. Returns null when absent. */
-    Function("safReadSettings") { treeUri: String ->
-      ensureRuntimeConfigured()
-      runSafOrThrow { SafVaultRoot.readSettings(requireContext(), treeUri) }
-    }
-
-    /**
-     * Currently active SAF tree URI (empty string when SAF mode is inactive).
-     * Stored in per-app SharedPreferences, outside the vault-root itself.
-     */
-    Function("safGetActiveUri") {
-      ensureRuntimeConfigured()
-      SafPrefs.getActiveUri(requireContext()) ?: ""
-    }
-
-    /** Save (or clear when blank) the active SAF tree URI. */
-    Function("safSetActiveUri") { uri: String ->
-      ensureRuntimeConfigured()
-      SafPrefs.setActiveUri(requireContext(), uri)
+      SafVaultRoot.documentsGrant(requireContext())
     }
 
     /**
@@ -181,38 +161,53 @@ class UprivCoreModule : Module() {
     }
 
     /**
-     * Point Rust `/upriv-saf-export` at the folder picked for Export data
-     * folder. The zip is written straight into that tree, never staged in app
-     * storage. The data folder mount stays as it is.
+     * Let Rust reach a tree the person picked (a row of a folder list, an
+     * export's folder) at its own root, and return that root. Binds only: no
+     * I/O, so a drive that is away is a folder failure on its first use.
      */
-    Function("mountSafExport") { uri: String ->
+    Function("mountTree") { uri: String ->
       ensureRuntimeConfigured()
       val trimmed = uri.trim()
       if (!trimmed.startsWith("content://")) {
-        throw SafCodedException("saf_invalid_tree", "export folder must be a content tree")
+        throw SafCodedException("saf_invalid_tree", "a picked folder must be a content tree")
       }
-      val ctx = requireContext()
-      runSafOrThrow {
-        if (!SafExportFs.isReachable(ctx, trimmed)) {
-          if (!SafVaultRoot.hasGrant(ctx, trimmed)) {
-            throw SafException("saf_unauthorized", "pick the export folder again")
-          }
-          throw SafException("saf_unreachable", "export folder is not reachable")
-        }
-        SafExportFs.bind(ctx, trimmed)
-        mountSafExportFs(
-          trimmed,
-          object : SafFsCallback {
-            override fun dispatch(op: String, payload: String): String = SafExportFs.dispatch(op, payload)
-          },
-        )
-      }
+      val tree = SafTrees.bind(requireContext(), trimmed)
+      val root = mountSafTreeFs(
+        trimmed,
+        object : SafFsCallback {
+          override fun dispatch(op: String, payload: String): String = tree.dispatch(op, payload)
+        },
+      )
+      SafTrees.rememberRoot(trimmed, root)
+      root
     }
 
-    /** Drop the export mount. The picked folder's grant stays until it is released. */
-    Function("unmountSafExport") {
-      unmountSafExportFs()
-      SafExportFs.clear()
+    /** Drop a tree's mount. Its grant stays until it is released. */
+    Function("unmountTree") { uri: String ->
+      unmountSafTreeFs(uri.trim())
+      SafTrees.unbind(uri)
+    }
+
+    /** The trees Rust reaches now. */
+    Function("mountedTrees") {
+      mountedSafTrees()
+    }
+
+    /**
+     * Before writing into a picked folder: throw `saf_unauthorized` when its
+     * grant is gone, `saf_unreachable` when its drive does not answer.
+     */
+    Function("checkTree") { uri: String ->
+      val trimmed = uri.trim()
+      val ctx = requireContext()
+      runSafOrThrow {
+        if (!SafTrees.isReachable(ctx, trimmed)) {
+          if (!SafVaultRoot.hasGrant(ctx, trimmed)) {
+            throw SafException("saf_unauthorized", "pick the folder again")
+          }
+          throw SafException("saf_unreachable", "the folder is not reachable")
+        }
+      }
     }
 
     /**
@@ -260,9 +255,22 @@ class UprivCoreModule : Module() {
       // folder pointer only. The vault is the shared Documents/Upriv grant.
       // Single path: Rust owns the env pin (parity with Electron setting the same vars).
       configureRuntime(home.absolutePath, "installed")
+      // Core names this phone in every folder list and record by an ID it
+      // derives from ANDROID_ID. Set before any call can need it.
+      invoke("device_identity_set", deviceIdentityJson(ctx))
       runtimeConfigured = true
     }
   }
+}
+
+/**
+ * `ANDROID_ID` for core's `device_identity_set`. Core keeps only the ID it
+ * derives from it; no name of the phone is read.
+ */
+private fun deviceIdentityJson(ctx: Context): String {
+  val machineId =
+    Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
+  return org.json.JSONObject().put("machineId", machineId).toString()
 }
 
 /**
@@ -280,8 +288,8 @@ private val PROBE_METHODS = setOf("vault_close_phase", "vault_close_hurry")
  * A one-core phone uses one thread.
  *
  * Method names match `is_argon2_bound_method`, `is_lifecycle_io_method`,
- * `is_rewrap_io_method`, `is_import_io_method`, `is_pack_io_method`, and
- * `is_data_folder_io_method`.
+ * `is_rewrap_io_method`, `is_import_io_method`, `is_pack_io_method`,
+ * `is_data_folder_io_method`, and `is_folder_method`.
  */
 private object CoreLanes {
   private fun single(name: String): CoroutineDispatcher =
@@ -295,7 +303,19 @@ private object CoreLanes {
   private val rewrap = single("upriv-rewrap")
   val pack = single("upriv-pack")
   private val dataFolder = single("upriv-data-folder")
-  private val backupFolder = single("upriv-backup-folder")
+  private val folderNames = AtomicInteger()
+
+  /**
+   * Same as the desktop core's folder lane. Declared before the pool: an
+   * object's members start in their order, so a later one is not set yet.
+   */
+  private const val FOLDER_LANE_SLOTS = 4
+
+  /** The calls that reach a folder of a list, side by side: same as `is_folder_method`. */
+  private val folder: CoroutineDispatcher =
+    Executors.newFixedThreadPool(FOLDER_LANE_SLOTS) { runnable ->
+      Thread(runnable, "upriv-folder-${folderNames.getAndIncrement()}").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
   private val importNames = AtomicInteger()
   val importFiles: CoroutineDispatcher =
     Executors.newFixedThreadPool(phoneImportThreads()) { runnable ->
@@ -310,8 +330,7 @@ private object CoreLanes {
 
   fun dispatcher(method: String): CoroutineDispatcher = when (method) {
     "vault_open", "vault_create", "vault_ingest_open" -> argon2
-    "vault_close", "vault_delete", "vault_discard_import",
-    "vault_plain_confirm", "vault_plain_sync",
+    "vault_close", "vault_delete", "vault_discard_import", "vault_plain_sync",
     "vault_plain_deletions", "vault_plain_send", "vault_plain_unsend" -> lifecycle
     "vault_change_password", "vault_change_kdf", "vault_rebuild" -> rewrap
     "vault_fs_import_os_file", "vault_import_probe" -> importFiles
@@ -325,18 +344,18 @@ private object CoreLanes {
     "backup_save",
     "backup_export" -> pack
     "data_folder_export" -> dataFolder
-    "backup_list", "backup_delete", "backup_promote",
-    "backup_folder_check", "backup_folder_reuse" -> backupFolder
+    "folder_status", "data_folder_search", "vault_unlocked_folder_attach", "backup_list",
+    "backup_delete", "backup_promote", "backup_rename", "backup_folder_forget" -> folder
     else -> light
   }
 
   /**
-   * [dispatcher], except a setup that copies the private data folder into the
-   * granted one: that copy is a job, so it runs on the data folder lane and its
-   * stop still reaches the light lane. Same rule as `wire.rs`.
+   * [dispatcher], except an apply that copies the private data folder into the
+   * folder it selects: that copy is a job, so it runs on the data folder lane
+   * and its stop still reaches the light lane. Same rule as `wire.rs`.
    */
   fun laneFor(method: String, paramsJson: String): CoroutineDispatcher =
-    if (method == SETUP_PATH && adoptsPrivateRoot(paramsJson)) dataFolder else dispatcher(method)
+    if (method == DATA_FOLDER_APPLY && adoptsPrivateRoot(paramsJson)) dataFolder else dispatcher(method)
 
   private fun adoptsPrivateRoot(paramsJson: String): Boolean =
     try {
@@ -345,7 +364,7 @@ private object CoreLanes {
       false
     }
 
-  private const val SETUP_PATH = "vault_root_setup_path"
+  private const val DATA_FOLDER_APPLY = "data_folder_apply"
 }
 
 private class SafCodedException(code: String, message: String) : CodedException(code, message, null)

@@ -282,7 +282,7 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
         />
       ) : openable ? (
         <Button
-          label={t("modal.file_manager.context.open_system")}
+          label={t("modal.file_manager.context.show_in_unlocked_folder")}
           variant="ghost"
           size="sm"
           onPress={() => void fm.openInSystemFileManager(activeTabPath)}

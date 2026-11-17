@@ -2,6 +2,7 @@ import { RpcError } from "../core-rpc/errors";
 import { normalizeStoredName } from "../format/storedName";
 import { parseKdfUnlockPreset, type KdfUnlockPreset } from "../vault-settings/kdf";
 import { STORAGE_MODES, type StorageMode, type VaultSession } from "../vault/types";
+import { parsePlainRecords } from "../vault-plain/parse";
 import type { VaultListItem } from "./types";
 
 const INVALID_RESPONSE = "invalid_response";
@@ -65,6 +66,7 @@ export function parseVaultListItemWire(raw: unknown): VaultListItem {
     unlockPreset: parseUnlockPreset(r.unlockPreset),
     plainLeftover: r.plainLeftover === true,
     outsideBackups: r.outsideBackups === true,
+    plainRecords: parsePlainRecords(r.plainRecords),
   };
 }
 

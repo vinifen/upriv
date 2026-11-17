@@ -2,38 +2,62 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VaultBackupEntry, VaultListItem } from "@upriv/shared";
+import type {
+  VaultBackupEntry,
+  VaultBackupListing,
+  VaultBackupSection,
+  VaultListItem,
+} from "@upriv/shared";
 import type { BackupExportJob } from "@upriv/shared/react";
 import { useExportFolder } from "@/hooks/useExportFolder";
+import { backupEntry, dataFolderListing } from "@/lib/tests/backupStubs";
 import { pressStop } from "@/lib/tests/pressStop";
 import { VaultBackupsModal } from "../VaultBackupsModal";
 
 const pickFolder = vi.fn<(initial: string | null, title: string) => Promise<string | null>>();
 
-const PIN: VaultBackupEntry = {
-  stamp: "20260102000000",
-  fileName: "20260102000000-notes.zip",
-  createdAt: "2026-01-02T00:00:00.000Z",
-  sizeBytes: 2048,
-  saved: true,
-};
-const PLAIN: VaultBackupEntry = {
-  stamp: "20260101000000",
-  fileName: "20260101000000-notes.zip",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  sizeBytes: 1024,
-};
-const PIN_KEY = "saves/20260102000000-notes.zip";
-const PLAIN_KEY = "20260101000000-notes.zip";
+const PIN = backupEntry("20260102000000", { saved: true, sizeBytes: 2048 });
+const PLAIN = backupEntry("20260101000000", { sizeBytes: 1024 });
+const PIN_KEY = PIN.key;
+const PLAIN_KEY = PLAIN.key;
+const BOTH = dataFolderListing([PIN, PLAIN]);
+
+/** A section of another folder, holding `entries`. */
+function folderSection(
+  kind: VaultBackupSection["kind"],
+  entries: VaultBackupEntry[],
+  patch: Partial<VaultBackupSection> = {},
+): VaultBackupSection {
+  return {
+    folder: "f2",
+    kind,
+    path: "/mnt/drive/upriv-notes-backups",
+    device: { id: "b".repeat(32), system: "linux" },
+    status: "ok",
+    entries,
+    ...patch,
+  };
+}
+
+/** The data folder's section, holding `entries`. */
+function dataSection(entries: VaultBackupEntry[]): VaultBackupSection {
+  return dataFolderListing(entries).sections[0];
+}
+
+/** A backup in the folder `f2` on a drive. */
+const ON_DRIVE = backupEntry("20260103000000", {
+  key: "f2/20260103000000-notes.zip",
+  sizeBytes: 4096,
+  path: "/mnt/drive/upriv-notes-backups/20260103000000-notes.zip",
+});
 
 // The same service objects on every render, as the app's context gives them.
 const services = vi.hoisted(() => ({
   vaultRoot: {} as { pickFolder?: unknown },
   backups: {
-    listBackups: async (): Promise<{ backups: unknown[]; chosen: unknown }> => ({
-      backups: [],
-      chosen: null,
-    }),
+    listBackups: async (): Promise<unknown> => ({ sections: [] }),
+    renameBackup: async (..._args: unknown[]): Promise<unknown> => null,
+    forgetFolder: async (..._args: unknown[]): Promise<void> => undefined,
   },
   toast: {
     toast: null,
@@ -43,7 +67,12 @@ const services = vi.hoisted(() => ({
   },
 }));
 services.vaultRoot.pickFolder = pickFolder;
-services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
+services.backups.listBackups = async () => BOTH;
+
+/** What the window lists from now on. */
+function listing(...sections: VaultBackupSection[]) {
+  services.backups.listBackups = async (): Promise<VaultBackupListing> => ({ sections });
+}
 
 /** Every translation asked for with params, so a test can read what a sentence names. */
 const listParams = vi.hoisted(() => [] as { key: string; params: Record<string, string> }[]);
@@ -108,18 +137,41 @@ function Harness({
 async function show(props: Omit<HarnessProps, "onExport"> = {}) {
   const onExport = vi.fn<(keys: readonly string[], destDir: string) => void>();
   render(createElement(Harness, { onExport, ...props }));
-  await screen.findByText(PLAIN.fileName ?? "");
+  await screen.findByText(PLAIN.fileName);
   return onExport;
 }
 
 function row(entry: VaultBackupEntry): HTMLElement {
-  const item = screen.getByText(entry.fileName ?? "").closest("li");
+  // An open ⋯ menu repeats the name in its heading, outside any row.
+  const item = screen
+    .getAllByText(entry.fileName)
+    .map((node) => node.closest("li"))
+    .find((node) => node !== null);
   if (!item) throw new Error(`no row for ${entry.stamp}`);
   return item;
 }
 
 function rowButton(entry: VaultBackupEntry, name: string): HTMLButtonElement {
   return within(row(entry)).getByRole("button", { name });
+}
+
+/** Opens the ⋯ menu of a backup's row and returns that menu. */
+function rowMenu(entry: VaultBackupEntry): HTMLElement {
+  const trigger = within(row(entry)).getByRole("button", { name: "action.row_options" });
+  fireEvent.click(trigger);
+  const menu = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+  if (!menu) throw new Error(`no menu for ${entry.stamp}`);
+  return menu;
+}
+
+/**
+ * The item labelled `name` of a backup's ⋯ menu, opened. By text: the
+ * popover stays hidden until a real layout positions it.
+ */
+function rowAction(entry: VaultBackupEntry, name: string): HTMLButtonElement {
+  const item = within(rowMenu(entry)).getByText(name).closest("button");
+  if (!(item instanceof HTMLButtonElement)) throw new Error(`no item ${name}`);
+  return item;
 }
 
 function job(keys: readonly string[], overrides: Partial<BackupExportJob> = {}): BackupExportJob {
@@ -163,6 +215,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   pickFolder.mockReset();
+  services.backups.listBackups = async () => BOTH;
 });
 
 describe("VaultBackupsModal export", () => {
@@ -170,7 +223,7 @@ describe("VaultBackupsModal export", () => {
     pickFolder.mockResolvedValue("/media/usb");
     const onExport = await show();
 
-    fireEvent.click(rowButton(PLAIN, "modal.backup.export"));
+    fireEvent.click(rowAction(PLAIN, "modal.backup.export"));
     await waitFor(() => expect(onExport).toHaveBeenCalledWith([PLAIN_KEY], "/media/usb"));
     expect(pickFolder).toHaveBeenCalledWith(null, "modal.backup.export_picker_title");
   });
@@ -179,7 +232,7 @@ describe("VaultBackupsModal export", () => {
     pickFolder.mockResolvedValue(null);
     const onExport = await show();
 
-    fireEvent.click(rowButton(PLAIN, "modal.backup.export"));
+    fireEvent.click(rowAction(PLAIN, "modal.backup.export"));
     const field = await within(row(PLAIN)).findByLabelText("modal.export_folder.label");
     await waitFor(() => expect(pickFolder).toHaveBeenCalledOnce());
     fireEvent.change(field, { target: { value: "/media/typed" } });
@@ -191,10 +244,10 @@ describe("VaultBackupsModal export", () => {
     pickFolder.mockResolvedValueOnce("/media/usb");
     const onExport = await show();
 
-    fireEvent.click(rowButton(PLAIN, "modal.backup.export"));
+    fireEvent.click(rowAction(PLAIN, "modal.backup.export"));
     await waitFor(() => expect(onExport).toHaveBeenCalledOnce());
 
-    fireEvent.click(rowButton(PIN, "modal.backup.export"));
+    fireEvent.click(rowAction(PIN, "modal.backup.export"));
     const field = await within(row(PIN)).findByLabelText("modal.export_folder.label");
     expect((field as HTMLInputElement).value).toBe("/media/usb");
     expect(pickFolder).toHaveBeenCalledOnce();
@@ -231,9 +284,9 @@ describe("VaultBackupsModal export", () => {
 
     expect(within(row(PLAIN)).getByRole("progressbar")).toBeDefined();
     expect(within(row(PIN)).queryByRole("progressbar")).toBeNull();
-    expect(rowButton(PLAIN, "action.delete").disabled).toBe(true);
-    expect(rowButton(PLAIN, "modal.backup.export").disabled).toBe(true);
-    expect(rowButton(PIN, "action.delete").disabled).toBe(false);
+    expect(rowAction(PLAIN, "action.delete").disabled).toBe(true);
+    expect(rowAction(PLAIN, "modal.backup.export").disabled).toBe(true);
+    expect(rowAction(PIN, "action.delete").disabled).toBe(false);
 
     pressStop(rowButton(PLAIN, "modal.backup.export_stop"));
     expect(onStopExport).toHaveBeenCalledOnce();
@@ -252,7 +305,7 @@ describe("VaultBackupsModal export", () => {
     const onStopExport = vi.fn();
     await show({ exportJob: job([PLAIN_KEY]), onStopExport });
 
-    fireEvent.click(rowButton(PIN, "action.delete"));
+    fireEvent.click(rowAction(PIN, "action.delete"));
     pressStop(rowButton(PLAIN, "modal.backup.export_stop"));
     expect(onStopExport).toHaveBeenCalledOnce();
   });
@@ -262,8 +315,9 @@ describe("VaultBackupsModal export", () => {
     await show({ exportJob: job([PLAIN_KEY], { vaultId: "other" }), onExportBusy });
 
     expect(screen.queryByRole("progressbar")).toBeNull();
+    const exportItem = rowAction(PLAIN, "modal.backup.export");
     act(() => {
-      fireEvent.click(rowButton(PLAIN, "modal.backup.export"));
+      fireEvent.click(exportItem);
     });
     expect(onExportBusy).toHaveBeenCalledOnce();
     expect(pickFolder).not.toHaveBeenCalled();
@@ -296,34 +350,23 @@ describe("VaultBackupsModal sections", () => {
   });
 
   it("selects and clears only its own folder, its pins included", async () => {
-    const onDrive: VaultBackupEntry = {
-      ...PLAIN,
-      stamp: "20260103000000",
-      fileName: "20260103000000-notes.zip",
-      location: "chosen",
-      path: "/mnt/drive/upriv-notes-backups/20260103000000-notes.zip",
-    };
-    services.backups.listBackups = async () => ({ backups: [PIN, PLAIN, onDrive], chosen: null });
-    try {
-      await show();
-      const [dataFolder, chosen] = sectionBoxes();
+    listing(dataSection([PIN, PLAIN]), folderSection("in_use", [ON_DRIVE]));
+    await show();
+    const [dataFolder, inUse] = sectionBoxes();
 
-      fireEvent.click(dataFolder);
-      expect(rowBox(PIN).checked).toBe(true);
-      expect(rowBox(PLAIN).checked).toBe(true);
-      expect(rowBox(onDrive).checked).toBe(false);
-      expect(chosen.checked).toBe(false);
+    fireEvent.click(dataFolder);
+    expect(rowBox(PIN).checked).toBe(true);
+    expect(rowBox(PLAIN).checked).toBe(true);
+    expect(rowBox(ON_DRIVE).checked).toBe(false);
+    expect(inUse.checked).toBe(false);
 
-      fireEvent.click(chosen);
-      expect(rowBox(onDrive).checked).toBe(true);
+    fireEvent.click(inUse);
+    expect(rowBox(ON_DRIVE).checked).toBe(true);
 
-      fireEvent.click(dataFolder);
-      expect(rowBox(PIN).checked).toBe(false);
-      expect(rowBox(PLAIN).checked).toBe(false);
-      expect(rowBox(onDrive).checked).toBe(true);
-    } finally {
-      services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
-    }
+    fireEvent.click(dataFolder);
+    expect(rowBox(PIN).checked).toBe(false);
+    expect(rowBox(PLAIN).checked).toBe(false);
+    expect(rowBox(ON_DRIVE).checked).toBe(true);
   });
 
   it("lists a folder's pins before its other backups, under their own heading", async () => {
@@ -336,26 +379,15 @@ describe("VaultBackupsModal sections", () => {
   });
 
   it("shows a folder partly chosen, and takes the rest on its box", async () => {
-    services.backups.listBackups = async () => ({
-      backups: [
-        PIN,
-        PLAIN,
-        { ...PLAIN, stamp: "20260100000000", fileName: "20260100000000-notes.zip" },
-      ],
-      chosen: null,
-    });
-    try {
-      await show();
-      const [box] = sectionBoxes();
-      fireEvent.click(rowBox(PLAIN));
-      expect(box.indeterminate).toBe(true);
+    listing(dataSection([PIN, PLAIN, backupEntry("20260100000000")]));
+    await show();
+    const [box] = sectionBoxes();
+    fireEvent.click(rowBox(PLAIN));
+    expect(box.indeterminate).toBe(true);
 
-      fireEvent.click(box);
-      expect(box.checked).toBe(true);
-      expect(box.indeterminate).toBe(false);
-    } finally {
-      services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
-    }
+    fireEvent.click(box);
+    expect(box.checked).toBe(true);
+    expect(box.indeterminate).toBe(false);
   });
 
   it("collapses from its header, and its box never toggles it", async () => {
@@ -371,13 +403,9 @@ describe("VaultBackupsModal sections", () => {
   });
 
   it("has no select-all for a single backup", async () => {
-    services.backups.listBackups = async () => ({ backups: [PLAIN], chosen: null });
-    try {
-      await show();
-      expect(screen.queryAllByLabelText("modal.backup.select_section")).toEqual([]);
-    } finally {
-      services.backups.listBackups = async () => ({ backups: [PIN, PLAIN], chosen: null });
-    }
+    listing(dataSection([PLAIN]));
+    await show();
+    expect(screen.queryAllByLabelText("modal.backup.select_section")).toEqual([]);
   });
 });
 
@@ -397,56 +425,49 @@ describe("VaultBackupsModal delete", () => {
     );
   });
 
-  it("gives a row no button to open its folder", async () => {
+  it("keeps a row to Save and its ⋯ menu, which opens the backup's folder too", async () => {
     await show();
+    const buttons = within(row(PLAIN)).getAllByRole("button");
     expect(
-      within(row(PLAIN)).queryByRole("button", { name: "modal.file_manager.context.open_system" }),
-    ).toBeNull();
+      buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    ).toEqual(["modal.backup.promote_to_save", "action.row_options"]);
+    expect(rowAction(PLAIN, "action.open_folder").disabled).toBe(false);
   });
 });
 
 describe("VaultBackupsModal places", () => {
-  const ON_DRIVE: VaultBackupEntry = {
-    stamp: "20260103000000",
-    fileName: "20260103000000-notes.zip",
-    createdAt: "2026-01-03T00:00:00.000Z",
-    sizeBytes: 4096,
-    location: "chosen",
-    path: "/mnt/drive/upriv-notes-backups/20260103000000-notes.zip",
-  };
-  const original = services.backups.listBackups;
-
-  afterEach(() => {
-    services.backups.listBackups = original;
-  });
-
-  function listing(backups: VaultBackupEntry[], chosen: unknown = null) {
-    services.backups.listBackups = async () => ({ backups, chosen });
-  }
-
   it("shows a folder and a tier only when they hold backups", async () => {
-    listing([PLAIN]);
+    listing(dataSection([PLAIN]), folderSection("in_use", []));
     await show();
 
     expect(screen.getByText("modal.backup.group.data_folder")).toBeTruthy();
-    expect(screen.queryByText("modal.backup.group.chosen")).toBeNull();
+    expect(screen.queryByText("modal.backup.group.in_use")).toBeNull();
     expect(screen.getByText("modal.backup.section.standard")).toBeTruthy();
     expect(screen.queryByText("modal.backup.section.saves")).toBeNull();
   });
 
-  it("puts each backup in its own place, with that folder in the section", async () => {
-    listing([ON_DRIVE, PLAIN]);
+  it("puts each backup in its own folder, named in the section with its device", async () => {
+    listing(dataSection([PLAIN]), folderSection("in_use", [ON_DRIVE]));
     await show();
 
-    expect(screen.getByText("modal.backup.group.chosen")).toBeTruthy();
+    expect(screen.getByText("modal.backup.group.in_use")).toBeTruthy();
     expect(screen.getByText("modal.backup.group.data_folder")).toBeTruthy();
     const folder = screen.getByText("/mnt/drive/upriv-notes-backups");
     expect(follows(folder, row(ON_DRIVE))).toBe(true);
-    expect(within(row(ON_DRIVE)).queryByText(ON_DRIVE.path ?? "")).toBeNull();
+    expect(within(row(ON_DRIVE)).queryByText(ON_DRIVE.path)).toBeNull();
+    expect(screen.getByText("modal.backup.folder.written_by")).toBeTruthy();
+  });
+
+  it("says Upriv no longer writes to a folder that is not in use", async () => {
+    listing(dataSection([PLAIN]), folderSection("other", [ON_DRIVE]));
+    await show();
+
+    expect(screen.getByText("modal.backup.group.other")).toBeTruthy();
+    expect(screen.getByText("modal.backup.folder.not_in_use")).toBeTruthy();
   });
 
   it("keeps Back up now and says so when there are no backups", async () => {
-    listing([]);
+    listing(dataSection([]));
     render(createElement(Harness, { onExport: () => {} }));
 
     expect(await screen.findByText("modal.backup.empty")).toBeTruthy();
@@ -454,20 +475,58 @@ describe("VaultBackupsModal places", () => {
     expect(screen.queryByText("modal.backup.group.data_folder")).toBeNull();
   });
 
-  it("names a folder that fails on one line, with no section for it", async () => {
-    listing([PLAIN], { path: "/mnt/gone/upriv-notes-backups", status: "missing" });
+  it("shows a folder that cannot be reached with Retry and Forget", async () => {
+    const forgetFolder = vi.fn(async () => undefined);
+    services.backups.forgetFolder = forgetFolder;
+    listing(
+      dataSection([PLAIN]),
+      folderSection("other", [], { path: "/mnt/gone/upriv-notes-backups", status: "missing" }),
+    );
     await show();
 
-    expect(screen.getByText("modal.backup.folder.status.missing")).toBeTruthy();
+    expect(screen.getByText("folder_list.status.missing")).toBeTruthy();
     expect(screen.getByText("/mnt/gone/upriv-notes-backups")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "modal.backup.folder.reuse" })).toBeTruthy();
-    expect(screen.queryByText("modal.backup.group.chosen")).toBeNull();
+    expect(screen.getByRole("button", { name: "action.retry" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "modal.backup.folder.forget" }));
+    await waitFor(() => expect(forgetFolder).toHaveBeenCalledWith("notes", "f2"));
   });
 
   it("says nothing about a folder that works", async () => {
-    listing([ON_DRIVE, PLAIN], { path: "/mnt/drive/upriv-notes-backups", status: "ok" });
+    listing(dataSection([PLAIN]), folderSection("in_use", [ON_DRIVE]));
     await show();
 
     expect(screen.queryByRole("button", { name: "action.retry" })).toBeNull();
+  });
+
+  it("offers no Open folder for a backup whose folder does not answer", async () => {
+    listing(dataSection([PLAIN]), folderSection("other", [ON_DRIVE], { status: "missing" }));
+    await show();
+
+    expect(within(rowMenu(ON_DRIVE)).queryByText("action.open_folder")).toBeNull();
+    expect(within(rowMenu(PLAIN)).queryByText("action.open_folder")).not.toBeNull();
+  });
+});
+
+describe("VaultBackupsModal rename", () => {
+  it("names a backup from its row", async () => {
+    const renameBackup = vi.fn(async () => PLAIN);
+    services.backups.renameBackup = renameBackup;
+    await show();
+
+    fireEvent.click(rowAction(PLAIN, "modal.backup.rename"));
+    const field = within(row(PLAIN)).getByLabelText("modal.backup.rename_label");
+    fireEvent.change(field, { target: { value: "  Trip  " } });
+    fireEvent.click(rowButton(PLAIN, "modal.backup.rename_save"));
+    await waitFor(() => expect(renameBackup).toHaveBeenCalledWith("notes", PLAIN_KEY, "Trip"));
+  });
+
+  it("holds a name longer than a backup may have", async () => {
+    await show();
+
+    fireEvent.click(rowAction(PLAIN, "modal.backup.rename"));
+    fireEvent.change(within(row(PLAIN)).getByLabelText("modal.backup.rename_label"), {
+      target: { value: "x".repeat(81) },
+    });
+    expect(rowButton(PLAIN, "modal.backup.rename_save").disabled).toBe(true);
   });
 });

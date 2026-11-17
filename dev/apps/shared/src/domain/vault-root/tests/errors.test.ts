@@ -4,81 +4,48 @@ import {
   VAULT_ROOT_ERROR_CODES,
   isVaultRootErrorCode,
   isVaultRootGoneError,
-  isVaultRootUnreachableError,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
 } from "../errors";
 
 describe("shouldBumpVaultRootEpoch", () => {
-  it("bumps Gate for vault-root A/B codes", () => {
-    expect(shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.NOT_FOUND, "gone"))).toBe(
-      true,
-    );
-    expect(
-      shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.INCOMPLETE, "broken")),
-    ).toBe(true);
-    expect(
-      shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.ALIAS_INVALID, "alias")),
-    ).toBe(true);
+  it("bumps the Gate for a missing, incomplete, or unreadable data folder or list", () => {
+    for (const code of [
+      VAULT_ROOT_ERROR_CODES.NOT_FOUND,
+      VAULT_ROOT_ERROR_CODES.INCOMPLETE,
+      VAULT_ROOT_ERROR_CODES.LIST_INVALID,
+      VAULT_ROOT_ERROR_CODES.UNREACHABLE,
+      "saf_unauthorized",
+      "saf_invalid_tree",
+    ]) {
+      expect(shouldBumpVaultRootEpoch(new RpcError(code, code)), code).toBe(true);
+    }
   });
 
-  it("does not bump for vault-layer or unknown errors", () => {
-    expect(shouldBumpVaultRootEpoch(new RpcError("vault_not_found", "missing vault"))).toBe(false);
-    expect(shouldBumpVaultRootEpoch(new RpcError("wrong_password", "nope"))).toBe(false);
-    expect(shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "disk"))).toBe(
-      false,
-    );
+  it("does not bump for vault-layer, transport, or busy errors", () => {
+    for (const code of [
+      "vault_not_found",
+      "wrong_password",
+      VAULT_ROOT_ERROR_CODES.IO_ERROR,
+      VAULT_ROOT_ERROR_CODES.BUSY,
+      VAULT_ROOT_ERROR_CODES.UNAVAILABLE,
+    ]) {
+      expect(shouldBumpVaultRootEpoch(new RpcError(code, code)), code).toBe(false);
+    }
     expect(shouldBumpVaultRootEpoch(new Error("boom"))).toBe(false);
-    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.NOT_FOUND)).toBe(true);
-    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.INCOMPLETE)).toBe(true);
-    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.ALIAS_INVALID)).toBe(true);
-    expect(isVaultRootErrorCode("vault_not_found")).toBe(false);
-    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.IO_ERROR)).toBe(false);
-    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.BUSY)).toBe(false);
-    expect(shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.BUSY, "open"))).toBe(false);
-  });
-
-  it("bumps Gate for a lost SAF grant", () => {
-    expect(shouldBumpVaultRootEpoch(new RpcError("saf_unauthorized", "grant gone"))).toBe(true);
-    expect(shouldBumpVaultRootEpoch(new RpcError("saf_invalid_tree", "bad tree"))).toBe(true);
-  });
-
-  it("bumps Gate for an unreachable data folder without calling it integrity", () => {
-    const unplugged = new RpcError(VAULT_ROOT_ERROR_CODES.UNREACHABLE, "unplugged");
-    expect(shouldBumpVaultRootEpoch(unplugged)).toBe(true);
-    expect(isVaultRootUnreachableError(unplugged)).toBe(true);
     expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.UNREACHABLE)).toBe(false);
-    expect(isVaultRootUnreachableError(new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "disk"))).toBe(
-      false,
-    );
   });
 });
 
 describe("isVaultRootGoneError", () => {
-  it("is true when the data folder is missing or the custom alias target is gone", () => {
-    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.NOT_FOUND, "gone"))).toBe(true);
-    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.ALIAS_INVALID, "alias"))).toBe(
-      true,
-    );
-    expect(isVaultRootGoneError(new RpcError("saf_unauthorized", "grant gone"))).toBe(true);
-    expect(isVaultRootGoneError(new RpcError("saf_invalid_tree", "bad tree"))).toBe(true);
+  it("is true when the data folder in use is gone or its grant is lost", () => {
+    expect(isVaultRootGoneError(vaultRootGoneRpcError())).toBe(true);
+    expect(isVaultRootGoneError(new RpcError("saf_unauthorized", "grant"))).toBe(true);
   });
 
-  it("is false for incomplete leftover, transport, and other layers", () => {
-    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.INCOMPLETE, "broken"))).toBe(
-      false,
-    );
-    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "disk"))).toBe(false);
-    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.UNREACHABLE, "drive"))).toBe(
-      false,
-    );
-    expect(isVaultRootGoneError(new RpcError("vault_not_found", "missing vault"))).toBe(false);
-    expect(isVaultRootGoneError(new Error("boom"))).toBe(false);
-  });
-
-  it("vaultRootGoneRpcError is a not_found wire error", () => {
-    expect(vaultRootGoneRpcError()).toMatchObject({
-      code: VAULT_ROOT_ERROR_CODES.NOT_FOUND,
-    });
+  it("is false for an incomplete data folder, an unreachable one, and other errors", () => {
+    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.INCOMPLETE, "x"))).toBe(false);
+    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.UNREACHABLE, "x"))).toBe(false);
+    expect(isVaultRootGoneError(new Error("x"))).toBe(false);
   });
 });

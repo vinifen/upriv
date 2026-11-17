@@ -13,7 +13,7 @@ describe("createLiveVaultService", () => {
   });
 
   it("enables persist when saveSettings is wired", async () => {
-    const saveSettings = vi.fn(async () => undefined);
+    const saveSettings = vi.fn(async () => ({ unchangedVaults: [], keptFolders: [] }));
     const service = createLiveVaultService({
       listVaults: vi.fn(async () => []),
       createVault: vi.fn(),
@@ -23,7 +23,7 @@ describe("createLiveVaultService", () => {
     expect(service.canPersistSettings).toBe(true);
     const config = { vault: { id: "notes" } } as never;
     await service.registerSettings("notes", config);
-    expect(saveSettings).toHaveBeenCalledWith("notes", config);
+    expect(saveSettings).toHaveBeenCalledWith("notes", config, undefined);
   });
 
   it("forwards rename when wired", async () => {
@@ -76,7 +76,7 @@ describe("createLiveVaultService", () => {
   it("keeps the last read so preferences can open without waiting", async () => {
     forgetVaultSettings("notes");
     const config = { vault: { id: "notes", display_name: "Notes" } } as never;
-    const saveSettings = vi.fn(async () => undefined);
+    const saveSettings = vi.fn(async () => ({ unchangedVaults: [], keptFolders: [] }));
     const deleteVault = vi.fn(async () => ({ outside: "none" as const, folder: null }));
     const service = createLiveVaultService({
       listVaults: vi.fn(async () => []),

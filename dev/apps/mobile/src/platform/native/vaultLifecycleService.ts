@@ -5,26 +5,23 @@ import {
   LIVE_CLOSING_PIPELINE_STEP_COUNT,
   LIVE_OPENING_PIPELINE_STEP_COUNT,
   borrowSessionRamPassword,
-  finishPlainOpen,
   isLifecyclePasswordPresent,
   isVaultPipelineError,
-  parsePendingPlainConfirm,
-  resolveVaultMountPoint,
   waitForClose,
   type VaultLifecycleService,
 } from "@upriv/shared";
 import {
+  rpcPlainRecordForget,
   rpcVaultClose,
   rpcVaultCloseHurry,
   rpcVaultClosePhase,
   rpcVaultOpen,
-  rpcVaultPlainConfirm,
 } from "@/lib/rpc";
 
 /** Session RAM only — never persist. */
 const vaultPasswordInRam = new Map<string, string>();
 
-/** Native → `upriv-ffi` `vault_open` / `vault_close`. */
+/** Native → `upriv-ffi` `vault_open` / `vault_close`. A phone mounts no unlocked folder. */
 export const nativeVaultLifecycleService: VaultLifecycleService = {
   hasPasswordInSession(vaultId) {
     return vaultPasswordInRam.has(vaultId);
@@ -44,17 +41,10 @@ export const nativeVaultLifecycleService: VaultLifecycleService = {
   async runOpeningPipeline(vaultId, onStep, job) {
     onStep(0);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
-    await finishPlainOpen({
-      vaultId,
-      password,
-      job,
-      open: rpcVaultOpen,
-      confirm: rpcVaultPlainConfirm,
-      close: (id) => rpcVaultClose(id, "user").then(() => undefined),
-      pendingOf: parsePendingPlainConfirm,
-    });
+    const switches = await rpcVaultOpen(vaultId, password, job);
     // Hooks put the string back after a successful open.
     onStep(1);
+    return switches;
   },
 
   async runClosingPipeline(vaultId, onStep, reason = "user") {
@@ -72,8 +62,8 @@ export const nativeVaultLifecycleService: VaultLifecycleService = {
     return rpcVaultCloseHurry(vaultId);
   },
 
-  resolveWorkspacePath(displayName, parentPath) {
-    return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";
+  forgetPlainRecord(vaultId, token) {
+    return rpcPlainRecordForget(vaultId, token);
   },
 
   validateLifecyclePassword(password) {

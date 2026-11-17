@@ -18,9 +18,9 @@
 
 Upriv is a **portable vault manager**. At rest the vault body is **`store/`** (Argon2id → HKDF → XChaCha20-Poly1305 chunks, AES-SIV names). **Lock = close** (flush the session into `store/`). Portable files are a **separate export action**: recommended ordinary **`.zip` of `store/`** (zip is an envelope, no zip password), **`.7z`** (logical Plan B), or a **plain-text `.zip`** (not encrypted, so a person with the password can always take their data out). Canonical protocol: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
-**v1 (initial goal):** both storage modes on **Linux and Windows desktop** (Electron + `upriv-daemon` + `upriv-core`): default **`encrypted_dir`** (FUSE on Linux, WinFsp on Windows; decrypt in RAM) and exception **`upriv_plain`** (real plaintext `workspace/` on disk while open, UI warning + wipe on close). macOS and mobile follow the same layout (in-app file manager on mobile — no FUSE).
+**v1 (initial goal):** both storage modes on **Linux and Windows desktop** (Electron + `upriv-daemon` + `upriv-core`): default **`encrypted_dir`** (FUSE on Linux, WinFsp on Windows; decrypt in RAM) and exception **`upriv_plain`** (real plaintext unlocked folder on disk while open, UI warning + wipe on close). macOS and mobile follow the same layout (in-app file manager on mobile — no FUSE).
 
-The user opens with a password, edits via a virtual mount / in-app file manager (or plaintext `workspace/` in `upriv_plain`), ciphertext stays in `.upriv/vaults/<vault_id>/store/`, and close writes the session back into `store/`. Export (when the user asks) writes `{display_name}.zip` or `{display_name}.7z` **outside** the vault directory — never a durable twin beside `store/`.
+The user opens with a password, edits via a virtual mount / in-app file manager (or the plaintext unlocked folder in `upriv_plain`), ciphertext stays in `.upriv/vaults/<vault_id>/store/`, and close writes the session back into `store/`. Export (when the user asks) writes `{display_name}.zip` or `{display_name}.7z` **outside** the vault directory — never a durable twin beside `store/`.
 
 Differentiators vs. manual 7-Zip use:
 
@@ -36,7 +36,7 @@ Differentiators vs. manual 7-Zip use:
 |----------|-----------------|
 | LUKS / BitLocker don't open on all devices | Portable `store/` + optional `.7z` export |
 | Cryptomator: proprietary format; paid mobile | Open protocol in `store/`; Android later |
-| Manual 7-Zip: easy to forget to recompress; plaintext folder on HD | Encrypted `store/` + virtual workspace; `.7z` only on export |
+| Manual 7-Zip: easy to forget to recompress; plaintext folder on HD | Encrypted `store/` + virtual unlocked folder; `.7z` only on export |
 | Passwords/sensitive files on exFAT without encryption | One vault folder with Argon2id + AEAD at rest |
 | Multiple PCs / HD / local folder | Same vault layout anywhere |
 
@@ -62,7 +62,7 @@ Differentiators vs. manual 7-Zip use:
 | Mode | ID | When to use | Close behavior | v1 UI |
 |------|-----|-------------|----------------|-------|
 | **Encrypted directory (default)** | `encrypted_dir` | Normal use. Rest = `store/`. While open: decrypt in RAM (FUSE/WinFsp; in-app file manager on mobile). | Lock = close → flush session into `store/` → `closed` | **Yes** |
-| **Plaintext folder while open** | `upriv_plain` | Large vaults / when RAM cannot hold the working set. Rest = `store/`. While open: real plaintext `workspace/`. UI badge **Not recommended**: while open, anyone or any app that can read the folder reads the files, and system copies can outlast the wipe. | Lock = close → write `store/` → wipe workspace → `closed` | **Yes** |
+| **Plaintext folder while open** | `upriv_plain` | Large vaults / when RAM cannot hold the working set. Rest = `store/`. While open: real plaintext files in its unlocked folder. UI badge **Not recommended**: while open, anyone or any app that can read the folder reads the files, and system copies can outlast the wipe. | Lock = close → write `store/` → wipe that folder → `closed` | **Yes** |
 
 **`encrypted_dir` RAM:** decrypted content is served through the virtual mount / session buffers. Open, edit, or close may **fail** if RAM is insufficient — never silently spill plaintext to ordinary disk. UI: `warning.encrypted_dir_ram`. Prefer **`upriv_plain`**, smaller vaults, or more RAM when hardware cannot meet this limit.
 
@@ -78,17 +78,17 @@ The user chooses the mode in `vaults/<id>/config.toml` (`[storage] mode`). UI wa
 
 | State (ID) | UI (i18n) | What exists |
 |-------------|---------|----------------|
-| **`open`** | `vault.status.open` | Session + mount (or plaintext `workspace/` for `upriv_plain`) + `store/` |
+| **`open`** | `vault.status.open` | Session + mount (or the plaintext unlocked folder for `upriv_plain`) + `store/` |
 | **`closed`** | `vault.status.closed` | `store/` at rest; no session |
 
 ```text
 encrypted_dir / upriv_plain:
   closed ──open──► open ──close──► closed
-  # upriv_plain open: plaintext workspace (wipe on close)
+  # upriv_plain open: plaintext unlocked folder (wipe on close)
 ```
 
 - Implementation transients: `closing`, `opening`, `recovery` (not resting UI states).
-- **`open`:** active lock + mount (or plaintext workspace) + session key in RAM. Folders on disk are **not** sufficient.
+- **`open`:** active lock + mount (or plaintext unlocked folder) + session key in RAM. Folders on disk are **not** sufficient.
 - **`closed`:** `store/` + `persistence.json` `closed` + no active session.
 - **Recovery:** dirty close → unlock the encrypted vault. A leftover `upriv_plain` folder is not adopted as the open session: recovery wipes that folder. Dead header → create a **new** vault from backup (do not dual-pick archive vs store). Both index files dead under a header the password opens → the row shows recovery and the unlock offers **Rebuild from its own data**, from the recovery records each file's blob carries and the vault's backups, then opens the vault; a backup can still make a new vault.
 
@@ -97,7 +97,7 @@ encrypted_dir / upriv_plain:
 | Situation | Result |
 |----------|-----------|
 | Active lock + mount | `open` |
-| Dirty close / leftover plaintext workspace | **`recovery`** |
+| Dirty close / leftover plaintext folder | **`recovery`** |
 | `store/` + manifest `closed` | `closed` |
 | Dead header | create from backup only |
 | Both index files dead, header opens | unlock offers Rebuild from its own data; or create from backup |
@@ -109,16 +109,16 @@ encrypted_dir / upriv_plain:
 | Step | What |
 |-------|--------|
 | 1 | **Open:** unlock `store/` (`vault.header`); decrypt in RAM. |
-| 2 | **Session:** mount the file manager folder when it is on (desktop) or use the in-app file manager (mobile). No durable plaintext tree on ordinary disk. |
+| 2 | **Session:** the in-app file manager at once; on desktop, the vault's unlocked folder is then mounted when its switch is on. No durable plaintext tree on ordinary disk. |
 | 3 | **Edit:** each save updates the session **and** persists ciphertext chunks in `store/`. |
-| 4 | **Close:** flush session into `store/`; optional backup = Stored zip of `store/` as `<stamp>-<id>.zip` in the vault's backup folder (no zip password). |
+| 4 | **Close:** flush session into `store/`; optional backup = Stored zip of `store/` as `<stamp>-<id>.zip` in the vault's backup folder in use (no zip password). |
 | 5 | **Close:** unmount, zero password/keys in RAM → **`closed`**. |
 
 #### `upriv_plain` (plaintext while open)
 
 | Step | What |
 |-------|--------|
-| 1 | **Open:** with `plain_files = "chosen"` the folder already chosen starts empty, so opening takes about as long as RAM mode. With `"whole"`, stream `store/` into it. No FUSE/WinFsp, even when the file manager folder is on. |
+| 1 | **Open:** the vault's unlocked folder on this device (asked before the password while nothing is selected; a folder that fails hands over to the next one with a toast). With `plain_files = "chosen"` it starts empty, so opening takes about as long as RAM mode. With `"whole"`, stream `store/` into it. No FUSE/WinFsp. |
 | 2 | **Edit:** what is in the folder is the working copy of those files. `store/` stays the source of truth, and the in-app file manager reads, edits, deletes, and finds every file, sent or not. Outside edits are saved after the folder is quiet, on a two-minute pass, and on close. Deleting a sent file from the folder deletes it from the vault for good, with no extra step. **Remove from folder** wipes the folder's copy and keeps the file. |
 | 3 | **Lock:** the same triggers as RAM mode. Lock starts the close immediately. A clean wipe removes the folder. |
 
@@ -132,10 +132,10 @@ encrypted_dir / upriv_plain:
 |---|--------|----------------------|
 | 1 | Incomplete close | Recovery: unlock the encrypted vault again (`resume_store`). A leftover plaintext folder is wiped. Create-from-backup is for a dead store (row 2), not a dirty-close peer |
 | 2 | Dead `vault.header` / index | New vault from a backup zip — not a dual store/`.7z` picker |
-| 3 | Direct writes to `workspace/` on HD (`encrypted_dir`) | **Virtual** mount (FUSE/WinFsp) or in-app FM; tests that forbid persistent plaintext |
+| 3 | Direct writes to the unlocked folder on HD (`encrypted_dir`) | **Virtual** mount (FUSE/WinFsp) or in-app FM; tests that forbid persistent plaintext |
 | 4 | Plaintext temp when exporting `.7z` | Pack in process with `sevenz-rust2`; never stage a decrypted tree |
 | 5 | Swap/hibernation | **Minimize** swap of sensitive buffers (`mlock`, RAM buffers); do not promise 100% on all OSes |
-| 6 | External apps (Word, etc.) | The file manager folder is the switch. Off keeps the files in Upriv. On is a folder on this computer, and apps that can see that path can read the files |
+| 6 | External apps (Word, etc.) | An encrypted vault's unlocked folder switch decides. Off keeps the files in Upriv. On is a folder on this computer, and apps that can see that path can read the files |
 | 7 | Encrypted traces on SSD | Ciphertext in `store/` / `backups/`; `upriv_plain` wipe is best-effort on flash |
 | 8 | Two PCs on same HD | `runtime/<id>.lock` + warning; simultaneous use remains user responsibility |
 | 9 | `upriv_plain` mode | Strong UI warning; wipe on close (documented SSD limits) |
@@ -164,13 +164,14 @@ encrypted_dir / upriv_plain:
 
 1. User copies the portable app to the HD root: `Upriv-<version>-portable-x64.exe` (Windows) and/or `Upriv-<version>-linux-<arch>.AppImage` (Linux) (§3.5.1).
 2. Runs it from the HD. The first run creates `.upriv/` beside the file; later runs, on this or another computer, open the same one.
-3. Enters password → the vault opens in the in-app file manager, and in the file manager folder when that is on → edits files. On Windows an exFAT or FAT drive cannot hold the file manager folder (`vault_mount_filesystem`); the in-app file manager still works, or the folder goes on an NTFS disk.
-4. **Close vault** → the session is flushed into `store/` and the file manager folder goes away; only ciphertext persists. `.zip` / `.7z` export is a separate action.
+3. Enters password → the vault opens in the in-app file manager, and in its unlocked folder when that is on → edits files. On Windows an exFAT or FAT drive cannot hold an encrypted vault's unlocked folder, so Upriv uses the next folder of the list that can; with none, the in-app file manager still works.
+4. **Close vault** → the session is flushed into `store/` and the unlocked folder goes away; only ciphertext persists. `.zip` / `.7z` export is a separate action.
+5. On another computer, the same data folder finds that computer's own unlocked folders and backup folders, kept per device; a computer Upriv has not seen uses the defaults.
 
 ### UC-2 — Installed app, or a data folder elsewhere
 
 1. App installed (`.deb`, Windows setup) — the data folder is the user-data folder — or portable anywhere.
-2. **⋯ → Data folder** → choose another folder: one that already holds `.upriv/settings.toml` opens as-is; an empty one gets a new `.upriv/`.
+2. **⋯ → Data folder** → add a folder to this device's list and Apply: one that already holds `.upriv/settings.toml` opens as-is; an empty one gets a new `.upriv/`. The list keeps every folder added, top first; when the selected one does not answer (a drive left unplugged at launch, or pulled while Upriv runs), Upriv opens the next one that does and says so.
 3. Same open/close flow.
 
 ### UC-3 — Recovery after crash
@@ -178,6 +179,7 @@ encrypted_dir / upriv_plain:
 1. Data folder reachable; `.upriv/state.json` still records an open session (or a plaintext folder), but no running app holds the vault's lock.
 2. The vault list shows that vault in **recovery**.
 3. Encrypted vault: the user unlocks with the password and gets `store/` as last saved. Plaintext vault: **Remove the folder** wipes the leftover folder; then unlock.
+4. A plaintext folder left on a drive that is not connected keeps the vault from opening on that device: the row names the device and the folder, with Retry once the drive is back, or Forget, which leaves the files there as they are.
 
 ### UC-4 — Plan B without Upriv
 
@@ -187,9 +189,9 @@ encrypted_dir / upriv_plain:
 ### UC-5 — Vault on Android (OTG HD)
 
 1. **First time on phone:** user installs Upriv from `.upriv/app/Android/Upriv.apk` (on HD) or another source; opens app from Android launcher.
-2. **Link the data folder:** setup opens the system screen on Documents; the user confirms once and Upriv creates `Documents/Upriv` inside that grant — or the user picks another folder (an OTG HD included). The grant persists.
-3. **Open vault:** enter password → the vault opens in the **in-app file manager**; in `encrypted_dir` decrypted files stay in RAM. `upriv_plain` writes its plaintext folder at the chosen place.
-4. **Work:** edit in the in-app file manager. **Open in file manager** hands a folder to the system Files app when there is one on disk.
+2. **Link the data folder:** setup opens the system screen on Documents; the user confirms once and Upriv creates `Documents/Upriv` inside that grant — or the user adds another folder to the list (an OTG HD included). Each grant persists.
+3. **Open vault:** enter password → the vault opens in the **in-app file manager**; in `encrypted_dir` decrypted files stay in RAM. `upriv_plain` writes its plaintext folder into the unlocked folder its list selects on this phone (a picked folder, an SD card included).
+4. **Work:** edit in the in-app file manager. **Open unlocked folder** hands a plain-text vault's folder to the system Files app.
 5. **Close vault:** in Upriv → flush the session into `store/`; `upriv_plain` also wipes and removes its plaintext folder.
 6. **Next times:** open installed app; use already authorized vault URI (no need to reinstall APK if app stays installed).
 
@@ -207,31 +209,33 @@ encrypted_dir / upriv_plain:
 | RF-01b | **Create-new wizard (not import):** require password + confirm password; optional **password hint** field | P0 |
 | RF-01c | **Vault note:** optional user annotation per vault (max 10 000 characters); editable in create wizard and vault settings | P1 |
 | RF-01d | Store `password_hint` and `note` in **`config.toml` `[vault]`** — not in `persistence.json`, not a separate notes file (v1) | P0 |
-| RF-02 | Open vault (`encrypted_dir` default): validate password, mount the file manager folder when it is on, load encrypted store | P0 |
-| RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
-| RF-04 | Close vault (`encrypted_dir`): unmount the file manager folder, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
-| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **not recommended**; lock always **close** + wipe workspace → `closed`. Lock starts immediately and does not ask for the password | P1 |
+| RF-02 | Open vault (`encrypted_dir` default): validate password, load encrypted store into the in-app file manager at once; on desktop, then mount its unlocked folder when its switch is on, without holding the open | P0 |
+| RF-03 | Expose the unlocked folder to the user (vault row **Open unlocked folder**, file manager **Show in unlocked folder** → OS file manager) | P0 |
+| RF-04 | Close vault (`encrypted_dir`): unmount the unlocked folder, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
+| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext files in its unlocked folder; UI **`warning.upriv_plain`** + badge **not recommended**; lock always **close** + wipe that folder → `closed`. Lock starts immediately and does not ask for the password | P1 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Flush uses the open session keys. Lock does not ask for the password and does not rewrap the header | P0 |
 | RF-06 | Atomic write of `store/` (header + index + chunks); `.7z` is never kept at rest | P0 |
-| RF-07 | Backup on close: Stored zip of `store/` as `<stamp>-<id>.zip` in the vault's backup folder (RF-07c) if `[backup] enabled` (no zip password). `skip_unchanged` (default on) skips the zip when vault files match the last backup still on disk; file-manager layout is not a change | P1 |
+| RF-07 | Backup on close: Stored zip of `store/` as `<stamp>-<id>.zip` in the vault's backup folder in use (RF-07c) if `[backup] enabled` (no zip password). `skip_unchanged` (default on) skips the zip when vault files match this device's last backup and that zip is still in the folder in use; the file manager workspace is not a change | P1 |
 | RF-07b | Modes: `keep_last` (only latest backup) or `keep_all` (history) | P1 |
-| RF-07c | **Backup folder:** the data folder by default. On desktop the person may choose another folder on any drive, per system, as the app default (System settings) or for one vault. Phones always use the data folder. A vault's own folder writes to `upriv-<folder id>-backups/`, the app default to `upriv-backups/<folder id>/` | P1 |
-| RF-07d | **Fallback:** a chosen folder that fails sends that zip to the data folder with a toast. A chosen folder is never cleared: it is marked as not working and stays selected. Close now and Stop write no zip | P1 |
-| RF-07e | A backup stays where it was written. Changing the folder moves nothing, and a toast says the older backups stay there. Automatic deletion touches only the zips Upriv recorded writing | P1 |
-| RF-08 | Recovery UI if workspace/marker exists with vault logically "closed" | P0 |
-| RF-09 | Open an existing data folder: the default folder beside the app, or one chosen in the Gate | P0 |
-| RF-10 | Remember the chosen data folder in the app home (`.upriv-data-folder`) and the last opened vault in `settings.toml` `[app]` | P2 |
+| RF-07c | **Backup folders:** a list per device, as the app's (System settings) and for one vault: rows the person added, then the data folder (a vault's list also Use the app's). Desktop and phones alike. A vault row writes to `upriv-<folder id>-backups/`, an app row to `upriv-backups/<folder id>/` | P1 |
+| RF-07d | **Failover:** a folder in use that fails hands the selection over for good to the next choice of its list that works, with a toast. Close now and Stop write no zip | P1 |
+| RF-07e | A backup stays where it was written. Zips in a folder no longer in use stay listed, dimmed, and are never rotated or deleted automatically; automatic deletion touches only the zips Upriv recorded writing, in the folder in use. A folder that cannot be reached can be forgotten; its files stay | P1 |
+| RF-07f | **Name a backup:** the name goes in its file name (`<stamp>-<id> <name>.zip`, up to 80 characters) and pins it | P2 |
+| RF-08 | Recovery UI if a plaintext folder record or a session record exists with the vault logically "closed" | P0 |
+| RF-09 | Open an existing data folder: Default beside the app (or the user-data folder when installed), or a row of this device's data folder list, chosen in the Gate or the Data folder window | P0 |
+| RF-10 | Keep the data folder list, one group per device, in the app home (`.upriv-data-folder`), and the last opened vault in `settings.toml` `[app]`. A selected data folder that does not answer, at launch or once it is lost while Upriv runs, stays selected and hands over to the next one that does, with a toast; vaults left open in a lost one close as after a crash, are named, and recover once it is back | P1 |
 | RF-11 | **Multiple vaults** per HD: one `vaults/<id>/` folder per vault (`config.toml` + encrypted `store/`) | P1 |
-| RF-12 | File manager folder while open. App folder: `{place}/workspace/{display_name}/`. Vault's own folder: `{path}/{display_name}/`. Not created at init. See `.agent/AGENT.md`. | P0 |
+| RF-12 | **Unlocked folders** while open: `{folder}/upriv-unlocked/{display_name}/`, from a list per device: the app's (rows, then Beside the data folder) and each vault's (rows, then Use the app's). A failing selection hands over to the next folder that works, with a toast. Not created at init. See `.agent/AGENT.md`. | P0 |
+| RF-12b | **Devices:** each list keeps one group per device (machine or phone, named by an ID derived from the OS machine ID), so a data folder carried between machines finds each machine's own folders. Other devices' groups show collapsed, with Copy and text edits, only when another device has a group in that list | P1 |
 | RF-13 | Discover vaults by listing `.upriv/vaults/<id>/config.toml` | P0 |
 | RF-14 | Open/close vaults **independently** (several open at once) | P1 |
-| RF-15 | **Unique `vault_id`:** normalized slug for `vaults/<vault_id>/` and the vault folder inside an export; `display_name` for UI / export file name and the folder named like it / `workspace/` | P0 |
+| RF-15 | **Unique `vault_id`:** normalized slug for `vaults/<vault_id>/` and the vault folder inside an export; `display_name` for UI / export file name and the folder named like it / the vault's folder under `upriv-unlocked/` | P0 |
 | RF-15b | **Validate `display_name`:** reject `\ / : * ? " < > \|`, controls, empty, trailing space/`.`, reserved Windows stems, length > 128; allow Unicode accents and spaces | P0 |
 | RF-15c | **`vault_id` slug:** normalize from `display_name` (lowercase, spaces→`-`, strip forbidden, optional accent fold); max 64 chars; collision suffix | P0 |
 | RF-15d | **Export:** each option (`.zip` of encrypted `store/`, `.7z`, or plain-text `.zip`) has its own folder field, chosen before Export and kept for the session; the file is `{display_name}-upriv.zip`, `{display_name}-sevenzip.7z`, or `{display_name}-plain-text.zip` in that folder, with characters a system refuses replaced in the file name only; a file already using that name is never replaced: the export gets the next free number (`{display_name}-upriv-2.zip`) and the toast names it; source `display_name` unchanged. Inside, a folder named like the file, with the name as it was typed, holds the vault in a folder named after its `vault_id`. An import names the new vault after the name the file's settings carry, or after that folder when it carries none, so the file can be renamed freely | P1 |
 | RF-15e | **Plain-text `.zip` export:** a third export option below `.7z`, marked Insecure on a red card that explains the file is readable by anyone who gets it. It asks for the vault password and a folder, and has the same progress and Stop as the other exports. Unpacking `{display_name}-plain-text.zip` gives `{display_name}-plain-text/{vault_id}/` with the vault's files directly inside. A stop or a failure answers at once and wipes the unfinished file behind it; a normal quit waits for that wipe, and the launch after a crash or Close now wipes what is left. Purpose: a person who has the password can always take their data out | P1 |
-| RF-15f | **`.upriv-config/`:** a `.7z` and a plain-text `.zip` may carry the vault's settings (`config.toml`) and file manager layout (`workspace.json`) in this folder, beside the folder that holds the vault's files, with a `README.md`. Each has an export toggle, on by default. The create wizard has a matching switch, on by default, and applies what the file carries; a new vault never keeps the folder. A `.zip` is read when it is picked. A `.7z` is read when its password test passes, so the input fields it can fill stay locked until then, with a notice, while their steps and sections stay open. Importing works with any of this missing | P1 |
+| RF-15f | **`.upriv-config/`:** a `.7z` and a plain-text `.zip` may carry the vault's settings (`config.toml`) and file manager workspace (`.upriv-workspace.json`) in this folder, beside the folder that holds the vault's files, with a `README.md`. Each has an export toggle, on by default. The create wizard has a matching switch, on by default, and applies what the file carries; a new vault never keeps the folder. A `.zip` is read when it is picked. A `.7z` is read when its password test passes, so the input fields it can fill stay locked until then, with a notice, while their steps and sections stay open. Importing works with any of this missing | P1 |
 | RF-15e | **Import `.zip` / `.7z` → new vault:** stem → `display_name` in the create wizard; an invalid stem is pre-filled with a valid suggestion (`suggestValidDisplayName`), and a name already in use gets ` 2`, ` 3`, … (`suggestedImportDisplayName`); the user can edit it before Create | P0 |
 | RF-15f | **`[vault] order`:** optional non-negative integer in `config.toml`; vault list sorted ascending by `order`, tie-break by `display_name`; editable in vault settings and via drag-and-drop on list | P1 |
 | RF-16 | Create/import picks a free `id` (`-2`, `-3`, …); core refuses a create whose `vaults/<id>/` already exists (`vault_already_exists`) | P0 |
@@ -277,24 +281,24 @@ encrypted_dir / upriv_plain:
 | RF-43 | Wipe also on recovery **Remove the folder** (`upriv_plain`). The wipe runs on the row as **Recovering…** with its elapsed time and **Stop**, with no time limit; the rest of the app stays usable | P1 |
 | RF-43b | **Only files I choose** (`[storage] plain_files`, default on) on the plain-text option, in create and vault settings, changes only while the vault is closed or in recovery. On: the folder starts empty on every open; **Send to folder** and **Remove from folder** in the file manager move a file or a whole folder in and out, and each explorer row shows what the folder holds. Off: every open writes the whole vault there. Other apps see only what is in the folder. | P1 |
 | RF-43c | The file manager explorer finds files and folders by name at any depth, in both storage modes, on desktop and mobile. The search button, right after the Explorer label and apart from the other buttons, opens and closes the search bar. The bar starts closed. Each vault's layout remembers the bar and the search text, also across closing and reopening the vault. The search keeps filtering the explorer while the bar is closed, and the button says so. Folders in the results collapse and open for that search only; that is never saved and leaves the vault's expanded folders as they were. | P2 |
-| RF-43d | A file the viewer cannot hold (over the preview cap, or more than free RAM holds) opens from the disk instead on `upriv_plain`: when the person opens it, a vault of chosen files sends it to the folder, and the notice offers **Open in file manager**. A tab restored with the vault writes nothing until the person presses **Send to folder**. An `encrypted_dir` vault never writes plaintext for this; with a mounted folder the notice offers that folder. | P2 |
+| RF-43d | A file the viewer cannot hold (over the preview cap, or more than free RAM holds) opens from the disk instead on `upriv_plain`: when the person opens it, a vault of chosen files sends it to the folder, and the notice offers **Show in unlocked folder**. A tab restored with the vault writes nothing until the person presses **Send to folder**. An `encrypted_dir` vault never writes plaintext for this; with a mounted folder the notice offers that folder. | P2 |
 | RF-44 | Document limit: SSD/flash **do not** guarantee physical wipe in exception mode | P1 |
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
 | RF-47 | **`persistence.json`** per vault: last OK close timestamp; content identity lives in `vault.header` | P0 |
 | RF-48 | Recovery UI for dirty close: **Continue** (`resume_store`) unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the header is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
 | RF-48b | **Rebuild from its own data:** when neither index file opens or both are gone, the row shows recovery; when the password opens the header, the unlock window says the files are still there and offers the rebuild with the password typed. It runs on the row as **Recovering…** with its elapsed time and **Stop**, with no time limit. A copy of `store/` as it is is pinned in Backups first; a drive with no room for it refuses, naming the space needed and free. Each file comes back from the newer of the record its blob carries and the newest backup that names it, as the last close (or the save that made it) left it; empty folders do not come back; a blob nothing places is set aside for review in the file manager. Once it lands the vault opens with the same password, ready to use, and a toast reports the files placed and those set aside. The review window, laid out like Backups, puts back or deletes one item or every chosen one (select all). Never automatic; refused while an index opens | P1 |
-| RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
+| RF-49 | An encrypted vault's unlocked folder is a **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
 | RF-49b | **Write-through:** every write via mount puts its encrypted chunk in `store/` at once; the index naming it is sealed when the file is flushed, closed, or fsynced, and within about 2 s otherwise. What the user saves never waits for vault close; a crash loses at most writes from the last 2 s that were not flushed | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content, streamed from `store/` one chunk at a time, with progress. Fail with insufficient RAM instead of a plaintext temp | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
-| RF-52 | Who can open files while the vault is open is the file manager folder. Off keeps them in Upriv. On is a folder on this computer; apps that can see that path can read the files. No separate copy-out block | P1 |
-| RF-53 | **Lock = close** for both modes → **`closed`** (`store/` at rest). **`upriv_plain`** also wipes workspace. | P0 |
+| RF-52 | Who can open an encrypted vault's files while it is open is its unlocked folder switch. Off keeps them in Upriv. On is a folder on this computer; apps that can see that path can read the files. No separate copy-out block | P1 |
+| RF-53 | **Lock = close** for both modes → **`closed`** (`store/` at rest). **`upriv_plain`** also wipes its unlocked folder. | P0 |
 | RF-53b | **`persistence.json`:** `persistence: "closed"` only (never `open`). Session is runtime: `"open" \| "closing" \| "recovery"`. UI `vault.status.open` = runtime only | P0 |
 | RF-53c | Lock UI is **`action.lock` / `action.close` only** | P0 |
 | RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; a second open in another process waits, queued and stoppable, until that process lets go; other work on the vault refuses meanwhile | P1 |
 | RF-55 | Crypto primitives: Argon2id + AEAD (e.g. XChaCha20-Poly1305); protected names/paths | P0 |
-| RF-56 | **Backups** UI per vault: list the backups in the data folder and in the chosen folder as one collapsible section per folder, holding that folder's Saves and then its Standard backups, each with its own select-all for the whole folder and shown only when it holds a backup; on desktop each section shows its folder with a button to open it in the OS file manager, metadata, export into a chosen folder with visible progress and a stop (one zip, or one zip of several), delete (the confirmation names each backup it removes), **create new vault from backup** (does not replace the source vault) | P1 |
+| RF-56 | **Backups** UI per vault: list the backups as one collapsible section per folder (the data folder, the folder in use, then earlier folders, dimmed), holding that folder's Saves and then its Standard backups, each with its own select-all for the whole folder and shown only when it holds a backup or cannot be reached (then with Retry and Forget); each section shows its folder with a button to open it in the OS file manager (the tree's name and the Files app on a phone), naming a backup, metadata, export into a chosen folder with visible progress and a stop (one zip, or one zip of several), delete (the confirmation names each backup it removes), **create new vault from backup** (does not replace the source vault) | P1 |
 | RF-57 | **Real states:** `open` only with active session; `closed` = `store/` at rest | P0 |
 
 ### 3.4 Rest, identity, lock, backups
@@ -309,7 +313,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 
 1. No active session (lockfile gone)
 2. Ciphertext lives in `vaults/<id>/store/`
-3. `upriv_plain` workspace wiped if that mode was used
+3. `upriv_plain` unlocked folder wiped if that mode was used
 
 **During `open`:** write-through puts each write's ciphertext in `store/` at once and seals it on flush, close, fsync, or within about 2 s (RF-49b). UI state = **`vault.status.open`** (runtime).
 
@@ -325,7 +329,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 |----------|----------------|
 | Active session (lock + mount / in-app FM) | `open` (runtime) |
 | OK close | `closed` (`store/` at rest) |
-| Dirty close / leftover plaintext workspace | **recovery** |
+| Dirty close / leftover plaintext folder | **recovery** |
 
 ### 3.3.1 Threat: sensitive traces on disk
 
@@ -333,7 +337,7 @@ While a vault is **open**, plaintext exists only in **session RAM** (desktop: FU
 
 | Mitigated in v1 | Outside app control |
 |----------------|-------------------------|
-| No persistent plaintext workspace in `encrypted_dir` | OS swap/hibernation |
+| No persistent plaintext folder in `encrypted_dir` | OS swap/hibernation |
 | `store/` always encrypted at rest | External app cache/temp |
 | File and folder names encrypted in the store (AES-SIV index; opaque `data/` blobs — forensic tools cannot map blobs to logical paths without the password) | Registry metadata still visible (`display_name`, vault folder id) |
 | Password stays in session RAM and is never written to disk | Compromised host (keylogger) |
@@ -343,7 +347,7 @@ While a vault is **open**, plaintext exists only in **session RAM** (desktop: FU
 
 **Encrypted traces on SSD:** do not expose content without the password; old ciphertext versions may remain until rotation — acceptable for confidentiality, document in UI.
 
-**Exception mode `upriv_plain`:** plaintext `workspace/` on HD **while open**; mitigation = UI warning + overwrite of that folder on close (RF-41–44). Never use that path as a helper for `encrypted_dir`.
+**Exception mode `upriv_plain`:** plaintext unlocked folder on HD **while open**; mitigation = UI warning + overwrite of that folder on close (RF-41–44), and a record that keeps the folder tracked until it is wiped, proven gone, or forgotten by the person. Never use that path as a helper for `encrypted_dir`.
 
 ### 3.5 Platforms
 
@@ -366,7 +370,7 @@ For a user who does not want to install anything: one file runs Upriv, and the d
 | RF-P02 | The data folder (`.upriv/`) is created beside that file on first run, or opened as-is when it is already there. Moving the drive to another computer and running the same file opens the same vaults | P0 |
 | RF-P03 | The portable `.exe` and the AppImage can sit side by side at the root of one drive and share the same `.upriv/` | P0 |
 | RF-P04 | A folder that cannot be written (read-only drive) falls back to the user-data folder of that computer | P1 |
-| RF-P05 | The portable `.exe` carries the WinFsp installer, as the setup does; it asks only when the file manager folder is turned on | P1 |
+| RF-P05 | The portable `.exe` carries the WinFsp installer, as the setup does; it asks only when encrypted vaults' unlocked folders are turned on, or when an encrypted vault's unlocked folder finds the driver missing | P1 |
 | RF-P06 | macOS has no portable build: the `.app` is always installed, with data under Application Support | — |
 
 The installed packages (`.deb`, Windows setup) keep the data folder in the user-data folder instead. Either kind can switch to another folder in **⋯ → Data folder**. Uninstall deletes the Windows install folder, so a `.upriv/` found there (a portable copy installed over) is moved to the user-data folder at launch. When the user-data folder already has one, both stay and a notice names the folder left behind. A move that fails keeps the install folder for that launch, warns, and runs again on the next launch.
@@ -379,7 +383,7 @@ The installed packages (`.deb`, Windows setup) keep the data folder in the user-
 | RF-A02 | First run: confirm Documents via **SAF** (`ACTION_OPEN_DOCUMENT_TREE`) and create `Documents/Upriv` inside the grant, or pick another folder; persist with `takePersistableUriPermission` | P0 |
 | RF-A03 | Identify vault-root by `.upriv/settings.toml`; identify a vault by `.upriv/vaults/<id>/` (`store/` at rest) | P0 |
 | RF-A04 | Encrypted open creates no folder. `upriv_plain` puts its plaintext folder at the chosen place **on the vault volume**, never in the private app folder | P0 |
-| RF-A05 | The **in-app file manager** is the editor. **Open in file manager** hands a folder to the system Files app (chooser) | P0 |
+| RF-A05 | The **in-app file manager** is the editor. **Open unlocked folder** and the folder buttons hand a folder to the system Files app (chooser) | P0 |
 | RF-A06 | Same open/close/recovery cycle as desktop | P0 |
 | RF-A07 | Remember the data folder grant in the private app folder — **outside** the vault folder | P1 |
 | RF-A08 | A volume that stops answering shows the reconnect screen (`unreachable`); a session lost with it is a dirty close (recovery A) on the next unlock | P1 |
@@ -469,7 +473,7 @@ Opened by **`action.settings`** on vault row.
 - **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**, optional **`password_hint`**. **Not shown:** `id` (folder slug; migrates when display name normalizes).
 - **`[security]` in UI:** nothing. Change password is the Password area (vault closed). Plaintext close overwrites the open folder; only Close now skips that (RF-42b). **Not shown:** `wipe_passes`, `wipe_pattern`.
 - **`[seven_zip]` in UI:** compression preset (**none / low / medium / high**) + `encrypt_file_names` (`method`/`solid` = defaults; level derived from preset).
-- **`modal.settings.danger_zone` section:** **`modal.settings.delete_vault`** — confirmation with text field; user must **type vault name** (`id`) to confirm deletion (removes the store, config entries, and the backups in the data folder). A switch, off by default and shown only for a vault with backups in a chosen folder, removes those too: the vault goes first, then the zips Upriv wrote, then the folders left empty. A drive that cannot be reached does not stop the delete; a toast says the backups stayed.
+- **`modal.settings.danger_zone` section:** **`modal.settings.delete_vault`** — confirmation with text field; user must **type vault name** (`id`) to confirm deletion (removes the store, config entries, and the backups in the data folder). A switch, off by default and shown only for a vault with backups outside the data folder, removes those too: the vault goes first, then the zips Upriv wrote, then the folders left empty. A drive that cannot be reached does not stop the delete; a toast says the backups stayed.
 
 ### 3.7.4 Interface requirements (RF-UI)
 
@@ -519,8 +523,9 @@ The password string stays in the app after a successful unlock, until lock or qu
 <data-folder>/
 ├── Upriv-<version>-portable-x64.exe        # portable Windows app (§3.5.1), when used
 ├── Upriv-<version>-linux-<arch>.AppImage   # portable Linux app, when used
-├── .upriv-data-folder                      # only after the user picked another data folder
-├── workspace/                              # file manager folders while open (place = beside)
+├── .upriv-data-folder                      # the data folder list (app home), once it differs from Default
+├── upriv-unlocked/                         # unlocked folders while open (Beside the data folder)
+│   ├── .upriv-unlocked-id
 │   └── <display name>/
 └── .upriv/
     ├── settings.toml                       # marker + app settings ([package] version = 1)
@@ -536,7 +541,7 @@ The password string stays in the app after a successful unlock, until lock or qu
         └── backups/<stamp>-<id>.zip        # Stored zip of store/ (pins in backups/saves/)
 ```
 
-**Clean root:** the user sees the portable app files (when used), `workspace/` while a folder is open there, and `.upriv/`; everything else is under `.upriv/`. Passwords are never stored.
+**Clean root:** the user sees the portable app files (when used), `upriv-unlocked/` while a vault is open beside the data folder, and `.upriv/`; everything else is under `.upriv/`. Folders Upriv makes inside a folder the person added start with `upriv-` (`upriv-unlocked`, `upriv-backups`, `upriv-<id>-backups`). Passwords are never stored.
 
 **Desktop:** working folder = contains `.upriv/settings.toml`.
 
@@ -561,7 +566,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 ## 7. Success metrics (MVP)
 
 - User creates vault, adds files, closes and reopens on another PC with same `.7z`.
-- After simulating crash (orphan workspace), recovery closes vault without corrupting `store/`.
+- After simulating crash (orphan plaintext folder), recovery closes vault without corrupting `store/`.
 - A wrong unlock password does not change `store/`. Lock does not ask for the password.
 - Opening an exported `{display_name}-sevenzip.7z` with external 7-Zip works with same password.
 
@@ -575,10 +580,10 @@ The password string stays in the app after a successful unlock, until lock or qu
 | User ejects HD with vault open | Warning + recovery; lockfile; encrypted store preserves data |
 | Wrong password after reboot | Unlock goes through Argon2id; a wrong password does not write `store/` |
 | Corruption on close | Flush `store/` only after the index seal succeeds; optional `backups/` |
-| Poorly implemented virtual workspace | RF-49 + integration tests |
+| Poorly implemented virtual unlocked folder | RF-49 + integration tests |
 | `.7z` export RAM | RF-50 (in-process pack, or fail — no plaintext temp) |
 | Swap leaks session | RF-51 (minimize; document limit) |
-| External apps read an open folder | File manager folder off keeps files in Upriv (RF-52) |
+| External apps read an open folder | An encrypted vault with no unlocked folder keeps its files in Upriv (RF-52) |
 | Plaintext traces after `upriv_plain` | Close overwrites the folder before removing it (RF-41–44); SSD/flash limits are documented |
 | Two PCs on same USB | RF-54 lockfile + warning |
 | External 7-Zip vs in-app export | Do not spawn `7zz`; pack with `sevenz-rust2` |
@@ -595,8 +600,8 @@ The password string stays in the app after a successful unlock, until lock or qu
 ### MVP (v0.1)
 - **Linux + Windows desktop** (first implementation)
 - **Storage modes (UI):** `encrypted_dir` (default), `upriv_plain` — warnings per §1.6
-- `encrypted_dir` flow: `store/` → virtual `workspace` → close → flush `store/`
-- `upriv_plain` flow: `store/` → plaintext `workspace` → close → `store/` + wipe workspace
+- `encrypted_dir` flow: `store/` → in-app file manager, then the virtual unlocked folder → close → flush `store/`
+- `upriv_plain` flow: `store/` → plaintext unlocked folder → close → `store/` + wipe that folder
 - Compression presets for `.7z` export (none/low/medium/high → RF-31b)
 - `settings.toml` + defaults
 - Basic recovery + `persistence.json` (RF-47–48)
@@ -606,7 +611,8 @@ The password string stays in the app after a successful unlock, until lock or qu
 - Vault list UI + dark theme (RF-UI-01–10; §3.7)
 
 ### v0.2
-- Backup zips in `vaults/<id>/backups/` or a chosen folder (`keep_last` / `keep_all`)
+- Backup zips in `vaults/<id>/backups/` or a backup folder from the device's lists (`keep_last` / `keep_all`)
+- Per-device folder lists for the data folder, the unlocked folders, and the backup folders, with failover
 - Settings UI
 
 ### v0.3
@@ -617,7 +623,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 - Storage-access data folder: Documents/Upriv, or a picked folder (OTG HD included)
 - In-app file manager; `upriv_plain` folder at the chosen place
 - Open/close vault; OTG recovery
-- Open in file manager (system Files app)
+- Open a folder in the system Files app
 - APK in `.upriv/app/Android/` in HD bundle
 - Documented Plan B (ZArchiver + exported `{display_name}-sevenzip.7z`)
 
@@ -650,8 +656,8 @@ Upriv = **vault UX** + **universal 7z container**.
 | Layer (ID) | UI (i18n) | What | Path / runtime |
 |-------------|---------|-------|----------------|
 | **`store`** | — | Ciphertext at rest | `vaults/<id>/store/` |
-| **`session`** | `layer.session` | Active logical view (mount + RAM) | virtual file manager folder |
-| **`plain`** | `layer.plain` | `upriv_plain` only: files in plaintext on disk while open | real folder from the workspace place |
+| **`session`** | `layer.session` | Active logical view (mount + RAM) | virtual unlocked folder |
+| **`plain`** | `layer.plain` | `upriv_plain` only: files in plaintext on disk while open | real unlocked folder from the vault's list |
 
 Open: **`store` → `session`** (or **`plain`**). Close: flush back to **`store`**.
 
@@ -671,7 +677,10 @@ Suggested Rust modules: `upriv_core::store`, `::session`, `::plain`.
 | Vault / vault-root | Folder `<vault-root>` with standardized layout (not the vault itself) |
 | **`store`** | Ciphertext at rest — `vaults/<id>/store/` |
 | **`session`** | Virtual mount + keys in RAM (`encrypted_dir`) |
-| **`plain`** | Plaintext workspace on disk while `upriv_plain` is open |
+| **`plain`** | Plaintext unlocked folder on disk while `upriv_plain` is open |
+| **Unlocked folder** | The folder on a device where an open vault's files appear to other apps: `{folder}/upriv-unlocked/{vault name}` |
+| **Workspace** | The in-app file manager's working area for one vault (open tabs, expanded folders, unsaved edits, view choices), kept in `.upriv-workspace.json` |
+| **Device group** | What one folder list keeps for one device: its system, rows, and selection. The screen names the device by its system and the first 5 characters of its ID |
 | Close vault | Flush session into `store/` → unmount → zeroize RAM |
 | `open` | Active `session` (runtime) |
 | `closed` | `store/` at rest |

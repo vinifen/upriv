@@ -27,7 +27,7 @@ internal fun revealInFileManager(context: Context, osPath: String) {
   if (trimmed.startsWith("content://", ignoreCase = true)) {
     // The data folder's grant can be Documents; the data folder is its `Upriv` child.
     val dataFolder =
-      if (trimmed == SafPrefs.getActiveUri(context)?.trim()) {
+      if (SafVaultRoot.sameTreeUri(trimmed, SafFs.boundTree())) {
         safDocumentForLogicalPath(context, SAF_LOGICAL_ROOT)
       } else {
         null
@@ -39,6 +39,10 @@ internal fun revealInFileManager(context: Context, osPath: String) {
     throw RevealCodedException("open_path_failed", "path must be absolute")
   }
   safDocumentForLogicalPath(context, trimmed)?.let { uri ->
+    openContentDocument(context, uri)
+    return
+  }
+  pickedTreeDocument(trimmed)?.let { uri ->
     openContentDocument(context, uri)
     return
   }
@@ -78,7 +82,7 @@ private fun shareableUri(context: Context, file: File): Uri {
 private fun safDocumentForLogicalPath(context: Context, path: String): Uri? {
   val normalized = path.trimEnd('/')
   if (normalized != SAF_LOGICAL_ROOT && !normalized.startsWith("$SAF_LOGICAL_ROOT/")) return null
-  val tree = SafPrefs.getActiveUri(context)?.trim().orEmpty()
+  val tree = SafFs.boundTree().trim()
   if (!tree.startsWith("content://")) return null
   val parsed = Uri.parse(tree)
   val treeId = try {
@@ -94,6 +98,22 @@ private fun safDocumentForLogicalPath(context: Context, path: String): Uri? {
     relative
   }
   val documentId = if (underGrant.isEmpty()) treeId else "$treeId/$underGrant"
+  return DocumentsContract.buildDocumentUriUsingTree(parsed, documentId)
+}
+
+/**
+ * `/upriv-saf-tree/<key>/...` is a folder the person picked, as Rust reaches
+ * it: the document under that tree, or `null` outside every mounted tree.
+ */
+private fun pickedTreeDocument(path: String): Uri? {
+  val (tree, relative) = SafTrees.treeOf(path) ?: return null
+  val parsed = Uri.parse(tree)
+  val treeId = try {
+    DocumentsContract.getTreeDocumentId(parsed)
+  } catch (_: Throwable) {
+    return null
+  }
+  val documentId = if (relative.isEmpty()) treeId else "$treeId/$relative"
   return DocumentsContract.buildDocumentUriUsingTree(parsed, documentId)
 }
 

@@ -51,9 +51,9 @@ pub struct OpenSession {
     /// the process lock file is released.
     #[zeroize(skip)]
     pub mount: Option<crate::mount::MountedVault>,
-    /// Why `mount` is missing after an open that tried to attach one.
+    /// Where the attach of `mount` stands.
     #[zeroize(skip)]
-    pub mount_failure: Option<String>,
+    pub attach: AttachState,
     /// The plain-file folder of an open `upriv_plain` vault.
     #[zeroize(skip)]
     pub(crate) plain: Option<crate::vault::PlainSession>,
@@ -76,6 +76,18 @@ pub struct OpenSession {
     /// the last seal. Layout is not vault data, so it waits in RAM for the
     /// next seal or close instead of sealing the index on its own.
     pub pending_layout: Option<Zeroizing<Vec<u8>>>,
+}
+
+/// Where the unlocked folder attach of an open encrypted vault stands.
+#[derive(Debug, Clone, Default)]
+pub enum AttachState {
+    /// None runs: none was asked (a phone, a plain-text vault, an import's
+    /// session, an open the UI has not followed with one yet), or the last
+    /// one ended. The session's mount says whether it left a folder.
+    #[default]
+    Idle,
+    /// `vault_unlocked_folder_attach` runs. Setting the flag stops it.
+    Running(Arc<AtomicBool>),
 }
 
 /// Range writes whose chunks are already in their blobs while the sealed index
@@ -118,7 +130,7 @@ impl OpenSession {
             dirty: false,
             tree_revision: 0,
             mount: None,
-            mount_failure: None,
+            attach: AttachState::Idle,
             plain: None,
             lock: None,
             skip_close_backup: false,
@@ -279,6 +291,36 @@ pub(crate) fn open_session_ids_under(vaults_dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// An open session as a check of its folder needs it.
+pub(crate) struct OpenSessionName {
+    pub vault_dir: PathBuf,
+    pub vault_id: String,
+    pub display_name: String,
+}
+
+/// Every open session's folder, id, and name.
+pub(crate) fn open_session_names() -> Vec<OpenSessionName> {
+    lock_sessions()
+        .iter()
+        .filter_map(|(dir, session)| {
+            session.lock().ok().map(|inner| OpenSessionName {
+                vault_dir: dir.clone(),
+                vault_id: inner.vault_id.clone(),
+                display_name: inner.display_name.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Take the session at `vault_dir` out of the table without waiting for the
+/// work that still holds it. That work fails on its own, and the session's
+/// keys are wiped and its mount released when the last of it lets go. True
+/// when a session was there.
+pub(crate) fn abandon_session(vault_dir: &Path) -> bool {
+    let taken = lock_sessions().remove(vault_dir);
+    taken.is_some()
+}
+
 pub fn open_session_ids() -> Vec<String> {
     let guard = lock_sessions();
     let mut ids = Vec::new();
@@ -331,6 +373,20 @@ pub fn is_unlock_in_flight() -> bool {
 
 fn any_closing() -> bool {
     !lock_table(&CLOSING).is_empty()
+}
+
+/// The vault folders of every open session, running close, and open or
+/// create that has not inserted its session yet.
+pub(crate) fn busy_vault_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = lock_sessions().keys().cloned().collect();
+    dirs.extend(lock_table(&CLOSING).keys().cloned());
+    dirs.extend(
+        lock_table(&PREPARING)
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(dir, _)| dir.clone()),
+    );
+    dirs
 }
 
 fn any_preparing() -> bool {

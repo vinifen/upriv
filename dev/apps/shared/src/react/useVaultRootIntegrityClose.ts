@@ -2,9 +2,11 @@ import { useEffect, useRef } from "react";
 import { shouldBumpVaultRootEpoch } from "../domain";
 
 /**
- * Mid-session A/B (`vault_root_not_found` / `incomplete` / `alias_invalid`)
- * and SAF epoch codes: report to Gate and close the caller modal. Missing
- * `.upriv` resets to first-run Setup (defaults). Not `io_error`.
+ * Mid-session A/B (`vault_root_not_found` / `incomplete` /
+ * `data_folder_list_invalid`) and SAF epoch codes: report to Gate and close
+ * the caller modal. A missing `.upriv` resets the in-memory preferences to
+ * the defaults, and the Gate searches for a data folder that answers. Not
+ * `io_error`.
  */
 export function useVaultRootIntegrityClose(
   open: boolean,

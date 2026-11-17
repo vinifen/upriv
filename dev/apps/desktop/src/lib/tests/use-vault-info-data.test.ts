@@ -2,9 +2,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
-  appWorkspace,
   type BackupService,
-  type VaultBackupEntry,
+  type FolderListService,
+  type UnlockedFolderInfo,
   type VaultBackupListing,
   type VaultDiskUsage,
   type VaultLifecycleService,
@@ -13,6 +13,7 @@ import {
   type VaultService,
 } from "@upriv/shared";
 import { useVaultInfoData } from "@upriv/shared/react";
+import { backupEntry, dataFolderListing } from "./backupStubs";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -32,16 +33,12 @@ const vault: VaultListItem = {
   note: "",
 };
 
-const backup: VaultBackupEntry = {
-  stamp: "20260528120000",
-  fileName: "20260528120000-notes.zip",
-  createdAt: "2026-05-28T12:00:00.000Z",
-  sizeBytes: 10,
-};
+const backup = backupEntry("20260528120000", { sizeBytes: 10 });
 
 function renderInfo() {
   const backups = deferred<VaultBackupListing>();
   const diskUsage = deferred<VaultDiskUsage | null>();
+  const unlocked = deferred<UnlockedFolderInfo>();
   const vaultService = {
     getSettings: async () => null,
     diskUsage: () => diskUsage.promise,
@@ -51,9 +48,11 @@ function renderInfo() {
     hasPasswordInSession: () => false,
   } as unknown as VaultLifecycleService;
   const vaultRootService = {
-    resolve: async () => ({ status: "found", rootPath: "/data", source: "default_root" }),
+    resolve: async () => ({ status: "found", rootPath: "/data", source: "default" }),
   } as unknown as VaultRootService;
-  const workspace = appWorkspace();
+  const folderListService = {
+    unlockedFolderInfo: () => unlocked.promise,
+  } as unknown as FolderListService;
   const hook = renderHook(() =>
     useVaultInfoData({
       vault,
@@ -64,34 +63,45 @@ function renderInfo() {
       backupService,
       lifecycleService,
       vaultRootService,
-      vaultRootMode: "default_root",
-      workspace,
+      folderListService,
       fallbackVaultRootBase: "/data",
     }),
   );
-  return { ...hook, backups, diskUsage };
+  return { ...hook, backups, diskUsage, unlocked };
 }
 
 describe("useVaultInfoData", () => {
   it("shows Info before the backup list and store size are read", async () => {
     const { result } = renderInfo();
     await waitFor(() => expect(result.current.snapshot).not.toBeNull());
-    expect(result.current.snapshot?.backups).toBeNull();
+    expect(result.current.snapshot?.backupSections).toBeNull();
+    expect(result.current.snapshot?.unlockedFolder).toBeNull();
     expect(result.current.snapshot?.runtime.storeBytes).toBe("measuring");
     expect(result.current.snapshot?.runtime.heldBytes).toBe("measuring");
+    expect(result.current.snapshot?.runtime.filesBytes).toBe("measuring");
     expect(result.current.snapshot?.storeOpenPath).toBe("/data/.upriv/vaults/notes/store");
   });
 
   it("fills in each slow value as it lands", async () => {
-    const { result, backups, diskUsage } = renderInfo();
+    const { result, backups, diskUsage, unlocked } = renderInfo();
     await waitFor(() => expect(result.current.snapshot).not.toBeNull());
 
-    await act(async () => backups.resolve({ backups: [backup], chosen: null }));
-    expect(result.current.snapshot?.backups).toEqual([backup]);
+    const listing = dataFolderListing([backup]);
+    await act(async () => backups.resolve(listing));
+    expect(result.current.snapshot?.backupSections).toEqual(listing.sections);
     expect(result.current.snapshot?.runtime.storeBytes).toBe("measuring");
 
-    await act(async () => diskUsage.resolve({ storeBytes: 2048, heldBytes: 64 }));
+    const folder: UnlockedFolderInfo = {
+      choice: { kind: "fixed", choice: "inherit" },
+      path: "/data/upriv-unlocked/Notes",
+      mounted: false,
+    };
+    await act(async () => unlocked.resolve(folder));
+    expect(result.current.snapshot?.unlockedFolder).toEqual(folder);
+
+    await act(async () => diskUsage.resolve({ storeBytes: 2048, heldBytes: 64, filesBytes: 1500 }));
     expect(result.current.snapshot?.runtime.storeBytes).toBe(2048);
     expect(result.current.snapshot?.runtime.heldBytes).toBe(64);
+    expect(result.current.snapshot?.runtime.filesBytes).toBe(1500);
   });
 });

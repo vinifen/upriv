@@ -10,16 +10,17 @@
 //! closing pass and removes the files without overwriting them; what other apps
 //! changed since the last pass is lost.
 //!
-//! Open order: the place is checked, the folder recorded in `state.json`,
-//! made and marked, then filled. A failure after the first file wipes what
-//! was written.
+//! Open order: the vault's unlocked folder chain is walked, each place
+//! checked, the folder recorded in `state.json`, made and marked, then
+//! filled. A place that fails before the first byte hands over to the next;
+//! one that fails after it is wiped first, and hands over only when that
+//! wipe finishes.
 
 mod dest;
 mod disk;
 mod leftover;
 mod marker;
 mod names;
-mod policy;
 mod residue;
 mod sweep;
 mod sync;
@@ -41,20 +42,25 @@ use self::sync::Synced;
 use crate::config::vault_config::VaultPlainFiles;
 use crate::config::{load_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
+use crate::folder_list::{fail_over, Failover, Switch, Try};
+use crate::folder_probe::FolderState;
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
 use crate::session::{is_vault_closing_at, with_open_session, Job};
-use crate::store::{from_ui_path, is_reserved_logical, parent_logical, FileTreeNode, VaultIndex};
+use crate::store::{from_ui_path, is_reserved_logical, parent_logical, FileTreeNode};
 use crate::vault::wipe::WipeOptions;
 
-pub use dest::{plain_destination, PlainDestination, PlainPlace};
+pub use dest::{plain_destination, PlainDestination};
 pub use leftover::{plain_leftover, remove_plain_leftover, PlainLeftover, PlainWipe};
 pub use volume::PlainFolderClass;
 pub use worker::{set_plain_observer, PlainObserver};
 
-pub(crate) use leftover::{adopt_orphans, clear_for_delete, ensure_no_leftover, holds_leftover};
-pub(crate) use policy::forget as forget_plain_policy;
+pub(crate) use leftover::{
+    adopt_orphans, clear_for_delete, ensure_no_leftover, follow_records, forget_gone_records_under,
+    plain_record_views, records_left_under, refuse_if_elsewhere,
+};
+pub use leftover::{plain_record_forget, PlainRecordState, PlainRecordView};
 pub(crate) use worker::store_changed;
 
 /// Free space a folder must have beyond the vault's files: room for the
@@ -231,22 +237,50 @@ pub struct PlainCloseSummary {
     pub backup_pinned: bool,
 }
 
-/// Before the unlock: a leftover folder, a place this system cannot use, or
-/// a folder that is not free stops the open before the key is derived.
+/// A plain-text folder is recorded by the device that writes it, so a device
+/// with no ID writes none.
+pub(crate) fn require_known_device() -> Result<()> {
+    if crate::device::this_device().id.is_none() {
+        return Err(UprivError::DeviceUnknown);
+    }
+    Ok(())
+}
+
+/// Before the unlock: an unknown device, a leftover folder, nothing
+/// selected, or no place of the chain that can take the folder stops the
+/// open before the key is derived.
 pub(crate) fn check_before_unlock(
     root: &VaultRoot,
     vault_id: &str,
     config: &VaultConfig,
 ) -> Result<()> {
+    require_known_device()?;
     leftover::ensure_no_leftover(root, vault_id)?;
-    let dest = dest::resolve(root, config)?;
-    dest::check(root, vault_id, &dest)?;
-    dest::inspect_leaf(&dest.folder, vault_id)?;
-    Ok(())
+    let places = dest::places(root, config)?;
+    let display_name = config.vault.display_name.as_str();
+    match fail_over(&places.selected, &places.chain, |place| {
+        dest::try_place(root, vault_id, place, display_name, false)
+    }) {
+        Failover::Kept(_) | Failover::Switched { .. } => Ok(()),
+        Failover::Stopped(error) => Err(error),
+        Failover::Unavailable(_) => Err(UprivError::UnlockedFolderUnavailable(
+            places.selected.container(root.root()),
+        )),
+    }
 }
 
-/// Fill the folder of a vault that was just unlocked. `consent` is the path
-/// the user agreed to after [`UprivError::PlainDestinationUnconfirmed`].
+/// What the store gives a fill: its size and helper names.
+struct FillPlan<'a> {
+    whole: bool,
+    bytes: u64,
+    helpers: Vec<String>,
+    wipe: &'a WipeOptions,
+}
+
+/// Fill the folder of a vault that was just unlocked: the first place of its
+/// unlocked folder chain that takes it. Returns the switches made when the
+/// selected place failed, saved in the lists (the caller holds the vault's
+/// directory lock).
 ///
 /// On failure, or a stop of `job`, the caller drops the session. What was
 /// written is wiped first; when that wipe falls short, the record stays and
@@ -255,75 +289,124 @@ pub(crate) fn activate(
     root: &VaultRoot,
     vault_id: &str,
     vault_dir: &Path,
-    consent: Option<&Path>,
     job: &Job,
-) -> Result<()> {
+) -> Result<Vec<Switch>> {
+    require_known_device()?;
     let config = load_vault_config(vault_dir)?;
     let wipe = WipeOptions::from_vault_config(&config);
-    let dest = dest::resolve(root, &config)?;
-    dest::check(root, vault_id, &dest)?;
+    let places = dest::places(root, &config)?;
+    let whole = config.storage.plain_files == VaultPlainFiles::Whole;
+    let (bytes, helpers) = with_open_session(vault_dir, |session| {
+        // Chosen files are checked as they are sent.
+        let bytes = if whole {
+            crate::vault::files_bytes(&session.index)
+        } else {
+            0
+        };
+        Ok((bytes, residue::helper_names(&session.index)))
+    })?;
+    let plan = FillPlan {
+        whole,
+        bytes,
+        helpers,
+        wipe: &wipe,
+    };
+    let display_name = config.vault.display_name.as_str();
+    let outcome = fail_over(&places.selected, &places.chain, |place| {
+        if job.is_stopped() {
+            return Try::Stop(UprivError::JobCancelled);
+        }
+        match dest::try_place(root, vault_id, place, display_name, true) {
+            Try::Works(dest) => fill_place(root, vault_id, vault_dir, &dest, &plan, job),
+            Try::Fails(state) => Try::Fails(state),
+            Try::Stop(error) => Try::Stop(error),
+        }
+    });
+    let device = crate::device::this_device();
+    match outcome {
+        Failover::Kept(()) => Ok(Vec::new()),
+        Failover::Switched { link, reason, .. } => {
+            let taking = crate::folder_list::unlocked::selections_taking(
+                &places.app,
+                &config.unlocked_folder,
+                device,
+                link,
+            );
+            let mut switches = crate::folder_list::unlocked::switches(
+                &places.app,
+                &config.unlocked_folder,
+                device,
+                vault_id,
+                taking,
+                reason,
+            );
+            let saved = crate::config::list_saves::save_unlocked_switch(root, vault_dir, taking);
+            for switch in &mut switches {
+                switch.saved = saved;
+                switch.log();
+            }
+            Ok(switches)
+        }
+        Failover::Stopped(error) => Err(error),
+        Failover::Unavailable(_) => Err(UprivError::UnlockedFolderUnavailable(
+            places.selected.container(root.root()),
+        )),
+    }
+}
+
+/// Fill `dest`: room and names first, so those failures hand over with
+/// nothing written; then the record, the folder, and every file.
+fn fill_place(
+    root: &VaultRoot,
+    vault_id: &str,
+    vault_dir: &Path,
+    dest: &dest::Destination,
+    plan: &FillPlan<'_>,
+    job: &Job,
+) -> Try<(), UprivError> {
     let volume = volume::inspect(&dest.folder);
     let rules = NameRules::new(volume.family);
-    let whole = config.storage.plain_files == VaultPlainFiles::Whole;
-    // Chosen files are checked as they are sent.
-    let (confirmed, unsupported, bytes, helpers) = with_open_session(vault_dir, |session| {
-        let (unsupported, bytes) = if whole {
-            let names = names::unsupported_names(&session.index, &rules);
-            (names, store_bytes(&session.index))
-        } else {
-            (Vec::new(), 0)
-        };
-        Ok((
-            policy::is_confirmed(session, &dest.source),
-            unsupported,
-            bytes,
-            residue::helper_names(&session.index),
-        ))
-    })?;
-    let needed = space_needed(bytes);
-    if !confirmed && consent != Some(dest.folder.as_path()) {
-        return Err(UprivError::PlainDestinationUnconfirmed {
-            path: dest.folder,
-            class: volume.class,
+    if plan.whole {
+        let unsupported = with_open_session(vault_dir, |session| {
+            Ok(names::unsupported_names(&session.index, &rules))
         });
-    }
-    if !unsupported.is_empty() {
-        return Err(UprivError::PlainNamesUnsupported {
-            count: unsupported.len(),
-            examples: unsupported
-                .into_iter()
-                .take(names::MAX_NAME_EXAMPLES)
-                .collect(),
-        });
-    }
-    dest::ensure_parent(root, &dest)?;
-    if let Some(available) = crate::host_fs::free_bytes(&dest.folder) {
-        if available < needed {
-            return Err(UprivError::PlainSpaceShort { needed, available });
+        match unsupported {
+            Ok(names) if !names.is_empty() => return Try::Fails(FolderState::NamesUnsupported),
+            Ok(_) => {}
+            Err(error) => return Try::Stop(error),
         }
     }
-    let leaf = dest::inspect_leaf(&dest.folder, vault_id)?;
-    let token = uuid::Uuid::new_v4().simple().to_string();
-    let record = PlainRecord {
-        host: crate::lockfile::hostname()?,
-        path: leftover::record_path(root, &dest).ok_or_else(|| {
-            UprivError::WorkspacePathInvalid {
-                path: dest.folder.clone(),
-                detail: "folder path is not valid UTF-8".into(),
-            }
-        })?,
-        in_data_folder: dest.in_data_folder(),
-        token: token.clone(),
-        since: crate::time::utc_timestamp_iso_millis(),
+    if let Some(available) = crate::host_fs::free_bytes(&dest.folder) {
+        if available < space_needed(plan.bytes) {
+            return Try::Fails(FolderState::NoRoom);
+        }
+    }
+    let leaf = match dest::inspect_leaf(&dest.folder, vault_id) {
+        Ok(leaf) => leaf,
+        Err(UprivError::Io(error)) => return Try::Fails(FolderState::of_io(&error)),
+        Err(error) => return Try::Stop(error),
     };
-    runtime_state::add_plain_record(root, vault_id, record)?;
+    let folder_id = match crate::folder_list::unlocked::container_id(&dest.container(root)) {
+        Ok(Some(id)) => id,
+        Ok(None) => return Try::Fails(FolderState::Missing),
+        Err(error) => return Try::Fails(FolderState::of_failure(&error)),
+    };
+    let Some(record_path) = leftover::record_path(root, dest) else {
+        return Try::Stop(UprivError::UnlockedFolderUnavailable(dest.folder.clone()));
+    };
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let record =
+        PlainRecord::written_here(record_path, dest.in_data_folder(), token.clone(), folder_id);
+    if let Err(error) = runtime_state::add_plain_record(root, vault_id, record) {
+        return Try::Stop(error);
+    }
     let plain = PlainSession::new(
         dest.folder.clone(),
         token,
-        helpers,
+        plan.helpers.clone(),
         leaf == dest::Leaf::Missing,
         rules,
-        whole,
+        plan.whole,
     );
     let marker = Marker::open(vault_id, &plain.token, &plain.helpers, plain.made_folder);
     if let Err(error) = with_open_session(vault_dir, |session| {
@@ -331,17 +414,17 @@ pub(crate) fn activate(
         Ok(())
     }) {
         let _ = runtime_state::remove_plain_record(root, vault_id, &marker.token);
-        return Err(error);
+        return Try::Stop(error);
     }
-    let worker = worker::register(vault_id, vault_dir, wipe, job.stop_flag());
-    match fill(vault_dir, &dest, leaf, &marker, &worker) {
+    let worker = worker::register(vault_id, vault_dir, *plan.wipe, job.stop_flag());
+    match fill(dest, leaf, &marker, &worker) {
         Ok(Filled::Done(files)) => {
             if let Err(error) = job
                 .final_step()
                 .and_then(|()| worker::start(&worker, &dest.folder))
             {
-                abandon(root, vault_id, vault_dir, &wipe);
-                return Err(error);
+                abandon(root, vault_id, vault_dir, plan.wipe);
+                return Try::Stop(error);
             }
             residue::watch(&dest.folder);
             log_event(
@@ -349,20 +432,34 @@ pub(crate) fn activate(
                 "vault_plain_opened",
                 &[("id", vault_id), ("files", files.to_string().as_str())],
             );
-            Ok(())
+            Try::Works(())
         }
         // Close asked to stop while the folder was filling. It runs next and
         // wipes what was written.
-        Ok(Filled::Cancelled) if is_vault_closing_at(vault_dir) => Ok(()),
+        Ok(Filled::Cancelled) if is_vault_closing_at(vault_dir) => Try::Works(()),
         // The person stopped the open: wipe what was written here.
         Ok(Filled::Cancelled) => {
-            abandon(root, vault_id, vault_dir, &wipe);
-            Err(UprivError::JobCancelled)
+            abandon(root, vault_id, vault_dir, plan.wipe);
+            Try::Stop(UprivError::JobCancelled)
         }
         Err(error) => {
-            abandon(root, vault_id, vault_dir, &wipe);
-            Err(error)
+            let kept = abandon(root, vault_id, vault_dir, plan.wipe);
+            match folder_failure(&error) {
+                Some(state) if kept == 0 => Try::Fails(state),
+                _ => Try::Stop(error),
+            }
         }
+    }
+}
+
+/// The failure of a fill that is the folder's own, so the open may hand over
+/// once the wipe of what was written finishes.
+fn folder_failure(error: &UprivError) -> Option<FolderState> {
+    match error {
+        UprivError::UnlockedFolderUnavailable(_) => Some(FolderState::Missing),
+        UprivError::PlainFolderUnwritable { .. } => Some(FolderState::FileTooLarge),
+        UprivError::Io(io) => Some(FolderState::of_io(io)),
+        _ => None,
     }
 }
 
@@ -371,9 +468,8 @@ enum Filled {
     Cancelled,
 }
 
-/// Make the folder, mark it, confirm the place, and write every file.
+/// Make the folder, mark it, and write every file.
 fn fill(
-    vault_dir: &Path,
     dest: &dest::Destination,
     leaf: dest::Leaf,
     marker: &Marker,
@@ -385,13 +481,12 @@ fn fill(
     }
     marker::write(folder, marker)?;
     residue::protect_folder(folder, &marker.helpers);
-    with_open_session(vault_dir, |session| policy::confirm(session, &dest.source))?;
     let report = worker.pass()?;
     if worker.cancel_flag().load(Ordering::Relaxed) {
         return Ok(Filled::Cancelled);
     }
     if report.folder_missing {
-        return Err(UprivError::WorkspaceUnavailable(folder.to_path_buf()));
+        return Err(UprivError::UnlockedFolderUnavailable(folder.to_path_buf()));
     }
     if report.unwritable > 0 {
         return Err(UprivError::PlainFolderUnwritable {
@@ -401,32 +496,27 @@ fn fill(
     Ok(Filled::Done(report.written))
 }
 
-/// Undo a fill that failed: wipe what it wrote and drop the folder session.
-fn abandon(root: &VaultRoot, vault_id: &str, vault_dir: &Path, wipe: &WipeOptions) {
-    worker::stop(vault_dir);
+/// Undo a fill that ended: wipe what it wrote and drop the folder session.
+/// Returns the files the wipe could not remove; while any are left, the
+/// record stays.
+fn abandon(root: &VaultRoot, vault_id: &str, vault_dir: &Path, wipe: &WipeOptions) -> u32 {
+    worker::release(vault_dir);
     let plain = with_open_session(vault_dir, |session| Ok(session.plain.take()))
         .ok()
         .flatten();
-    if let Some(plain) = plain {
-        let cleared = clear_folder(root, vault_id, &plain, wipe, &AtomicBool::new(false));
-        log_event(
-            LogLevel::Warn,
-            "vault_plain_open_abandoned",
-            &[
-                ("id", vault_id),
-                ("kept", cleared.kept.to_string().as_str()),
-            ],
-        );
-    }
-}
-
-fn store_bytes(index: &VaultIndex) -> u64 {
-    index
-        .nodes()
-        .iter()
-        .filter(|node| !is_reserved_logical(&node.path))
-        .filter_map(|node| node.as_file().map(|(_, size, _)| size))
-        .fold(0u64, u64::saturating_add)
+    let Some(plain) = plain else {
+        return 0;
+    };
+    let cleared = clear_folder(root, vault_id, &plain, wipe, &AtomicBool::new(false));
+    log_event(
+        LogLevel::Warn,
+        "vault_plain_open_abandoned",
+        &[
+            ("id", vault_id),
+            ("kept", cleared.kept.to_string().as_str()),
+        ],
+    );
+    cleared.kept
 }
 
 /// Free space `total` bytes of files need in the folder.
@@ -646,6 +736,13 @@ pub(crate) fn before_close(vault_dir: &Path, hurry: &AtomicBool) -> Option<Plain
     closing.ok().flatten()
 }
 
+/// Stop the sync of a vault whose data folder Upriv left: no pass may save
+/// into its store anymore. Nothing of its plain-text folder is touched, as
+/// after a crash.
+pub(crate) fn stop_sync(vault_dir: &Path) {
+    worker::stop(vault_dir);
+}
+
 /// Close could not save the store and put the session back: sync resumes.
 pub(crate) fn resume_after_failed_close(vault_dir: &Path, vault_id: &str) {
     let folder = with_open_session(vault_dir, |session| {
@@ -786,10 +883,10 @@ fn clear_folder(
     };
     if cleared.kept == 0 {
         let finished = match &marker {
-            Some(marker) => leftover::finish_folder(folder, marker).is_ok(),
+            Some(marker) => leftover::finish_folder(root, folder, marker).is_ok(),
             None => {
-                if plain.made_folder {
-                    let _ = crate::host_fs::remove_dir(folder);
+                if plain.made_folder && crate::host_fs::remove_dir(folder).is_ok() {
+                    leftover::release_container_of(root, folder);
                 }
                 true
             }

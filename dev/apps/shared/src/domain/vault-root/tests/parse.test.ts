@@ -1,46 +1,132 @@
 import { describe, expect, it } from "vitest";
 import { RpcError } from "../../core-rpc/errors";
-import { parseDefaultRootStatus, parseVaultRootResolve } from "../parse";
+import {
+  parseDataFolderApplied,
+  parseDataFolderList,
+  parseDataFolderSearch,
+  parseVaultRootResolve,
+} from "../parse";
 
 describe("parseVaultRootResolve", () => {
-  it("parses a found payload", () => {
-    expect(
-      parseVaultRootResolve({
+  it("reads a data folder found by each source", () => {
+    for (const source of ["explicit", "default", "row"] as const) {
+      expect(parseVaultRootResolve({ status: "found", rootPath: "/data", source })).toEqual({
         status: "found",
         rootPath: "/data",
-        source: "default_root",
-      }),
-    ).toEqual({ status: "found", rootPath: "/data", source: "default_root" });
+        source,
+      });
+    }
   });
 
-  it("parses a relocate notice", () => {
+  it("keeps a relocate notice", () => {
     expect(
       parseVaultRootResolve({
         status: "found",
         rootPath: "/data",
-        source: "default_root",
+        source: "default",
         relocateNotice: "left_behind",
         relocatePath: "C:/Program",
       }),
+    ).toMatchObject({ relocateNotice: "left_behind", relocatePath: "C:/Program" });
+  });
+
+  it("reads the first run", () => {
+    expect(
+      parseVaultRootResolve({
+        status: "needs_setup",
+        defaultRootAnchor: "/app",
+        distribution: "portable",
+      }),
     ).toEqual({
-      status: "found",
-      rootPath: "/data",
-      source: "default_root",
-      relocateNotice: "left_behind",
-      relocatePath: "C:/Program",
+      status: "needs_setup",
+      defaultRootAnchor: "/app",
+      distribution: "portable",
+      ended: [],
     });
   });
 
-  it("rejects an unknown status", () => {
-    expect(() => parseVaultRootResolve({ status: "nope" })).toThrow(RpcError);
+  it("reads the selected choice that did not answer, a row or Default", () => {
+    expect(
+      parseVaultRootResolve({
+        status: "selected_failed",
+        choice: { kind: "row", number: 2, name: "USB" },
+        reason: "missing",
+        ended: ["Notes", 7],
+      }),
+    ).toEqual({
+      status: "selected_failed",
+      choice: { kind: "row", number: 2, name: "USB" },
+      reason: "missing",
+      ended: ["Notes"],
+    });
+    expect(
+      parseVaultRootResolve({
+        status: "selected_failed",
+        choice: { kind: "fixed", choice: "default" },
+        reason: "missing",
+      }),
+    ).toMatchObject({ choice: { kind: "fixed", choice: "default" } });
+  });
+
+  it("refuses anything else", () => {
+    expect(() => parseVaultRootResolve(null)).toThrow(RpcError);
+    expect(() => parseVaultRootResolve({ status: "found", rootPath: "/x" })).toThrow(RpcError);
+    expect(() => parseVaultRootResolve({ status: "needs_setup", defaultRootAnchor: "/a" })).toThrow(
+      RpcError,
+    );
+    expect(() => parseVaultRootResolve({ status: "selected_failed", reason: "missing" })).toThrow(
+      RpcError,
+    );
+    expect(() => parseVaultRootResolve({ status: "lost" })).toThrow(RpcError);
   });
 });
 
-describe("parseDefaultRootStatus", () => {
-  it("parses a valid status", () => {
-    expect(parseDefaultRootStatus({ status: "valid", defaultRootAnchor: "/home" })).toEqual({
-      status: "valid",
-      defaultRootAnchor: "/home",
+describe("data folder list results", () => {
+  const id = "a".repeat(32);
+
+  it("reads the list with Default's folder", () => {
+    const view = parseDataFolderList({
+      list: {
+        devices: {
+          [id]: {
+            system: "linux",
+            selected: 1,
+            next_number: 2,
+            rows: [{ number: 1, name: "", path: "/media/usb" }],
+          },
+        },
+      },
+      defaultFolder: "/app",
+      explicit: null,
+    });
+    expect(view.defaultFolder).toBe("/app");
+    expect(view.explicit).toBeNull();
+    expect(view.groups[id].selected).toBe(1);
+    expect(parseDataFolderList({ list: {}, defaultFolder: null, explicit: null }).groups).toEqual(
+      {},
+    );
+  });
+
+  it("reads an apply and a search, with the vaults they ended", () => {
+    expect(
+      parseDataFolderApplied({
+        rootPath: "/media/usb",
+        source: "row",
+        switched: true,
+        privateRoot: "moved",
+        ended: ["Notes"],
+      }),
+    ).toEqual({
+      rootPath: "/media/usb",
+      source: "row",
+      switched: true,
+      privateRoot: "moved",
+      ended: ["Notes"],
+    });
+    expect(parseDataFolderSearch({ found: false, switch: null, ended: [] })).toEqual({
+      found: false,
+      switch: null,
+      ended: [],
     });
   });
 });

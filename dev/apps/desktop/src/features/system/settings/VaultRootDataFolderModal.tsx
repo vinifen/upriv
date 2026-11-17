@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
+import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import {
-  dataFolderExportPending,
-  isVaultRootDraftDirty,
-  VAULT_ROOT_GATE_IDLE,
-  type VaultRootMode,
-  type VaultRootSettingsGate,
-} from "@upriv/shared";
-import { useVaultRootService } from "@/platform/services";
+import { VAULT_ROOT_ERROR_CODES, dataFolderExportPending, isRpcError } from "@upriv/shared";
+import { hereDevice, useDataFolderList, useDeviceInfo } from "@upriv/shared/react";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 import {
   DataFolderExportFooter,
   DataFolderExportPanel,
@@ -16,7 +12,7 @@ import {
   type DataFolderExportControls,
 } from "@/features/system/data-folder-export";
 import { useAppSettingsContext } from "./AppSettingsContext";
-import { VaultRootLocationSection } from "./VaultRootLocationSection";
+import { DataFolderListSection } from "./DataFolderListSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 
@@ -29,7 +25,7 @@ interface VaultRootDataFolderModalProps {
   onDirtyChange?: (dirty: boolean) => void;
   /**
    * True while any list vault is open / opening / closing / creating.
-   * Modal stays openable; controls + Apply stay locked (closed + recovery OK).
+   * Modal stays openable; the list and Apply stay locked (closed + recovery OK).
    */
   vaultActivityBlocksChange?: boolean;
   /** Export data folder. Absent when this build has no data folder service. */
@@ -39,12 +35,13 @@ interface VaultRootDataFolderModalProps {
 }
 
 /**
- * Dedicated surface for switching/creating the vault-root data folder (⋯ menu).
- * Not part of System Settings Save — avoids mixing appearance drafts with folder switch.
- * Export a copy is a third radio beside the two folders, and the one footer
- * button follows the choice (Apply / Export / Stop export). Choosing it drops a
- * folder draft, so the copy is always of the folder in use; choosing a folder
- * again goes back.
+ * The data folder list (⋯ menu → Data folder): this device's folders with
+ * the one in use, Apply opening the folder it selects in one
+ * `data_folder_apply`. Not part of System settings Save.
+ * Export a copy is a further option below the list, and the one footer
+ * button follows the choice (Apply / Export / Stop export). Choosing it drops
+ * the list's draft, so the copy is always of the folder in use; choosing a
+ * folder again goes back.
  */
 export function VaultRootDataFolderModal({
   open,
@@ -56,16 +53,15 @@ export function VaultRootDataFolderModal({
 }: VaultRootDataFolderModalProps) {
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
-  const { settings, patchSettings } = useAppSettingsContext();
-  const [mode, setMode] = useState<VaultRootMode>(settings.app.vault_root_mode);
-  const [path, setPath] = useState(settings.app.upriv_root_path);
-  const [gate, setGate] = useState<VaultRootSettingsGate>(VAULT_ROOT_GATE_IDLE);
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
+  const { settings, adoptDataFolder } = useAppSettingsContext();
+  const exportGroup = useId();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [appliedVisible, setAppliedVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Export a copy is the chosen radio. A running export keeps it chosen. */
+  /** Export a copy is the chosen option. A running export keeps it chosen. */
   const [exportChosen, setExportChosen] = useState(false);
   const exportDestination = useDataFolderExportDestination();
   const { resetZipName: resetExportZipName } = exportDestination;
@@ -78,28 +74,21 @@ export function VaultRootDataFolderModal({
     exportSelected &&
     exportControls?.job == null &&
     dataFolderExportPending(exportDestination.folder.path, exportDestination.zipName) !== null;
+  const list = useDataFolderList({
+    service: vaultRoot,
+    here,
+    active: open,
+    opening: false,
+    primaryAction: "apply",
+  });
+  const { reset: resetList } = list;
   const submitLock = useRef(false);
   /** Bumped only when Apply runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const busyGen = useRef(0);
   const openRef = useRef(open);
   openRef.current = open;
-  const openedRef = useRef(false);
   const appliedHideRef = useRef<ReturnType<typeof setTimeout>>();
-  const gateRef = useRef(gate);
-  gateRef.current = gate;
-
-  const draftDirty = useMemo(
-    () =>
-      !vaultActivityBlocksChange &&
-      isVaultRootDraftDirty(mode, path, settings.app.vault_root_mode, settings.app.upriv_root_path),
-    [
-      mode,
-      path,
-      settings.app.upriv_root_path,
-      settings.app.vault_root_mode,
-      vaultActivityBlocksChange,
-    ],
-  );
+  const draftDirty = !vaultActivityBlocksChange && list.dirty;
 
   useEffect(() => {
     onDirtyChange?.(open && draftDirty);
@@ -111,98 +100,55 @@ export function VaultRootDataFolderModal({
   }, []);
 
   useEffect(() => {
-    if (!open) {
-      // An Apply in flight keeps running; its outcome comes back as a list toast.
-      openedRef.current = false;
-      setConfirmOpen(false);
-      setDiscardConfirmOpen(false);
-      setAppliedVisible(false);
-      setError(null);
-      setExportChosen(false);
-      cancelExportPick();
-      // The saved line belongs to this opening of the window; the folder stays.
-      clearExportWritten?.();
-      clearTimeout(appliedHideRef.current);
-      return;
-    }
-    if (!openedRef.current) {
-      openedRef.current = true;
-      setMode(settings.app.vault_root_mode);
-      setPath(settings.app.upriv_root_path);
-      setGate(VAULT_ROOT_GATE_IDLE);
-      setConfirmOpen(false);
-      setDiscardConfirmOpen(false);
-      setAppliedVisible(false);
-      setError(null);
+    setConfirmOpen(false);
+    setDiscardConfirmOpen(false);
+    setAppliedVisible(false);
+    setError(null);
+    setExportChosen(false);
+    clearTimeout(appliedHideRef.current);
+    // The saved line belongs to one opening of the window; the folder stays.
+    clearExportWritten?.();
+    if (open) {
       resetExportZipName();
-      // An export that finished while the window was closed already had its toast.
-      clearExportWritten?.();
       return;
     }
-    // Context reloaded vault-root while open: adopt if user has no local draft.
-    if (!draftDirty) {
-      setMode(settings.app.vault_root_mode);
-      setPath(settings.app.upriv_root_path);
-    }
-  }, [
-    cancelExportPick,
-    clearExportWritten,
-    open,
-    draftDirty,
-    resetExportZipName,
-    settings.app.upriv_root_path,
-    settings.app.vault_root_mode,
-  ]);
+    // An Apply in flight keeps running; its outcome comes back as a list toast.
+    cancelExportPick();
+  }, [cancelExportPick, clearExportWritten, open, resetExportZipName]);
 
   // A fresh name after each export. A failed one keeps what was typed.
   useEffect(() => {
     if (exportWritten) resetExportZipName();
   }, [exportWritten, resetExportZipName]);
 
-  useEffect(() => {
-    setConfirmOpen(false);
-    setDiscardConfirmOpen(false);
-  }, [mode, path, gate.replacePolicy, gate.disk]);
-
+  // Vault work started: the list goes back to how it is saved.
   useEffect(() => {
     if (!vaultActivityBlocksChange) return;
     setConfirmOpen(false);
     setDiscardConfirmOpen(false);
-    setMode(settings.app.vault_root_mode);
-    setPath(settings.app.upriv_root_path);
+    resetList();
     setError(null);
-  }, [settings.app.upriv_root_path, settings.app.vault_root_mode, vaultActivityBlocksChange]);
-
-  const onVaultRootGateChange = useCallback((next: VaultRootSettingsGate) => {
-    setGate(next);
-  }, []);
-
-  const onDraftChange = useCallback(
-    (patch: { vault_root_mode?: VaultRootMode; upriv_root_path?: string }) => {
-      if (vaultActivityBlocksChange) return;
-      setExportChosen(false);
-      if (patch.vault_root_mode != null) setMode(patch.vault_root_mode);
-      if (patch.upriv_root_path != null) setPath(patch.upriv_root_path);
-      setError(null);
-    },
-    [vaultActivityBlocksChange],
-  );
-
-  // The copy is of the folder in use, so a folder draft is dropped. Choosing
-  // the option opens nothing; its folder field and Choose folder do.
-  const selectExport = useCallback(() => {
-    setExportChosen(true);
-    setMode(settings.app.vault_root_mode);
-    setPath(settings.app.upriv_root_path);
-    setConfirmOpen(false);
-    setDiscardConfirmOpen(false);
-    setError(null);
-  }, [settings.app.upriv_root_path, settings.app.vault_root_mode]);
+  }, [resetList, vaultActivityBlocksChange]);
 
   const dismissFooterConfirm = useCallback(() => {
     setConfirmOpen(false);
     setDiscardConfirmOpen(false);
   }, []);
+
+  const onListEdit = useCallback(() => {
+    setExportChosen(false);
+    dismissFooterConfirm();
+    setError(null);
+  }, [dismissFooterConfirm]);
+
+  // The copy is of the folder in use, so the list's draft is dropped. Choosing
+  // the option opens nothing; its folder field and Choose folder do.
+  const selectExport = useCallback(() => {
+    setExportChosen(true);
+    resetList();
+    dismissFooterConfirm();
+    setError(null);
+  }, [dismissFooterConfirm, resetList]);
 
   const requestClose = useCallback(() => {
     // The Applied line closes the window itself a moment later.
@@ -232,88 +178,33 @@ export function VaultRootDataFolderModal({
   ]);
 
   const handleDiscardAndClose = useCallback(() => {
-    setMode(settings.app.vault_root_mode);
-    setPath(settings.app.upriv_root_path);
-    setDiscardConfirmOpen(false);
-    setConfirmOpen(false);
+    resetList();
+    dismissFooterConfirm();
     onClose();
-  }, [onClose, settings.app.upriv_root_path, settings.app.vault_root_mode]);
+  }, [dismissFooterConfirm, onClose, resetList]);
 
-  const requestApply = useCallback(() => {
-    const current = gateRef.current;
-    if (
-      vaultActivityBlocksChange ||
-      busy ||
-      appliedVisible ||
-      !draftDirty ||
-      current.blocksPrimary ||
-      confirmOpen
-    ) {
-      return;
-    }
+  const applyBlocked = vaultActivityBlocksChange || !draftDirty || list.blocksPrimary;
+
+  const requestApply = () => {
+    if (busy || appliedVisible || applyBlocked || confirmOpen) return;
     setDiscardConfirmOpen(false);
     setConfirmOpen(true);
-  }, [appliedVisible, confirmOpen, busy, draftDirty, vaultActivityBlocksChange]);
+  };
 
-  const commitApply = useCallback(() => {
-    const current = gateRef.current;
-    if (
-      vaultActivityBlocksChange ||
-      submitLock.current ||
-      busy ||
-      appliedVisible ||
-      !draftDirty ||
-      current.blocksPrimary
-    ) {
-      return;
-    }
-    // Same source as `blocksPrimary` — refuse incomplete without an explicit policy.
-    if (current.disk === "incomplete" && current.replacePolicy == null) {
-      setConfirmOpen(false);
-      setError(t("modal.vault_root_setup.error_init"));
-      return;
-    }
+  const commitApply = () => {
+    if (submitLock.current || busy || appliedVisible || applyBlocked) return;
     const gen = ++busyGen.current;
     submitLock.current = true;
     setBusy(true);
     setError(null);
-
     void (async () => {
-      const replacePolicy = current.replacePolicy;
-      if (mode === "default_root") {
-        await vaultRoot.setupDefaultRoot({
-          replaceIncomplete: replacePolicy != null,
-          replacePolicy,
-          bootstrap: { locale: settings.ui.locale },
-        });
-      } else {
-        const nextPath = path.trim();
-        if (!nextPath) {
-          setConfirmOpen(false);
-          setError(t("modal.vault_root_setup.error_path_required"));
-          return;
-        }
-        await vaultRoot.setupAtPath(nextPath, {
-          replaceIncomplete: replacePolicy != null,
-          replacePolicy,
-          bootstrap: { locale: settings.ui.locale },
-        });
-      }
+      const applied = await vaultRoot.apply({
+        changes: list.changes,
+        replacePolicy: list.replacePolicy ?? undefined,
+        bootstrap: { locale: settings.ui.locale },
+      });
       if (gen !== busyGen.current) return;
-
-      const saved = await patchSettings(
-        {
-          app: {
-            vault_root_mode: mode,
-            upriv_root_path: mode === "custom_root" ? path.trim() : "",
-          },
-        },
-        { vaultRootAlreadyApplied: true },
-      );
-      if (gen !== busyGen.current) return;
-      if (!saved) {
-        throw new Error("settings_save_failed");
-      }
+      if (applied.switched) await adoptDataFolder();
       if (!openRef.current) {
         onNotice?.(t("modal.data_folder.applied"));
         return;
@@ -327,36 +218,35 @@ export function VaultRootDataFolderModal({
         onClose();
       }, APPLIED_INDICATOR_MS);
     })()
-      .catch((err) => {
+      .catch((caught: unknown) => {
         if (gen !== busyGen.current) return;
-        const message = t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init"));
-        if (openRef.current) setError(message);
-        else onNotice?.(message);
+        // The folder may have changed since its check: check again.
+        list.retryStatuses();
+        if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
+          if (openRef.current) setConfirmOpen(false);
+          return;
+        }
+        const message = t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init"));
+        if (openRef.current) {
+          setConfirmOpen(false);
+          setError(message);
+        } else {
+          onNotice?.(message);
+        }
       })
       .finally(() => {
         if (gen !== busyGen.current) return;
         submitLock.current = false;
         setBusy(false);
       });
-  }, [
-    appliedVisible,
-    busy,
-    draftDirty,
-    mode,
-    onClose,
-    onNotice,
-    patchSettings,
-    path,
-    settings.ui.locale,
-    t,
-    vaultActivityBlocksChange,
-    vaultRoot,
-  ]);
+  };
 
   // A running export explains its own hold, so the activity notice waits until it ends.
   const showActivityNotice =
     exportControls?.job == null &&
     (vaultActivityBlocksChange || exportControls?.canStart === false);
+  const listLocked =
+    vaultActivityBlocksChange || busy || appliedVisible || exportControls?.job != null;
 
   const footer = discardConfirmOpen ? (
     <div className="flex flex-col gap-3">
@@ -377,11 +267,11 @@ export function VaultRootDataFolderModal({
   ) : (
     <VaultRootConfirmFooter
       busy={busy || appliedVisible}
-      blocked={vaultActivityBlocksChange || !draftDirty || gate.blocksPrimary}
+      blocked={applyBlocked}
       confirmOpen={confirmOpen}
       primaryAction="apply"
-      confirmDanger={gate.replacePolicy === "delete"}
-      noteKeys={gate.confirmNotes}
+      confirmDanger={list.replacePolicy === "delete"}
+      noteKeys={list.gate.confirmNotes}
       successKey={appliedVisible ? "modal.data_folder.applied" : undefined}
       onRequestPrimary={requestApply}
       onConfirmPrimary={commitApply}
@@ -422,39 +312,42 @@ export function VaultRootDataFolderModal({
             {t("modal.data_folder.blocked_vault_activity")}
           </p>
         ) : null}
-        <VaultRootLocationSection
-          config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
-          onChange={onDraftChange}
-          savedVaultRootMode={settings.app.vault_root_mode}
-          savedRootPath={settings.app.upriv_root_path}
-          onVaultRootGateChange={onVaultRootGateChange}
-          controlsDisabled={vaultActivityBlocksChange || busy || appliedVisible}
-          extraOption={
-            exportControls
-              ? {
-                  heading: t("modal.data_folder.copy_heading"),
-                  hint: t("modal.data_folder.copy_hint"),
-                  value: "export",
-                  checked: exportSelected,
-                  attention: exportNeedsStep,
-                  title: t("modal.data_folder_export.title"),
-                  description: t("modal.data_folder_export.body"),
-                  disabled:
-                    busy ||
-                    appliedVisible ||
-                    (exportControls.job == null && !exportControls.canStart),
-                  onSelect: selectExport,
-                  // Shown always, and inactive until the option is chosen.
-                  footer: (
-                    <DataFolderExportPanel
-                      controls={exportControls}
-                      destination={exportDestination}
-                    />
-                  ),
-                }
-              : undefined
-          }
+        <DataFolderListSection
+          list={list}
+          here={here}
+          showInUse
+          disabled={listLocked}
+          noneChecked={exportSelected}
+          onEdit={onListEdit}
         />
+        {exportControls ? (
+          <div className="space-y-2 pt-2">
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-medium text-on-surface">
+                {t("modal.data_folder.copy_heading")}
+              </h3>
+              <p className="text-xs leading-relaxed text-on-surface-variant">
+                {t("modal.data_folder.copy_hint")}
+              </p>
+            </div>
+            <PolicyRadioOption
+              groupName={exportGroup}
+              value="export"
+              checked={exportSelected}
+              attention={exportNeedsStep}
+              title={t("modal.data_folder_export.title")}
+              description={t("modal.data_folder_export.body")}
+              disabled={
+                busy || appliedVisible || (exportControls.job == null && !exportControls.canStart)
+              }
+              onSelect={selectExport}
+              // Shown always, and inactive until the option is chosen.
+              footer={
+                <DataFolderExportPanel controls={exportControls} destination={exportDestination} />
+              }
+            />
+          </div>
+        ) : null}
         {error ? (
           <p
             className="rounded-md bg-error-container/10 px-3 py-2 text-sm text-on-error-container"

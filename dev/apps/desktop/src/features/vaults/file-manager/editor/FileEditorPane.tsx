@@ -885,7 +885,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
           size="sm"
           onClick={() => void fm.openInSystemFileManager(activeTabPath)}
         >
-          {t("modal.file_manager.context.open_system")}
+          {t("modal.file_manager.context.show_in_unlocked_folder")}
         </Button>
       ) : null,
     );

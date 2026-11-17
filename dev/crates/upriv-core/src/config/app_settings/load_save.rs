@@ -1,19 +1,19 @@
-//! Discover vault-root + load/save app settings (alias sync included).
+//! Load and save `settings.toml` of the data folder this device uses.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::error::{Result, UprivError};
-use crate::paths::{
-    app_home_dir, deactivate_app_home_alias, discover_vault_root_upward, env_default_root_anchor,
-    read_vault_root_alias, setup_default_root_anchor, write_vault_root_alias_for_root, VaultRoot,
-    VaultRootMode, VAULT_ROOT_SETTINGS_REL,
-};
+use crate::paths::{VaultRoot, VAULT_ROOT_SETTINGS_REL};
 
 use super::toml::{parse_settings_toml, ui_settings_from_toml, write_settings_toml_only};
 use super::types::{AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings};
+use crate::config::list_saves::{
+    apply_app_lists, carry_device_removals, release_unlocked_rows, reuse_selected_backup_folders,
+    selects_here, AppListChanges, ListsSaved,
+};
 
-/// Serializes load-modify-save of settings.toml + alias (UniFFI may dispatch RPCs concurrently).
+/// Serializes load-modify-save of settings.toml (UniFFI may dispatch RPCs concurrently).
 static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_settings_write() -> MutexGuard<'static, ()> {
@@ -22,120 +22,45 @@ fn lock_settings_write() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Bootstrap: active alias root, else default_root (exact anchor when `UPRIV_DEFAULT_ROOT_ANCHOR` set).
-///
-/// When `.upriv-data-folder` is **active**, a failed open is returned as an error (no default_root
-/// fallback) so settings load/save cannot silently use a different root while the UI
-/// still shows custom_root mode. The logical storage-access path is absent until the
-/// phone grant is mounted; that absence is not a failed read.
+/// The data folder this device uses: the explicit one, or its choice in the
+/// data folder list. `None` while that choice holds no data folder that
+/// answers (the first run, a selected choice that does not answer).
 pub fn discover_bootstrap_root() -> Result<Option<VaultRoot>> {
-    let home = app_home_dir()?;
-    if let Some(alias) = read_vault_root_alias(&home)? {
-        if alias.active {
-            if crate::host_fs::is_unmounted_saf_root(Path::new(&alias.path)) {
-                return Ok(None);
-            }
-            return match VaultRoot::discover(&alias.path) {
-                Ok(root) => Ok(Some(root)),
-                Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
-                Err(error @ UprivError::Io(_)) => Err(error),
-                Err(_) => Err(UprivError::VaultRootAliasInvalid(alias.path)),
-            };
-        }
-    }
-
-    if env_default_root_anchor().is_some() {
-        return crate::paths::open_default_root_candidate(&home);
-    }
-
-    if let Some(found) = discover_vault_root_upward(&home) {
-        return crate::paths::open_default_root_candidate(&found);
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        if !crate::paths::fs_env::same_dir(&cwd, &home) {
-            if let Some(found) = discover_vault_root_upward(&cwd) {
-                return crate::paths::open_default_root_candidate(&found);
-            }
-        }
-    }
-    Ok(None)
+    crate::paths::chosen_data_folder()
 }
 
-/// Load settings from the bootstrap root, or defaults when no root exists yet.
-/// Always merge vault-root mode from `.upriv-data-folder` (even when no readable root yet).
-///
-/// Active alias that fails to open → defaults + alias-derived wire fields (`on_disk: false`)
-/// so the UI can still show custom_root mode / Gate alias-invalid without falling back to default_root TOML.
-///
-/// I/O other than absence (`NotFound`) is propagated (e.g. `PermissionDenied`) — do not
-/// treat unreadable settings as “needs setup”.
+/// Load settings from the data folder in use, or defaults when there is none
+/// yet. An incomplete or missing data folder reads as defaults too (`on_disk:
+/// false`): the Gate decides what to show. I/O other than absence
+/// (`NotFound`) is propagated (e.g. `PermissionDenied`): unreadable settings
+/// are not “needs setup”.
 pub fn load_app_settings() -> Result<LoadedAppSettings> {
     match discover_bootstrap_root() {
         Ok(Some(root)) => load_app_settings_at(root.root()),
-        Ok(None) => {
-            let mut settings = AppSettings::default();
-            apply_alias_to_app_settings(&mut settings);
-            Ok(LoadedAppSettings {
-                settings,
-                root_path: None,
-                on_disk: false,
-            })
-        }
-        Err(UprivError::VaultRootAliasInvalid(_) | UprivError::VaultRootIncomplete { .. }) => {
-            let mut settings = AppSettings::default();
-            apply_alias_to_app_settings(&mut settings);
-            Ok(LoadedAppSettings {
-                settings,
-                root_path: None,
-                on_disk: false,
-            })
-        }
+        Ok(None) | Err(UprivError::VaultRootIncomplete { .. }) => Ok(defaults()),
         Err(UprivError::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut settings = AppSettings::default();
-            apply_alias_to_app_settings(&mut settings);
-            Ok(LoadedAppSettings {
-                settings,
-                root_path: None,
-                on_disk: false,
-            })
+            Ok(defaults())
         }
         Err(error) => Err(error),
     }
 }
 
-/// Apply `.upriv-data-folder` → wire `vault_root_mode` / `upriv_root_path`.
-fn apply_alias_to_app_settings(settings: &mut AppSettings) {
-    settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
-    settings.app.upriv_root_path.clear();
-    let Ok(home) = app_home_dir() else {
-        return;
-    };
-    let Ok(Some(alias)) = read_vault_root_alias(&home) else {
-        return;
-    };
-    if alias.active {
-        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
-        match alias.path.to_str() {
-            Some(s) if !s.contains('\n') && !s.contains('\r') => {
-                settings.app.upriv_root_path = s.to_string();
-            }
-            _ => {
-                // Keep custom_root mode but leave path empty — UI must re-pick (non-UTF-8 / newline).
-                settings.app.upriv_root_path.clear();
-            }
-        }
+fn defaults() -> LoadedAppSettings {
+    LoadedAppSettings {
+        settings: AppSettings::default(),
+        root_path: None,
+        on_disk: false,
     }
 }
 
-/// Load `.upriv/settings.toml` at `root` and derive vault-root mode from `.upriv-data-folder`.
+/// Load `.upriv/settings.toml` at `root`.
 pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     // Same marker rules as discover / inspect (reject incomplete before serde defaults).
     crate::paths::validate_existing_vault_root(root)?;
     let path = root.join(VAULT_ROOT_SETTINGS_REL);
     let raw = crate::host_fs::read_to_string(&path).map_err(UprivError::from)?;
     let parsed = parse_settings_toml(&raw, &path)?;
-
-    let mut settings = AppSettings {
+    let settings = AppSettings {
         ui: ui_settings_from_toml(&parsed.ui),
         logging: LoggingSettings {
             enabled: parsed.logging.enabled,
@@ -146,16 +71,11 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
             keep_last_entries: parsed.logging.keep_last_entries,
         },
         app: AppSectionSettings {
-            vault_root_mode: VaultRootMode::DefaultRoot,
-            upriv_root_path: String::new(),
             last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
         },
-        workspace: parsed.workspace,
+        unlocked_folders: parsed.unlocked_folders,
         backups: parsed.backups,
     };
-
-    apply_alias_to_app_settings(&mut settings);
-
     Ok(LoadedAppSettings {
         settings,
         root_path: Some(root.to_path_buf()),
@@ -163,164 +83,89 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     })
 }
 
-/// Write settings.toml at `root` and sync `.upriv-data-folder` from wire `app` fields.
-pub fn save_app_settings(root: &Path, settings: &AppSettings) -> Result<()> {
-    save_app_settings_with_alias_sync(root, settings, true)
-}
-
-/// Write settings.toml at `root`. When `sync_alias` is true, also align `.upriv-data-folder`
-/// from wire `app` fields. Pass `false` when the caller already mutated the alias
-/// via setup/deactivate (single writer).
-///
-/// Alias is synced **before** TOML when `sync_alias` is true (alias is on-disk source of
-/// truth for mode/path). If alias write fails, settings.toml is left unchanged.
-pub fn save_app_settings_with_alias_sync(
+/// Change `settings.toml` at `root` from a fresh read, under the settings
+/// write lock. For core's own writes: a pointer, a switch.
+pub(crate) fn update_app_settings(
     root: &Path,
-    settings: &AppSettings,
-    sync_alias: bool,
+    change: impl FnOnce(&mut AppSettings),
 ) -> Result<()> {
     let _guard = lock_settings_write();
-    crate::paths::validate_workspace_table(&settings.workspace, Some(root))?;
-    if sync_alias {
-        sync_alias_with_app_settings(settings)?;
-    }
-    write_settings_toml_only(root, settings)?;
-    Ok(())
+    let mut settings = load_app_settings_at(root)?.settings;
+    change(&mut settings);
+    write_settings_toml_only(root, &settings)
 }
 
-/// Align `.upriv-data-folder` with settings: default_root → deactivate; custom → write active alias.
-pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
-    if settings.app.vault_root_mode == VaultRootMode::DefaultRoot {
-        deactivate_app_home_alias()?;
-        return Ok(());
-    }
-    let path = settings.app.upriv_root_path.trim();
-    if path.is_empty() {
-        return Err(UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "custom vault-root mode requires a non-empty upriv_root_path",
-        )));
-    }
-    let home = app_home_dir()?;
-    let root = VaultRoot::discover(path)?;
-    write_vault_root_alias_for_root(&home, &root)?;
-    Ok(())
-}
-
-/// Save when a writable vault-root exists for the **desired** mode.
-///
-/// Target is chosen from the payload (not from the current active alias):
-/// - custom → `upriv_root_path` (must already be a valid root)
-/// - default_root → default_root anchor only (where `setup_default_root` creates); never the old custom root
-///
-/// Returns:
-/// - `Ok(true)` — wrote `settings.toml` (and synced alias when requested)
-/// - `Ok(false)` — **only** custom_root with empty `upriv_root_path` (bootstrap; nothing to write)
-/// - `Err(VaultRootNotFound)` — target has no valid marker (mid-session missing `.upriv`)
-/// - `Err(VaultRootIncomplete)` — target `.upriv` present but corrupt
-///
-/// `sync_alias` defaults to true via [`save_app_settings_session`]; pass false when
-/// vault-root setup already wrote/deactivated the alias.
-pub fn save_app_settings_session(settings: &AppSettings) -> Result<bool> {
-    save_app_settings_session_with_alias_sync(settings, true)
-}
-
-/// Like [`save_app_settings_session`], with explicit alias-sync control.
-pub fn save_app_settings_session_with_alias_sync(
+/// Write settings.toml at `root` from `settings`, with `lists` applied to the
+/// lists as the file holds them now. The settings lock is let go before any
+/// vault's file is written, so a vault that saves a switch meanwhile never
+/// waits on this save.
+pub fn save_app_settings_at(
+    root: &Path,
     settings: &AppSettings,
-    sync_alias: bool,
-) -> Result<bool> {
-    let target = if settings.app.vault_root_mode == VaultRootMode::CustomRoot {
-        let path = settings.app.upriv_root_path.trim();
-        if path.is_empty() {
-            // Bootstrap only: custom mode without a path yet — nothing to write.
-            return Ok(false);
-        }
-        PathBuf::from(path)
-    } else {
-        setup_default_root_anchor()?
+    lists: &AppListChanges,
+) -> Result<ListsSaved> {
+    let vault_root = VaultRoot::new(root);
+    let leaving = {
+        let _guard = lock_settings_write();
+        let saved = load_app_settings_at(root)?.settings;
+        let mut after = settings.clone();
+        let leaving = apply_app_lists(&vault_root, &saved, &mut after, lists)?;
+        write_settings_toml_only(root, &after)?;
+        leaving
     };
-
-    let Some(root) = crate::paths::open_default_root_candidate(&target)? else {
-        return Err(UprivError::VaultRootNotFound(
-            target.join(VAULT_ROOT_SETTINGS_REL),
-        ));
-    };
-    refuse_unusable_backup_defaults(&root, settings)?;
-    save_app_settings_with_alias_sync(&target, settings, sync_alias)?;
-    Ok(true)
+    if selects_here(&lists.backups) {
+        let ids = crate::config::known_vault_ids(&vault_root).unwrap_or_default();
+        reuse_selected_backup_folders(&vault_root, &ids);
+    }
+    Ok(ListsSaved {
+        unchanged_vaults: carry_device_removals(&vault_root, lists),
+        kept_folders: release_unlocked_rows(&vault_root, &leaving),
+    })
 }
 
-/// A changed backup folder must be a usable path, and no vault's backups may
-/// overlap any vault's file manager or plain-text folder. Values that did not
-/// change are not checked again, so a folder that went bad never blocks a save.
-fn refuse_unusable_backup_defaults(root: &VaultRoot, settings: &AppSettings) -> Result<()> {
-    let saved = load_app_settings_at(root.root())
-        .ok()
-        .map(|loaded| loaded.settings);
-    let backups_changed = saved
-        .as_ref()
-        .is_none_or(|saved| saved.backups != settings.backups);
-    if backups_changed {
-        settings.backups.validate(Some(root.root()))?;
+/// Save to the data folder in use.
+///
+/// - `Ok(Some(_))` — wrote `settings.toml`
+/// - `Ok(None)` — **only** before this process ever had a data folder (the
+///   first run): the preferences stay in memory until Setup makes one
+/// - `Err(VaultRootNotFound)` — the data folder was ready this process and is
+///   gone (case B)
+/// - `Err(VaultRootIncomplete)` — its `.upriv` is corrupt (case A)
+pub fn save_app_settings_session(
+    settings: &AppSettings,
+    lists: &AppListChanges,
+) -> Result<Option<ListsSaved>> {
+    match discover_bootstrap_root()? {
+        Some(root) => save_app_settings_at(root.root(), settings, lists).map(Some),
+        None if crate::logging::vault_root_was_ready() => Err(crate::paths::data_folder_lost()),
+        None => Ok(None),
     }
-    let workspace_changed = saved
-        .as_ref()
-        .is_none_or(|saved| saved.workspace != settings.workspace);
-    if backups_changed || workspace_changed {
-        crate::vault::refuse_app_backup_overlap(root, &settings.workspace, &settings.backups)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths::{
-        initialize_vault_root, write_vault_root_alias, BackupFolderRow, BackupPlace, ENV_LOCK,
-    };
+    use crate::paths::{initialize_vault_root, ENV_LOCK};
+
+    fn save_app_settings(root: &Path, settings: &AppSettings) -> Result<ListsSaved> {
+        save_app_settings_at(root, settings, &AppListChanges::default())
+    }
 
     #[test]
     fn roundtrip_settings_toml() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
-        let home = tempfile::tempdir().unwrap();
-        std::env::remove_var("APPIMAGE");
-        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-
         let dir = tempfile::tempdir().unwrap();
         initialize_vault_root(dir.path()).unwrap();
         let mut settings = AppSettings::default();
         settings.ui.locale = "pt-BR".into();
-        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
         save_app_settings(dir.path(), &settings).unwrap();
-
-        let raw = crate::host_fs::read_to_string(dir.path().join(".upriv/settings.toml")).unwrap();
-        assert!(
-            !raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"),
-            "mode/path must not be persisted in settings.toml"
-        );
-        assert!(raw.contains(".upriv-data-folder"));
 
         let loaded = load_app_settings_at(dir.path()).unwrap();
         assert_eq!(loaded.settings.ui.locale, "pt-BR");
-        assert_eq!(
-            loaded.settings.app.vault_root_mode,
-            VaultRootMode::DefaultRoot
-        );
         assert!(loaded.on_disk);
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }
 
     #[test]
     fn load_and_save_normalize_logging_level_preset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
-        let home = tempfile::tempdir().unwrap();
-        std::env::remove_var("APPIMAGE");
-        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-
         let dir = tempfile::tempdir().unwrap();
         initialize_vault_root(dir.path()).unwrap();
         let settings_path = dir.path().join(".upriv/settings.toml");
@@ -341,257 +186,149 @@ mod tests {
             persisted.contains("level = \"error\""),
             "persisted={persisted}"
         );
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }
 
     #[test]
-    fn save_custom_writes_active_alias() {
+    fn a_session_save_writes_the_data_folder_in_use_and_never_makes_one() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
+        let _env = crate::paths::EnvGuard::capture(&[
+            "APPIMAGE",
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            "UPRIV_VAULT_ROOT",
+        ]);
         let home = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        initialize_vault_root(root.path()).unwrap();
         std::env::remove_var("APPIMAGE");
+        std::env::remove_var("UPRIV_VAULT_ROOT");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
 
-        let mut settings = AppSettings::default();
-        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
-        settings.app.upriv_root_path = root.path().to_string_lossy().into_owned();
-        save_app_settings(root.path(), &settings).unwrap();
-
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(alias.active);
-        assert_eq!(alias.path, root.path().canonicalize().unwrap());
-
-        let raw = crate::host_fs::read_to_string(root.path().join(".upriv/settings.toml")).unwrap();
-        assert!(!raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"));
-
-        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
-        settings.app.upriv_root_path.clear();
-        save_app_settings(root.path(), &settings).unwrap();
-        let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
-        assert!(!alias.active);
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
-    }
-
-    #[test]
-    fn load_derives_mode_from_alias_not_toml() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
-        let home = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        initialize_vault_root(root.path()).unwrap();
-        write_vault_root_alias(home.path(), root.path()).unwrap();
-        std::env::remove_var("APPIMAGE");
-        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-
-        let settings_path = root.path().join(".upriv/settings.toml");
-        crate::host_fs::write(
-            &settings_path,
-            r#"
-[package]
-version = 1
-
-[ui]
-locale = "en"
-
-[logging]
-enabled = true
-
-[app]
-last_opened_vault = ""
-"#,
-        )
-        .unwrap();
-
-        let loaded = load_app_settings_at(root.path()).unwrap();
-        assert_eq!(
-            loaded.settings.app.vault_root_mode,
-            VaultRootMode::CustomRoot
-        );
-        assert_eq!(
-            loaded.settings.app.upriv_root_path,
-            root.path().canonicalize().unwrap().to_string_lossy()
-        );
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
-    }
-
-    #[test]
-    fn active_broken_alias_does_not_fall_back_to_default_root() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
-        let home = tempfile::tempdir().unwrap();
-        let default_root = tempfile::tempdir().unwrap();
-        let missing = home.path().join("gone-custom");
-        initialize_vault_root(default_root.path()).unwrap();
-        let alias_path = home.path().join(".upriv-data-folder");
-        crate::host_fs::write(
-            &alias_path,
-            format!("status=active\ndata_folder={}\n", missing.display()),
-        )
-        .unwrap();
-        std::env::remove_var("APPIMAGE");
-        // App home = `home` (alias lives here); default_root is a different folder.
-        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-        initialize_vault_root(home.path()).unwrap();
-
-        let err = discover_bootstrap_root().unwrap_err();
+        // The first run keeps its preferences in memory: nothing is made.
+        crate::logging::reset_vault_root_ready();
         assert!(
-            matches!(
-                err,
-                UprivError::VaultRootAliasInvalid(_)
-                    | UprivError::Io(_)
-                    | UprivError::VaultRootIncomplete { .. }
-            ),
-            "expected alias open failure, got {err:?}"
+            save_app_settings_session(&AppSettings::default(), &AppListChanges::default())
+                .unwrap()
+                .is_none()
         );
+        assert!(!home.path().join(".upriv").exists());
 
-        let loaded = load_app_settings().unwrap();
-        assert!(!loaded.on_disk);
-        assert_eq!(
-            loaded.settings.app.vault_root_mode,
-            VaultRootMode::CustomRoot
+        initialize_vault_root(home.path()).unwrap();
+        let mut settings = AppSettings::default();
+        settings.ui.locale = "es".into();
+        assert!(
+            save_app_settings_session(&settings, &AppListChanges::default())
+                .unwrap()
+                .is_some()
         );
-        assert!(loaded.settings.app.upriv_root_path.contains("gone-custom"));
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
-        let _ = default_root;
+        let raw = crate::host_fs::read_to_string(home.path().join(".upriv/settings.toml")).unwrap();
+        assert!(raw.contains("locale = \"es\""));
     }
 
     #[test]
-    fn save_session_default_root_writes_default_root_not_old_custom() {
+    fn a_session_save_after_the_data_folder_is_gone_fails_loud() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
-        let home = tempfile::tempdir().unwrap();
-        let custom = tempfile::tempdir().unwrap();
-        initialize_vault_root(home.path()).unwrap();
-        initialize_vault_root(custom.path()).unwrap();
-        write_vault_root_alias(home.path(), custom.path()).unwrap();
-        std::env::remove_var("APPIMAGE");
-        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-
-        crate::host_fs::write(
-            custom.path().join(".upriv/settings.toml"),
-            r#"
-[package]
-version = 1
-[ui]
-locale = "en"
-[logging]
-enabled = true
-"#,
-        )
-        .unwrap();
-
-        let mut settings = AppSettings::default();
-        settings.ui.locale = "pt-BR".into();
-        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
-        settings.app.upriv_root_path.clear();
-        assert!(save_app_settings_session(&settings).unwrap());
-
-        let default_root_raw =
-            crate::host_fs::read_to_string(home.path().join(".upriv/settings.toml")).unwrap();
-        assert!(default_root_raw.contains("pt-BR"));
-        let custom_raw =
-            crate::host_fs::read_to_string(custom.path().join(".upriv/settings.toml")).unwrap();
-        assert!(!custom_raw.contains("pt-BR"));
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
-    }
-
-    #[test]
-    fn save_session_missing_upriv_returns_not_found() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
+        let _env = crate::paths::EnvGuard::capture(&[
+            "APPIMAGE",
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            "UPRIV_VAULT_ROOT",
+        ]);
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
+        std::env::remove_var("UPRIV_VAULT_ROOT");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
         initialize_vault_root(home.path()).unwrap();
-
-        let mut settings = AppSettings::default();
-        settings.ui.locale = "en".into();
-        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
-        assert!(save_app_settings_session(&settings).unwrap());
+        crate::logging::log_vault_root_ready("default", &home.path().display().to_string());
 
         crate::host_fs::remove_dir_all(home.path().join(".upriv")).unwrap();
-
-        let err = save_app_settings_session(&settings).unwrap_err();
-        assert!(
-            matches!(err, UprivError::VaultRootNotFound(_)),
-            "expected VaultRootNotFound after deleting .upriv, got {err:?}"
-        );
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+        let err = save_app_settings_session(&AppSettings::default(), &AppListChanges::default())
+            .unwrap_err();
+        crate::logging::reset_vault_root_ready();
+        assert!(matches!(err, UprivError::VaultRootNotFound(_)), "{err:?}");
     }
 
     #[test]
-    fn save_session_empty_custom_path_is_soft_false() {
+    fn an_incomplete_data_folder_is_not_saved_over() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
+        let _env = crate::paths::EnvGuard::capture(&[
+            "APPIMAGE",
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            "UPRIV_VAULT_ROOT",
+        ]);
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
-        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-
-        let mut settings = AppSettings::default();
-        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
-        settings.app.upriv_root_path.clear();
-        assert!(!save_app_settings_session(&settings).unwrap());
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
-    }
-
-    #[test]
-    fn save_session_incomplete_upriv_returns_incomplete() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
-        let home = tempfile::tempdir().unwrap();
-        std::env::remove_var("APPIMAGE");
+        std::env::remove_var("UPRIV_VAULT_ROOT");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
         crate::host_fs::create_dir_all(home.path().join(".upriv")).unwrap();
-
-        let mut settings = AppSettings::default();
-        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
-        let err = save_app_settings_session(&settings).unwrap_err();
+        let err = save_app_settings_session(&AppSettings::default(), &AppListChanges::default())
+            .unwrap_err();
         assert!(
             matches!(err, UprivError::VaultRootIncomplete { .. }),
-            "expected VaultRootIncomplete after empty .upriv, got {err:?}"
+            "{err:?}"
         );
-
-        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }
 
-    fn custom_backups(path: &str) -> AppSettings {
-        let mut settings = AppSettings::default();
-        settings.backups.linux = BackupFolderRow {
-            place: BackupPlace::Custom,
-            path: path.into(),
+    #[test]
+    fn a_save_applies_list_changes_to_the_file_as_it_is_now() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let device = crate::device::this_device();
+        let Some(id) = device.id.clone() else {
+            return;
         };
-        settings
+        let drive = tempfile::tempdir().unwrap();
+        let mut lists = AppListChanges::default();
+        lists.unlocked_folders.groups.insert(
+            id.clone(),
+            crate::folder_list::GroupChange {
+                remove: false,
+                rows: Some(vec![crate::folder_list::Row {
+                    number: 1,
+                    name: "SSD".into(),
+                    path: drive.path().display().to_string(),
+                }]),
+                next_number: None,
+                selected: Some(crate::folder_list::Selection::Row(1)),
+            },
+        );
+        // The settings the window holds carry no list: the file's lists are kept.
+        let settings = load_app_settings_at(root.root()).unwrap().settings;
+        save_app_settings_at(root.root(), &settings, &lists).unwrap();
+        update_app_settings(root.root(), |settings| settings.ui.locale = "es".into()).unwrap();
+
+        let saved = load_app_settings_at(root.root()).unwrap().settings;
+        assert_eq!(saved.ui.locale, "es");
+        let group = saved.unlocked_folders.devices.here(device).unwrap();
+        assert_eq!(group.rows[0].name, "SSD");
+        assert_eq!(group.selected, crate::folder_list::Selection::Row(1));
+
+        // A save that changes no list keeps the rows.
+        save_app_settings_at(root.root(), &settings, &AppListChanges::default()).unwrap();
+        let saved = load_app_settings_at(root.root()).unwrap().settings;
+        assert_eq!(saved.unlocked_folders.devices.rows_here(device).len(), 1);
     }
 
     #[test]
-    fn a_new_default_backup_folder_must_be_a_usable_path() {
+    fn a_row_inside_upriv_is_refused_on_save() {
         let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let device = crate::device::this_device();
+        let Some(id) = device.id.clone() else {
+            return;
+        };
+        let mut lists = AppListChanges::default();
+        lists.backups.groups.insert(
+            id,
+            crate::folder_list::GroupChange {
+                remove: false,
+                rows: Some(vec![crate::folder_list::Row {
+                    number: 1,
+                    name: String::new(),
+                    path: root.root().join(".upriv/mine").display().to_string(),
+                }]),
+                next_number: None,
+                selected: None,
+            },
+        );
+        let settings = load_app_settings_at(root.root()).unwrap().settings;
         assert!(matches!(
-            refuse_unusable_backup_defaults(&root, &custom_backups("relative/folder")),
-            Err(UprivError::WorkspacePathInvalid { .. })
+            save_app_settings_at(root.root(), &settings, &lists),
+            Err(UprivError::FolderPathRefused { .. })
         ));
-        let inside = root.root().join(".upriv/mine").display().to_string();
-        assert!(matches!(
-            refuse_unusable_backup_defaults(&root, &custom_backups(&inside)),
-            Err(UprivError::WorkspacePathReserved(_))
-        ));
-    }
-
-    #[test]
-    fn a_saved_default_backup_folder_that_went_bad_never_blocks_a_save() {
-        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
-        let settings = custom_backups("relative/folder");
-        save_app_settings_with_alias_sync(root.root(), &settings, false).unwrap();
-
-        refuse_unusable_backup_defaults(&root, &settings).unwrap();
     }
 }

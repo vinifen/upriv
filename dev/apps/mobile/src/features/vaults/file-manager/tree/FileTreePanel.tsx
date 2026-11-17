@@ -1111,7 +1111,7 @@ const FileTreeRow = memo(function FileTreeRow({
           {osFolderAvailable && folderMark !== "none" ? (
             <MenuActionItem
               icon="file-manager"
-              label={t("modal.file_manager.context.open_system")}
+              label={t("modal.file_manager.context.show_in_unlocked_folder")}
               onPress={() => actions.openInSystemFileManager(path)}
             />
           ) : null}

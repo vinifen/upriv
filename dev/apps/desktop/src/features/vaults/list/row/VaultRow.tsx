@@ -31,6 +31,7 @@ import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
+import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
@@ -61,6 +62,10 @@ interface VaultRowProps {
   onUnlockVault: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
   onStopWork: (vault: VaultListItem) => void;
+  /** Check a plain-text folder on record again. */
+  onPlainRecordRetry: () => void;
+  /** Forget a plain-text folder on record. */
+  onPlainRecordForget: (vault: VaultListItem, token: string) => void;
 }
 
 function listWidthEstimate(): number {
@@ -90,6 +95,8 @@ export function VaultRow({
   onUnlockVault,
   onCloseNow,
   onStopWork,
+  onPlainRecordRetry,
+  onPlainRecordForget,
 }: VaultRowProps) {
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
@@ -234,6 +241,11 @@ export function VaultRow({
                 }
               />
             </div>
+            <VaultPlainRecordLine
+              vault={vault}
+              onRetry={onPlainRecordRetry}
+              onForget={onPlainRecordForget}
+            />
           </div>
         </div>
       </div>

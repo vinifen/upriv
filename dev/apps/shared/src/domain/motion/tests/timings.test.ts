@@ -5,7 +5,6 @@ import {
   DOCK_FADE_MS,
   FILE_MANAGER_LONG_PRESS_MS,
   FILE_MANAGER_LONG_PRESS_MOVE_PX,
-  FILE_MANAGER_DROP_EXPAND_MS,
   FILE_MANAGER_PICKER_CACHE_WIPE_RETRY_MS,
   VAULT_LIST_DRAG_THRESHOLD_PX,
   GROUP_COLLAPSE_MS,
@@ -36,8 +35,7 @@ describe("motion timings", () => {
     expect(FILE_MANAGER_LONG_PRESS_MOVE_PX).toBe(6);
   });
 
-  it("dwells before expanding a folder under a drop and retries picker-cache wipes", () => {
-    expect(FILE_MANAGER_DROP_EXPAND_MS).toBe(400);
+  it("retries picker-cache wipes", () => {
     expect(FILE_MANAGER_PICKER_CACHE_WIPE_RETRY_MS).toBe(8000);
   });
 

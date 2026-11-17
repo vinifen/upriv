@@ -1,4 +1,4 @@
-import type { BackupFolderStatus } from "../../domain/backups";
+import type { AttachAnswer, FolderSwitch } from "../../domain/folder-lists";
 import type { PlainCloseSummary } from "../../domain/vault-plain";
 import type {
   VaultPipelineError,
@@ -18,8 +18,8 @@ export interface CloseVaultOutcome {
   backupFailed: boolean;
   /** Why the close backup was not written. Null when it succeeded or was skipped. */
   backupFailure: BackupFailureReason | null;
-  /** Why the close backup went to the data folder and not the chosen one. */
-  backupFallback: BackupFolderStatus | null;
+  /** The backup folder selections this close's backup switched because a folder failed. */
+  backupSwitches: FolderSwitch[];
   plain: PlainCloseSummary | null;
 }
 
@@ -52,13 +52,14 @@ export interface VaultLifecycleService {
 
   /**
    * Unlock as the job `job`. A stop rejects with `job_cancelled` and leaves the
-   * vault closed (a plaintext folder already being filled is wiped).
+   * vault closed (a plaintext folder already being filled is wiped). Resolves
+   * with the unlocked folder selections a plain-text open switched.
    */
   runOpeningPipeline(
     vaultId: string,
     onStep: (stepIndex: number) => void,
     job: string,
-  ): Promise<void>;
+  ): Promise<FolderSwitch[]>;
   /** A close has no time limit; Close now (`hurryClose`) is its stop. */
   runClosingPipeline(
     vaultId: string,
@@ -68,8 +69,16 @@ export interface VaultLifecycleService {
   /** Tell the close running for this vault to finish the Close now way. False when none runs. */
   hurryClose(vaultId: string): Promise<boolean>;
 
-  /** Virtual mount path shown until the platform opens the OS file manager. */
-  resolveWorkspacePath(displayName: string, parentPath?: string | null): string;
+  /**
+   * Mount an open encrypted vault's unlocked folder, as the job `job`, walking
+   * its chain. Called after every encrypted open on desktop, outside the
+   * open/close queue; core alone decides whether a folder is wanted. A close
+   * stops it. Phones mount no unlocked folder and leave it out.
+   */
+  attachUnlockedFolder?(vaultId: string, job: string): Promise<AttachAnswer>;
+
+  /** Forget a plain-text folder on record. Its files stay as they are. */
+  forgetPlainRecord(vaultId: string, token: string): Promise<void>;
 
   /** Pre-flight password check before starting a lifecycle pipeline (mock or RPC-backed). */
   validateLifecyclePassword(password: string): boolean;

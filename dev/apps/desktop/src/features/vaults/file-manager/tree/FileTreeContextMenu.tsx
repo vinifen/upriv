@@ -84,7 +84,7 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
       {
         id: "open-system",
         icon: "file-manager",
-        label: t("modal.file_manager.context.open_system"),
+        label: t("modal.file_manager.context.show_in_unlocked_folder"),
         onSelect: () => void fm.openInSystemFileManager(path),
       },
       {

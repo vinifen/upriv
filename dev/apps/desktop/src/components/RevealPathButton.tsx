@@ -6,6 +6,26 @@ import { useTranslation } from "@/i18n";
 import { revealFailureKey } from "@/lib/revealInOs";
 import { rpcRevealOsPath } from "@/lib/rpc";
 
+/**
+ * Opening a folder in Finder, Explorer, or the desktop file manager, for a
+ * button or a menu item: `locate` gives the absolute OS path a path opens at
+ * (`null` when it opens nowhere), `open` opens it, and a failure shows in
+ * `toast`, which the caller renders once.
+ */
+export function useRevealFolder() {
+  const { t } = useTranslation();
+  const { toast, show, dismiss } = useToast();
+  const locate = (path: string | null | undefined): string | null => {
+    const location = revealableLocation(path);
+    return location && isAbsoluteOsFilesystemPath(location) ? location : null;
+  };
+  const open = async (location: string) => {
+    const failure = await revealFailureKey(() => rpcRevealOsPath(location));
+    if (failure) show(t(failure));
+  };
+  return { locate, open, toast: <Toast toast={toast} onDismiss={dismiss} /> };
+}
+
 /** Opens an absolute OS path in Finder, Explorer, or the desktop file manager. */
 export function RevealPathButton({
   path,
@@ -19,15 +39,12 @@ export function RevealPathButton({
   row?: boolean;
 }) {
   const { t } = useTranslation();
-  const { toast, show, dismiss } = useToast();
-  const location = revealableLocation(path);
-  if (!location || !isAbsoluteOsFilesystemPath(location)) return null;
+  const reveal = useRevealFolder();
+  const location = reveal.locate(path);
+  if (!location) return null;
 
-  const open = async () => {
-    const failure = await revealFailureKey(() => rpcRevealOsPath(location));
-    if (failure) show(t(failure));
-  };
-  const label = t("modal.file_manager.context.open_system");
+  const open = () => void reveal.open(location);
+  const label = t("action.open_folder");
 
   return (
     <>
@@ -35,7 +52,7 @@ export function RevealPathButton({
         <button
           type="button"
           aria-label={label}
-          onClick={() => void open()}
+          onClick={open}
           className="inline-flex w-10 shrink-0 items-center justify-center text-on-surface-variant outline-none hover:bg-surface-container-high hover:text-on-surface active:bg-surface-container-high"
         >
           <Icon name="file-manager" size={18} />
@@ -46,16 +63,16 @@ export function RevealPathButton({
           size="row"
           variant="row-action"
           className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
-          onClick={() => void open()}
+          onClick={open}
         >
           <Icon name="file-manager" size={18} />
         </IconButton>
       ) : (
-        <IconButton label={label} size="md" variant="ghost" onClick={() => void open()}>
+        <IconButton label={label} size="md" variant="ghost" onClick={open}>
           <Icon name="file-manager" size={18} />
         </IconButton>
       )}
-      <Toast toast={toast} onDismiss={dismiss} />
+      {reveal.toast}
     </>
   );
 }

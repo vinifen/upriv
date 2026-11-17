@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { backupEntryKey, type ChosenBackupFolder, type VaultBackupEntry } from "../domain";
+import type { VaultBackupSection } from "../domain";
 import type { BackupService } from "../services";
 
+/** A vault's backups, one section per folder, and what the Backups window does with them. */
 export function useVaultBackups(
   backupService: BackupService,
   vaultId: string | null,
@@ -9,15 +10,14 @@ export function useVaultBackups(
   /** Bumped when a list-owned Back up now finishes, so an open modal reloads. */
   refreshToken = 0,
 ) {
-  const [backups, setBackups] = useState<VaultBackupEntry[]>([]);
-  const [chosen, setChosen] = useState<ChosenBackupFolder | null>(null);
+  const [sections, setSections] = useState<VaultBackupSection[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const requestIdRef = useRef(0);
   const busyGenRef = useRef(0);
-  const backupsRef = useRef(backups);
-  backupsRef.current = backups;
+  const sectionsRef = useRef(sections);
+  sectionsRef.current = sections;
   const vaultIdRef = useRef(vaultId);
   vaultIdRef.current = vaultId;
 
@@ -27,8 +27,7 @@ export function useVaultBackups(
 
   const reload = useCallback(async () => {
     if (!vaultId) {
-      setBackups([]);
-      setChosen(null);
+      setSections([]);
       setError(null);
       setIsLoading(false);
       return;
@@ -39,8 +38,7 @@ export function useVaultBackups(
     try {
       const listing = await backupService.listBackups(vaultId);
       if (requestId !== requestIdRef.current) return;
-      setBackups(listing.backups);
-      setChosen(listing.chosen);
+      setSections(listing.sections);
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       setError(err);
@@ -56,14 +54,12 @@ export function useVaultBackups(
     setIsBusy(false);
     if (!open || !vaultId) {
       invalidate();
-      setBackups([]);
-      setChosen(null);
+      setSections([]);
       setError(null);
       setIsLoading(false);
       return;
     }
-    setBackups([]);
-    setChosen(null);
+    setSections([]);
     setError(null);
     void reload().catch(() => undefined);
     return () => {
@@ -80,75 +76,82 @@ export function useVaultBackups(
     void reload().catch(() => undefined);
   }, [open, refreshToken, reload, vaultId]);
 
+  /** Run one change for this vault, then read the list again. */
+  const change = useCallback(
+    async (work: (vaultId: string) => Promise<unknown>) => {
+      if (!vaultId) return;
+      const startedFor = vaultId;
+      const busyGen = ++busyGenRef.current;
+      setIsBusy(true);
+      setError(null);
+      try {
+        await work(startedFor);
+        if (busyGen !== busyGenRef.current || vaultIdRef.current !== startedFor) return;
+        await reload();
+      } catch (err) {
+        if (busyGen !== busyGenRef.current || vaultIdRef.current !== startedFor) return;
+        setError(err);
+        throw err;
+      } finally {
+        if (busyGen === busyGenRef.current) setIsBusy(false);
+      }
+    },
+    [reload, vaultId],
+  );
+
+  /** Keys the list shows: a change never names a backup the window did not list. */
+  const listed = useCallback((keys: readonly string[]) => {
+    const known = new Set(
+      sectionsRef.current.flatMap((section) => section.entries.map((entry) => entry.key)),
+    );
+    return keys.length > 0 && keys.every((key) => known.has(key));
+  }, []);
+
   const deleteBackups = useCallback(
-    async (stamps: readonly string[]) => {
-      if (!vaultId || stamps.length === 0) return;
-      const allowed = new Set(backupsRef.current.map((entry) => backupEntryKey(entry, vaultId)));
-      if (stamps.some((stamp) => !allowed.has(stamp))) return;
-      const startedFor = vaultId;
-      const busyGen = ++busyGenRef.current;
-      setIsBusy(true);
-      setError(null);
-      try {
-        await backupService.deleteBackups(startedFor, stamps);
-        if (busyGen !== busyGenRef.current) return;
-        if (vaultIdRef.current !== startedFor) return;
-        await reload();
-      } catch (err) {
-        if (busyGen !== busyGenRef.current) return;
-        if (vaultIdRef.current !== startedFor) return;
-        setError(err);
-        throw err;
-      } finally {
-        if (busyGen === busyGenRef.current) setIsBusy(false);
-      }
+    async (keys: readonly string[]) => {
+      if (!listed(keys)) return;
+      await change((id) => backupService.deleteBackups(id, keys));
     },
-    [backupService, reload, vaultId],
+    [backupService, change, listed],
   );
 
-  /** Promote standard backups to saves one by one, then reload the list once. */
+  /** Promote standard backups to saves one by one, then read the list once. */
   const promoteToSave = useCallback(
-    async (stamps: readonly string[]) => {
-      if (!vaultId || stamps.length === 0) return;
-      const startedFor = vaultId;
-      const busyGen = ++busyGenRef.current;
-      setIsBusy(true);
-      setError(null);
-      try {
-        for (const stamp of stamps) {
-          await backupService.promoteToSave(startedFor, stamp);
-          if (busyGen !== busyGenRef.current) return;
-          if (vaultIdRef.current !== startedFor) return;
-        }
-        await reload();
-      } catch (err) {
-        if (busyGen !== busyGenRef.current) return;
-        if (vaultIdRef.current !== startedFor) return;
-        setError(err);
-        throw err;
-      } finally {
-        if (busyGen === busyGenRef.current) setIsBusy(false);
-      }
+    async (keys: readonly string[]) => {
+      if (!listed(keys)) return;
+      await change(async (id) => {
+        for (const key of keys) await backupService.promoteToSave(id, key);
+      });
     },
-    [backupService, reload, vaultId],
+    [backupService, change, listed],
   );
 
-  /** Use the chosen folder again after its folder there went away, then read it. */
-  const reuseFolder = useCallback(async () => {
-    if (!vaultId) return;
-    await backupService.reuseFolder(vaultId);
-    await reload();
-  }, [backupService, reload, vaultId]);
+  /** Name a backup, which pins it, or take its name away. */
+  const renameBackup = useCallback(
+    async (key: string, name: string) => {
+      if (!listed([key])) return;
+      await change((id) => backupService.renameBackup(id, key, name));
+    },
+    [backupService, change, listed],
+  );
+
+  /** Stop listing a folder that cannot be reached. Its files stay. */
+  const forgetFolder = useCallback(
+    async (folder: string) => {
+      await change((id) => backupService.forgetFolder(id, folder));
+    },
+    [backupService, change],
+  );
 
   return {
-    backups,
-    chosen,
+    sections,
     isLoading,
     isBusy,
     error,
     deleteBackups,
     promoteToSave,
+    renameBackup,
+    forgetFolder,
     resetBackups: reload,
-    reuseFolder,
   };
 }

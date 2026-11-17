@@ -2,7 +2,9 @@ import type { AppSettingsService } from "./app-settings/AppSettingsService";
 import type { BackupService } from "./backup/BackupService";
 import type { CreateVaultService } from "./vault-create/CreateVaultService";
 import type { DataFolderService } from "./data-folder/DataFolderService";
+import type { DeviceService } from "./device/DeviceService";
 import type { ExportFolderGrants } from "./export-folders/ExportFolderGrants";
+import type { FolderListService } from "./folder-lists/FolderListService";
 import type { JobService } from "./jobs/JobService";
 import type { VaultFileSystemService } from "./filesystem/VaultFileSystemService";
 import type { VaultLifecycleService } from "./lifecycle/VaultLifecycleService";
@@ -14,13 +16,17 @@ import type { VaultSecurityService } from "./vault-security/VaultSecurityService
 
 /** Application service layer — platform selects mock vs native implementations. */
 export interface AppServices {
+  /** This device as core knows it. */
+  device: DeviceService;
   vault: VaultService;
   vaultGroups: VaultGroupService;
   /**
-   * Vault-root discovery/setup. Mutating calls belong in settings / gate flows
-   * (see `VaultRootService` JSDoc).
+   * The data folder and its list. `apply` belongs to Setup, the Gate's
+   * screens, and the Data folder window (see `VaultRootService`).
    */
   vaultRoot: VaultRootService;
+  /** The status of the unlocked folder and backup rows, and a vault's unlocked folder here. */
+  folderLists: FolderListService;
   appSettings: AppSettingsService;
   backups: BackupService;
   /**

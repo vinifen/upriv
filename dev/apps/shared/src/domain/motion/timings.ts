@@ -33,8 +33,6 @@ export const MARKDOWN_COPY_DOUBLE_TAP_MS = 500;
  * parses the whole note, which is too slow to run on every key.
  */
 export const MARKDOWN_OUTLINE_SETTLE_MS = 300;
-/** Hover dwell before expanding a folder under a mobile explorer drop. */
-export const FILE_MANAGER_DROP_EXPAND_MS = 400;
 /** Retry OS-picker cache deletes while the file manager is mounted. */
 export const FILE_MANAGER_PICKER_CACHE_WIPE_RETRY_MS = 8000;
 

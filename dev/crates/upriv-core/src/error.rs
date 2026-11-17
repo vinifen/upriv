@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::folder_list::PathIssue;
+
 #[derive(Debug, Error)]
 pub enum UprivError {
     /// Path is not a vault-root (missing `.upriv/settings.toml`).
@@ -15,9 +17,18 @@ pub enum UprivError {
     #[error("vault root incomplete at {path}: {detail}")]
     VaultRootIncomplete { path: PathBuf, detail: String },
 
-    /// `.upriv-data-folder` alias exists but does not point at a valid vault-root.
-    #[error("vault root alias invalid: {0}")]
-    VaultRootAliasInvalid(PathBuf),
+    /// The data folder list in the app home cannot be read as one.
+    #[error("data folder list unreadable: {detail}")]
+    DataFolderListInvalid { detail: String },
+
+    /// The folder a data folder list selects cannot hold a data folder now.
+    #[error("this folder cannot hold a data folder now: {}", .0.as_str())]
+    DataFolderUnavailable(crate::folder_probe::FolderState),
+
+    /// A vault is open, opening, closing, or being created, or the data
+    /// folder is being exported: the data folder in use cannot change.
+    #[error("wait until open, close, create, export, password change, and unlock-RAM change finish before switching data folder")]
+    VaultRootBusy,
 
     /// No vault directory / id under the vault-root (vault layer — not Gate).
     /// Mid-session: toast + invalidate that vault session; do not reopen VaultRootGate.
@@ -72,15 +83,6 @@ pub enum UprivError {
     #[error("vault store invalid at {path}: {detail}")]
     VaultStoreInvalid { path: PathBuf, detail: String },
 
-    /// This system has not confirmed the plaintext folder at `path` for this
-    /// vault. Nothing was written. The app shows the path and what kind of
-    /// place it is, and opens again with that path once the user agrees.
-    #[error("confirm the plaintext folder at {path}")]
-    PlainDestinationUnconfirmed {
-        path: PathBuf,
-        class: crate::vault::PlainFolderClass,
-    },
-
     /// The plaintext folder cannot be placed at `path`.
     #[error("plaintext folder refused at {path}: {}", reason.as_str())]
     PlainDestinationInvalid {
@@ -105,22 +107,6 @@ pub enum UprivError {
     /// What was written is wiped again.
     #[error("{count} files could not be written to the plaintext folder")]
     PlainFolderUnwritable { count: usize },
-
-    /// Workspace / mount path is not absolute or otherwise invalid.
-    #[error("workspace path invalid at {path}: {detail}")]
-    WorkspacePathInvalid { path: PathBuf, detail: String },
-
-    /// Workspace / mount path sits under a reserved `.upriv/` system directory.
-    #[error("workspace path reserved: {0}")]
-    WorkspacePathReserved(PathBuf),
-
-    /// App `[workspace].path` is unset while a vault needs the default mount parent.
-    #[error("workspace path unset")]
-    WorkspaceUnset,
-
-    /// Configured workspace path is missing or not usable at open time.
-    #[error("workspace unavailable: {0}")]
-    WorkspaceUnavailable(PathBuf),
 
     /// `log_get` refused to load a very large file body into memory.
     #[error("log_file_too_large: {size} bytes (max {max}) at {path}")]
@@ -250,6 +236,77 @@ pub enum UprivError {
     /// being written. Nothing is replaced.
     #[error("the chosen folder already has {0}")]
     DataFolderExportNameTaken(PathBuf),
+
+    /// This device has no ID for this run, so its folder lists are not used
+    /// and a plain-text vault does not open.
+    #[error("this device has no ID")]
+    DeviceUnknown,
+
+    /// Another device still has a plain-text folder of this vault on record.
+    /// The vault cannot be deleted until that folder is wiped there or forgotten.
+    #[error("plain-text files of this vault remain on device {device} at {path}")]
+    VaultPlainElsewhere {
+        device: String,
+        system: crate::device::DeviceSystem,
+        path: String,
+    },
+
+    /// This device recorded a plain-text folder of this vault on a drive that
+    /// cannot be proven here: unplugged, not answering, or another drive in
+    /// its place. The vault does not open until the drive is back or the
+    /// record is forgotten.
+    #[error(
+        "plain-text files of this vault are on device {device} at {path}, which cannot be reached"
+    )]
+    PlainFolderUnreachable {
+        device: String,
+        system: crate::device::DeviceSystem,
+        path: String,
+    },
+
+    /// A change to a folder list that breaks its rules: row numbers, or a
+    /// selection that names no row.
+    #[error("folder list change refused: {detail}")]
+    FolderListInvalid { detail: String },
+
+    /// A row's path that its list refuses for its device's system.
+    #[error("folder path refused ({}): {path}", issue.as_str())]
+    FolderPathRefused { path: String, issue: PathIssue },
+
+    /// Two rows of one device group, or a row and the folder of a fixed
+    /// choice, name the same folder.
+    #[error("folder already in the list: {path}")]
+    FolderPathDuplicate { path: String },
+
+    /// An unlocked folder row that an open vault uses right now.
+    #[error("a vault is open in {path}")]
+    FolderInUse { path: String },
+
+    /// A plain-text vault with no unlocked folder selected on this device.
+    #[error("no unlocked folder is selected on this device")]
+    UnlockedFolderUnset,
+
+    /// No choice of the unlocked folder chain can take the vault's folder.
+    #[error("no unlocked folder can take this vault: {0}")]
+    UnlockedFolderUnavailable(PathBuf),
+
+    /// FUSE or WinFsp is not installed: no encrypted vault gets an unlocked folder.
+    #[error("the unlocked folder driver is not installed")]
+    MountDriverMissing,
+
+    /// The folder's file system cannot hold an encrypted vault's unlocked
+    /// folder (exFAT or FAT on Windows).
+    #[error("this file system cannot hold an unlocked folder: {0}")]
+    MountFilesystemUnsupported(PathBuf),
+
+    /// No folder of the backup chain could take the zip, the data folder
+    /// included. The reason is the selected folder's.
+    #[error("no backup folder can take a zip now: {}", .0.as_str())]
+    BackupUnavailable(crate::folder_probe::FolderState),
+
+    /// A backup name that is too long or holds only characters a system refuses.
+    #[error("this backup name cannot be used")]
+    BackupNameInvalid,
 
     #[error(transparent)]
     Io(#[from] std::io::Error),

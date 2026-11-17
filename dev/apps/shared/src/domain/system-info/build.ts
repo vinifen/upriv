@@ -1,11 +1,13 @@
 import type { I18nKey } from "../../i18n/catalog";
+import { deviceName, deviceSystemI18nKey, isPhoneSystem } from "../device";
 import {
-  appWorkspacePlace,
-  suggestedDefaultWorkspacePath,
-  workspaceContainerPath,
-  workspaceSystemHasShortcut,
-} from "../workspace";
-import { backupFolderSystem } from "../backups/folders";
+  APP_BACKUP_LIST,
+  APP_UNLOCKED_LIST,
+  DATA_FOLDER_LIST,
+  selectionHere,
+  selectionLabel,
+  type DeviceGroups,
+} from "../folder-lists";
 import type { AppDistribution } from "../vault-root";
 import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
 import type { SystemInfoSnapshot } from "./types";
@@ -48,15 +50,10 @@ const VIEW_MODE_KEYS = {
   blocks: "vault.list.view.mode.blocks",
 } as const;
 
-const ROOT_MODE_KEYS = {
-  default_root: "modal.info.value.root_mode.default",
-  custom_root: "modal.info.value.root_mode.custom",
-} as const;
-
 const ROOT_SOURCE_KEYS = {
   explicit: "modal.info.value.root_source.explicit",
-  custom_root: "modal.info.value.root_source.custom",
-  default_root: "modal.info.value.root_source.default",
+  row: "modal.info.value.root_source.row",
+  default: "modal.info.value.root_source.default",
 } as const;
 
 /** Required WinFsp redistribution notice. Kept in English in every locale. */
@@ -72,17 +69,9 @@ function emptyDash(value: string | undefined | null): string {
   return trimmed ? trimmed : "—";
 }
 
-/** Path Info shows for this system's workspace place. Unset has no path. */
-function workspaceInfoPath(
-  row: SystemInfoSnapshot["workspace"][SystemInfoSnapshot["workspaceSystem"]],
-  root: SystemInfoSnapshot["root"],
-): string {
-  const place = appWorkspacePlace(row);
-  if (place === "custom") return workspaceContainerPath(row.path);
-  if (place === "beside" && root.status === "found") {
-    return suggestedDefaultWorkspacePath(root.rootPath);
-  }
-  return "";
+/** Rows this device holds in a list. */
+function rowsHere<F extends string>(groups: DeviceGroups<F>, id: string | null): number {
+  return id ? (groups[id]?.rows.length ?? 0) : 0;
 }
 
 export function buildSystemInfoSections(
@@ -91,21 +80,33 @@ export function buildSystemInfoSections(
 ): InfoSection[] {
   const {
     app,
+    device,
     root,
-    rootMode,
+    dataFolders,
     inventory,
     ui,
     logging,
-    workspace,
+    unlockedFolders,
     backups,
-    workspaceSystem,
     lastOpenedVault,
     paths,
   } = snapshot;
-  const workspaceRow = workspace[workspaceSystem];
-  const workspacePath = workspaceInfoPath(workspaceRow, root);
-  const backupSystem = backupFolderSystem(workspaceSystem);
-  const backupRow = backupSystem ? backups[backupSystem] : null;
+  const here = device.id;
+  const groupHere = <F extends string>(groups: DeviceGroups<F>) =>
+    here ? groups[here] : undefined;
+  const dataFolderInUse =
+    root.status === "found" && root.source === "explicit"
+      ? t("modal.info.value.root_source.explicit")
+      : selectionLabel(
+          selectionHere(dataFolders.groups, here, DATA_FOLDER_LIST),
+          groupHere(dataFolders.groups),
+          t,
+        );
+  const rowCounts = t("modal.info.value.rows_here", {
+    data: rowsHere(dataFolders.groups, here),
+    unlocked: rowsHere(unlockedFolders.devices, here),
+    backups: rowsHere(backups.devices, here),
+  });
 
   const distribution = app.distribution != null ? t(DISTRIBUTION_KEYS[app.distribution]) : "—";
 
@@ -133,23 +134,6 @@ export function buildSystemInfoSections(
             label: t("modal.info.field.root_status"),
             value: t("modal.info.value.root_status.needs_setup"),
           },
-          withOpenPath(
-            {
-              id: "default_root_anchor",
-              label: t("modal.info.field.default_root_anchor"),
-              value: root.defaultRootAnchor,
-            },
-            root.defaultRootAnchor,
-          ),
-          withOpenPath(
-            { id: "alias_path", label: t("modal.info.field.alias_path"), value: root.aliasPath },
-            root.aliasPath,
-          ),
-          {
-            id: "distribution",
-            label: t("modal.info.field.distribution"),
-            value: t(DISTRIBUTION_KEYS[root.distribution]),
-          },
         ];
 
   return [
@@ -164,7 +148,7 @@ export function buildSystemInfoSections(
           label: t("modal.info.field.version_source"),
           value: t(app.versionOffline ? "modal.info.value.offline" : "modal.info.value.online"),
         },
-        ...(workspaceSystem === "windows"
+        ...(device.system === "windows"
           ? [
               {
                 id: "winfsp",
@@ -177,15 +161,42 @@ export function buildSystemInfoSections(
       ],
     },
     {
+      id: "this_device",
+      title: t("modal.info.section.this_device"),
+      fields: [
+        {
+          id: "device_name",
+          label: t("modal.info.field.device_name"),
+          value: deviceName(device.id, device.system, t),
+        },
+        {
+          id: "device_system",
+          label: t("modal.info.field.device_system"),
+          value: t(deviceSystemI18nKey(device.system)),
+        },
+        {
+          id: "device_id",
+          label: t("modal.info.field.device_id"),
+          // The hashed ID itself: the key of this device's group in every list.
+          value: device.id ?? t("modal.info.value.device_id.unknown"),
+        },
+      ],
+    },
+    {
       id: "data_folder",
       title: t("modal.info.section.data_folder"),
       fields: [
         {
-          id: "root_mode",
-          label: t("modal.info.field.root_mode"),
-          value: t(ROOT_MODE_KEYS[rootMode]),
+          id: "data_folder_in_use",
+          label: t("modal.info.field.data_folder_in_use"),
+          value: dataFolderInUse,
         },
         ...rootFields,
+        {
+          id: "rows_here",
+          label: t("modal.info.field.rows_here"),
+          value: rowCounts,
+        },
       ],
     },
     {
@@ -354,38 +365,36 @@ export function buildSystemInfoSections(
       ],
     },
     {
-      id: "workspace",
-      title: t("modal.info.section.workspace"),
+      id: "folders",
+      title: t("modal.info.section.folders"),
       fields: [
-        withOpenPath(
-          {
-            id: "workspace_global_path",
-            label: t("modal.info.field.workspace_global_path"),
-            value: emptyDash(workspacePath),
-          },
-          workspacePath,
-        ),
-        ...(backupRow
-          ? [
+        {
+          id: "unlocked_folder_in_use",
+          label: t("modal.info.field.unlocked_folder_in_use"),
+          value: selectionLabel(
+            selectionHere(unlockedFolders.devices, here, APP_UNLOCKED_LIST),
+            groupHere(unlockedFolders.devices),
+            t,
+          ),
+        },
+        ...(isPhoneSystem(device.system)
+          ? []
+          : [
               {
-                id: "backups_default",
-                label: t("modal.info.field.backups_default"),
-                value:
-                  backupRow.place === "custom"
-                    ? emptyDash(backupRow.path)
-                    : t("modal.app_settings.field.backups.data_folder"),
+                id: "encrypted_vaults_folder",
+                label: t("modal.info.field.encrypted_vaults_folder"),
+                value: yesNo(t, unlockedFolders.encrypted_vaults),
               },
-            ]
-          : []),
-        ...(workspaceSystemHasShortcut(workspaceSystem)
-          ? [
-              {
-                id: "workspace_mount",
-                label: t("modal.info.field.workspace_mount"),
-                value: yesNo(t, workspace.file_manager_folder),
-              },
-            ]
-          : []),
+            ]),
+        {
+          id: "backup_folder_in_use",
+          label: t("modal.info.field.backup_folder_in_use"),
+          value: selectionLabel(
+            selectionHere(backups.devices, here, APP_BACKUP_LIST),
+            groupHere(backups.devices),
+            t,
+          ),
+        },
         {
           id: "last_opened_vault",
           label: t("modal.app_settings.field.last_opened_vault"),

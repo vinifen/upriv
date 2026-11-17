@@ -17,6 +17,10 @@
 //!   once instead of waiting behind the copy.
 //! - `upriv-import`: file imports and the `.7z` password test. One thread per
 //!   import slot (one file on a single core, up to four on a large desktop).
+//! - `upriv-folder`: the calls that reach a folder of a list (a row's status,
+//!   an unlocked folder's attach, the backup folders). Several threads, so the
+//!   rows of a list check side by side; a folder that stopped answering holds
+//!   one of them, never stdin.
 //!
 //! Light RPCs stay on the stdin loop, so `job_status` and `job_cancel` answer
 //! beside every job. Electron matches responses by `id`. One Argon2 at a time:
@@ -121,6 +125,10 @@ fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> Wir
     )
 }
 
+/// Threads of the folder lane: enough for the rows of a list to check side by
+/// side while a stuck drive holds one.
+const FOLDER_LANE_SLOTS: usize = 4;
+
 fn spawn_worker_pool(
     count: usize,
     thread_name: &'static str,
@@ -208,8 +216,8 @@ fn run() -> io::Result<()> {
     let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
     let (data_folder_tx, data_folder_join) =
         spawn_named_worker("upriv-data-folder", Arc::clone(&stdout));
-    let (backup_folder_tx, backup_folder_join) =
-        spawn_named_worker("upriv-backup-folder", Arc::clone(&stdout));
+    let (folder_tx, folder_joins) =
+        spawn_worker_pool(FOLDER_LANE_SLOTS, "upriv-folder", Arc::clone(&stdout));
     let import_count = upriv_core::import_slots();
     let (import_tx, import_joins) =
         spawn_worker_pool(import_count, "upriv-import", Arc::clone(&stdout));
@@ -338,7 +346,7 @@ fn run() -> io::Result<()> {
                         HeavyLane::Pack => &pack_tx,
                         HeavyLane::Import => &import_tx,
                         HeavyLane::DataFolder => &data_folder_tx,
-                        HeavyLane::BackupFolder => &backup_folder_tx,
+                        HeavyLane::Folder => &folder_tx,
                     };
                     if tx.send(HeavyJob::Request { id, method, params }).is_err() {
                         let _ = write_out(&stdout, &internal_error_response(id));
@@ -388,11 +396,13 @@ fn run() -> io::Result<()> {
     if let Err(error) = data_folder_join.join() {
         log_stderr(format_args!("data-folder worker join panicked: {error:?}"));
     }
-    // A call stuck on a dead drive must not hold the core open: this worker is
-    // left to the process exit rather than joined.
-    let _ = backup_folder_tx.send(HeavyJob::Shutdown);
-    drop(backup_folder_tx);
-    drop(backup_folder_join);
+    // A call stuck on a dead drive must not hold the core open: these workers
+    // are left to the process exit rather than joined.
+    for _ in 0..folder_joins.len() {
+        let _ = folder_tx.send(HeavyJob::Shutdown);
+    }
+    drop(folder_tx);
+    drop(folder_joins);
     for _ in 0..import_joins.len() {
         let _ = import_tx.send(HeavyJob::Shutdown);
     }

@@ -1,4 +1,4 @@
-import { vaultBackupFolders, vaultWorkspace, type VaultSettingsConfig } from "@upriv/shared";
+import type { VaultSettingsConfig } from "@upriv/shared";
 import { cloneJson } from "../cloneJson";
 
 const DEFAULTS: VaultSettingsConfig = {
@@ -11,13 +11,13 @@ const DEFAULTS: VaultSettingsConfig = {
     hidden: false,
   },
   storage: { mode: "encrypted_dir", plain_files: "chosen" },
-  mount: vaultWorkspace(),
+  unlocked_folder: { encrypted: "inherit", devices: {} },
   backup: {
     enabled: true,
     mode: "keep_last",
     keep_last: 1,
     skip_unchanged: true,
-    ...vaultBackupFolders(),
+    devices: {},
   },
   security: {
     wipe_passes: 1,
@@ -116,7 +116,7 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
       ...custom?.vault,
     },
     storage: { ...DEFAULTS.storage, ...custom?.storage },
-    mount: { ...DEFAULTS.mount, ...custom?.mount },
+    unlocked_folder: { ...DEFAULTS.unlocked_folder, ...custom?.unlocked_folder },
     backup: { ...DEFAULTS.backup, ...custom?.backup },
     security: { ...DEFAULTS.security, ...custom?.security },
     auto_close: { ...DEFAULTS.auto_close, ...custom?.auto_close },

@@ -31,8 +31,6 @@ const EARLY_STOPS_KEPT: usize = 64;
 pub(crate) enum JobKind {
     /// Unlock a vault. A stop discards the unlock.
     VaultOpen,
-    /// Write every file of a plain-text vault into its folder on open.
-    PlainFill,
     /// A new empty vault.
     VaultCreate,
     /// A new vault from a zip, a `.7z`, files, or a backup.
@@ -53,13 +51,17 @@ pub(crate) enum JobKind {
     DataFolderCopy,
     /// The wipe of a leftover plain-text folder.
     PlainRemove,
+    /// An open encrypted vault's unlocked folder, mounted after the open.
+    UnlockedFolderAttach,
+    /// The search for a data folder that answers, after the selected one did
+    /// not at launch.
+    DataFolderSearch,
 }
 
 impl JobKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::VaultOpen => "vault_open",
-            Self::PlainFill => "plain_fill",
             Self::VaultCreate => "vault_create",
             Self::VaultImport => "vault_import",
             Self::ImportProbe => "import_probe",
@@ -72,6 +74,8 @@ impl JobKind {
             Self::DataFolderExport => "data_folder_export",
             Self::DataFolderCopy => "data_folder_copy",
             Self::PlainRemove => "plain_remove",
+            Self::UnlockedFolderAttach => "unlocked_folder_attach",
+            Self::DataFolderSearch => "data_folder_search",
         }
     }
 }

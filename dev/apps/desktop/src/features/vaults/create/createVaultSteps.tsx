@@ -32,8 +32,10 @@ import {
   type CreateVaultValidationCode,
   type PasswordWeakness,
   type VaultGroup,
-  type BackupFolderTable,
-  type WorkspaceTable,
+  type AppBackupFolders,
+  type AppUnlockedFolders,
+  type DeviceGroups,
+  type HereDevice,
 } from "@upriv/shared";
 import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
 import { useCreateVaultService } from "@/platform/services";
@@ -49,9 +51,9 @@ import {
   VaultSettingsCloseSection,
   VaultSettingsGroupSection,
   VaultSettingsKdfSection,
-  VaultSettingsMountSection,
   VaultSettingsSection,
   VaultSettingsStorageSection,
+  VaultSettingsUnlockedFolderSection,
 } from "@/components/settings";
 import { createVaultErrorI18nKey } from "@/lib/errorMessages";
 
@@ -63,19 +65,21 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   groups?: readonly VaultGroup[];
   /** Show hidden groups in the assignment picker (same toggle as the vault list). */
   includeHidden?: boolean;
-  /** Resolved vault-root for mount reserved checks (from wizard / CreateVaultModal). */
-  vaultRootPath?: string | null;
-  /** App workspace, so a new vault can follow that file manager folder. */
-  appWorkspace?: WorkspaceTable;
-  /** App default, so a new vault can say where Follow the app default goes. */
-  appBackups?: BackupFolderTable;
-  /** Selected file-manager choice still needs the WinFsp driver. */
-  onDriverAttentionChange?: (active: boolean) => void;
-  /** A typed backup folder is still being checked or does not work. */
-  onBackupFolderBlockingChange?: (blocking: boolean) => void;
+  /** This device: the steps edit its groups of the vault's folder lists. */
+  here?: HereDevice | null;
+  /** The app's unlocked folders: what Use the app's means for a new vault. */
+  appUnlocked?: AppUnlockedFolders;
+  /** The app's backup folders: what Use the app's means for a new vault. */
+  appBackups?: AppBackupFolders;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
 }
+
+/**
+ * A new vault has no lists saved yet: every row of the draft, carried ones
+ * too, is checked against the path rules.
+ */
+const NOTHING_SAVED: DeviceGroups<never> = {};
 
 let importPickGeneration = 0;
 
@@ -583,9 +587,8 @@ function CreateVaultGeneralStep({
   onChange,
   groups = NO_VAULT_GROUPS,
   includeHidden = false,
-  vaultRootPath = null,
+  here = null,
   appBackups,
-  onBackupFolderBlockingChange,
 }: StepProps) {
   const { t } = useTranslation();
   return (
@@ -606,15 +609,18 @@ function CreateVaultGeneralStep({
 
       <VaultSettingsSection title={t("modal.settings.section.backup")} defaultOpen>
         <SettingsLockedFields draft={draft}>
-          <VaultSettingsBackupSection
-            config={draft.backup}
-            appBackups={appBackups}
-            vaultRootPath={vaultRootPath}
-            saved={draft.carriedBackupFolders}
-            onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
-            onFolderBlockingChange={onBackupFolderBlockingChange}
-          />
+          {appBackups ? (
+            <VaultSettingsBackupSection
+              config={draft.backup}
+              saved={NOTHING_SAVED}
+              here={here}
+              vaultId={null}
+              appBackups={appBackups}
+              onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
+            />
+          ) : null}
         </SettingsLockedFields>
+        <FieldErrors errors={createVaultErrorsForField(errors, "backupFolder")} />
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.auto_close")} defaultOpen>
@@ -668,9 +674,8 @@ function CreateVaultAdvancedStep({
   errors,
   onChange,
   groups = NO_VAULT_GROUPS,
-  vaultRootPath = null,
-  appWorkspace,
-  onDriverAttentionChange,
+  here = null,
+  appUnlocked,
 }: StepProps) {
   const { t } = useTranslation();
   const orderId = useId();
@@ -727,18 +732,24 @@ function CreateVaultAdvancedStep({
         <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
       </VaultSettingsSection>
 
-      <VaultSettingsSection title={t("modal.settings.section.mount")}>
+      <VaultSettingsSection title={t("modal.settings.section.unlocked_folder")}>
         <SettingsLockedFields draft={draft}>
-          <VaultSettingsMountSection
-            config={draft.mount}
-            vaultRootPath={vaultRootPath}
-            plaintext={draft.storage.mode === "upriv_plain"}
-            appWorkspace={appWorkspace}
-            onDriverAttentionChange={onDriverAttentionChange}
-            onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
-          />
+          {appUnlocked ? (
+            <VaultSettingsUnlockedFolderSection
+              config={draft.unlocked_folder}
+              saved={{ ...draft.unlocked_folder, devices: NOTHING_SAVED }}
+              here={here}
+              vaultId={null}
+              appUnlocked={appUnlocked}
+              plaintext={draft.storage.mode === "upriv_plain"}
+              showUnchosen={false}
+              onChange={(patch) =>
+                onChange({ unlocked_folder: { ...draft.unlocked_folder, ...patch } })
+              }
+            />
+          ) : null}
         </SettingsLockedFields>
-        <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />
+        <FieldErrors errors={createVaultErrorsForField(errors, "unlockedFolder")} />
       </VaultSettingsSection>
     </div>
   );

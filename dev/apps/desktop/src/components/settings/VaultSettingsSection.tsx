@@ -1,7 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
-import { GROUP_COLLAPSE_MS, GROUP_EXPAND_MS } from "@upriv/shared";
-import { Icon } from "@/components/icons";
 import { Collapse } from "@/components/ui/Collapse";
+import { DisclosureChevron } from "@/components/ui/DisclosureChevron";
 
 interface VaultSettingsSectionProps {
   title: string;
@@ -52,17 +51,7 @@ export function VaultSettingsSection({
           onClick={toggle}
           className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-3 text-left sm:gap-3 sm:px-4 sm:py-4"
         >
-          <Icon
-            name="chevron-down"
-            size={18}
-            className={[
-              "shrink-0 text-on-surface-variant transition-transform motion-reduce:!transition-none",
-              open ? "rotate-0" : "-rotate-90",
-            ].join(" ")}
-            style={{
-              transitionDuration: `${open ? GROUP_EXPAND_MS : GROUP_COLLAPSE_MS}ms`,
-            }}
-          />
+          <DisclosureChevron open={open} className="text-on-surface-variant" />
           <span
             className={[
               "font-mono text-xs font-medium uppercase tracking-wide",

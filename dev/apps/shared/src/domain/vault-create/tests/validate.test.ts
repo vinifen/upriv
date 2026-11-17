@@ -5,15 +5,32 @@ import {
   isMockLifecyclePasswordValid,
   validateCreateVaultStep,
   validateAllCreateVaultSteps,
+  type CreateVaultLists,
 } from "..";
-import { vaultFolderRow, vaultWorkspace } from "../../workspace";
+import type { AppUnlockedFolders, DeviceGroups, HereDevice } from "../../folder-lists";
 import { createVaultDraftFixture } from "./fixtures";
 
-function mountOnLinux(path: string) {
+const HERE = "a".repeat(32);
+const DESK: HereDevice = { id: HERE, system: "linux" };
+const APP_UNLOCKED_OFF: AppUnlockedFolders = { encrypted_vaults: false, devices: {} };
+
+/** The lists a new vault joins on `here`, with the app's unlocked folders as given. */
+function lists(
+  appUnlocked: AppUnlockedFolders = APP_UNLOCKED_OFF,
+  here: HereDevice = DESK,
+): CreateVaultLists {
+  return { here, appUnlocked };
+}
+
+/** This device's group with one selected row at `path`. */
+function rowsHere<F extends string>(path: string): DeviceGroups<F> {
   return {
-    ...vaultWorkspace(),
-    custom_file_manager_folder: true,
-    linux: { place: "unset" as const, path },
+    [HERE]: {
+      system: "linux",
+      selected: 1,
+      next_number: 2,
+      rows: [{ number: 1, name: "", path }],
+    },
   };
 }
 
@@ -378,22 +395,27 @@ describe("validateCreateVaultStep", () => {
     ).toContain("group_name_empty");
   });
 
-  it("names what is wrong with a chosen backup folder", () => {
+  it("refuses a backup row of any device whose path cannot be used", () => {
     const withFolder = (path: string) => {
       const draft = createVaultDraftFixture();
       return {
         ...draft,
-        backup: { ...draft.backup, linux: { place: "custom" as const, path } },
+        backup: { ...draft.backup, devices: rowsHere<"inherit" | "data_folder">(path) },
       };
     };
-    expect(validateCreateVaultStep("general", withFolder(""), [])).toContain("backup_folder_empty");
-    expect(validateCreateVaultStep("general", withFolder("usb"), [])).toContain(
-      "backup_folder_not_absolute",
-    );
-    expect(
-      validateCreateVaultStep("general", withFolder("/data/.upriv/x"), [], [], "/data"),
-    ).toContain("backup_folder_reserved");
-    expect(validateCreateVaultStep("general", withFolder("/mnt/usb"), [], [], "/data")).toEqual([]);
+    for (const path of ["", "usb", "/data/.upriv/x", "/mnt/upriv-unlocked/x"]) {
+      expect(validateCreateVaultStep("general", withFolder(path), [], [], lists()), path).toContain(
+        "backup_folder_row_invalid",
+      );
+    }
+    expect(validateCreateVaultStep("general", withFolder("/mnt/usb"), [], [], lists())).toEqual([]);
+    // Core writes a new vault's lists as they are: another device's rows are
+    // checked too, against that device's system.
+    const laptop = lists(APP_UNLOCKED_OFF, { ...DESK, id: "b".repeat(32) });
+    expect(validateCreateVaultStep("general", withFolder("usb"), [], [], laptop)).toEqual([
+      "backup_folder_row_invalid",
+    ]);
+    expect(validateCreateVaultStep("general", withFolder("/mnt/usb"), [], [], laptop)).toEqual([]);
   });
 
   it("has nothing to check while backups follow the app default", () => {
@@ -416,50 +438,62 @@ describe("canSubmitCreateVault", () => {
     expect(canSubmitCreateVault(createVaultDraftFixture([], { displayName: "" }), [])).toBe(false);
   });
 
-  it("rejects a relative custom mount path", () => {
-    const draft = createVaultDraftFixture([], {
-      mount: mountOnLinux("relative/path"),
-    });
-    expect(validateCreateVaultStep("advanced", draft, [])).toContain("mount_path_not_absolute");
-    expect(canSubmitCreateVault(draft, [])).toBe(false);
-  });
-
-  it("accepts an empty mount path because it inherits the app folder", () => {
-    const draft = createVaultDraftFixture([], {
-      mount: vaultWorkspace(),
-    });
-    expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([]);
-    expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(true);
-  });
-
-  it("waits for the path when Another folder is chosen without one", () => {
-    const draft = createVaultDraftFixture([], {
-      mount: { ...vaultWorkspace(), linux: vaultFolderRow("") },
-    });
-    expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([
-      "mount_path_empty",
+  it("refuses an unlocked folder row of this device whose path cannot be used", () => {
+    const withFolder = (path: string) =>
+      createVaultDraftFixture([], {
+        unlocked_folder: { encrypted: "inherit", devices: rowsHere<"inherit">(path) },
+      });
+    expect(validateCreateVaultStep("advanced", withFolder("relative"), [], [], lists())).toEqual([
+      "unlocked_folder_row_invalid",
     ]);
-    expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(false);
+    expect(canSubmitCreateVault(withFolder("relative"), [], [], lists())).toBe(false);
+    expect(validateCreateVaultStep("advanced", withFolder("/mnt/ssd"), [], [], lists())).toEqual(
+      [],
+    );
   });
 
-  it("rejects a reserved path under vault-root", () => {
-    const draft = createVaultDraftFixture([], {
-      mount: mountOnLinux("/data/.upriv/vaults"),
-    });
-    expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toContain(
-      "mount_path_reserved",
-    );
-    expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(false);
+  it("accepts a vault that uses the app's unlocked folder", () => {
+    const draft = createVaultDraftFixture();
+    expect(validateCreateVaultStep("advanced", draft, [], [], lists())).toEqual([]);
+    expect(canSubmitCreateVault(draft, [], [], lists())).toBe(true);
   });
 
-  it("rejects absolute custom mount when vault-root is unknown", () => {
-    const draft = createVaultDraftFixture([], {
-      mount: mountOnLinux("/home/user/workspace"),
+  it("waits for a folder when the draft turns the vault's folder on and none is chosen here", () => {
+    const on = createVaultDraftFixture([], {
+      unlocked_folder: { encrypted: "on", devices: {} },
     });
-    expect(validateCreateVaultStep("advanced", draft, [], [], null)).toContain(
-      "mount_path_root_unknown",
-    );
-    expect(canSubmitCreateVault(draft, [], [], null)).toBe(false);
+    expect(validateCreateVaultStep("advanced", on, [], [], lists())).toEqual([
+      "unlocked_folder_unchosen",
+    ]);
+    expect(canSubmitCreateVault(on, [], [], lists())).toBe(false);
+
+    // A row of its own, or a folder the app chose here, gives it one.
+    const withRow = createVaultDraftFixture([], {
+      unlocked_folder: { encrypted: "on", devices: rowsHere<"inherit">("/mnt/ssd") },
+    });
+    expect(validateCreateVaultStep("advanced", withRow, [], [], lists())).toEqual([]);
+    const beside: AppUnlockedFolders = {
+      encrypted_vaults: false,
+      devices: {
+        [HERE]: { system: "linux", selected: "beside", next_number: 1, rows: [] },
+      },
+    };
+    expect(validateCreateVaultStep("advanced", on, [], [], lists(beside))).toEqual([]);
+
+    // A phone mounts no encrypted vault's folder; a plain-text vault asks where at its open.
+    const phone = lists(APP_UNLOCKED_OFF, { ...DESK, system: "android" });
+    expect(validateCreateVaultStep("advanced", on, [], [], phone)).toEqual([]);
+    const plain = {
+      ...on,
+      storage: { mode: "upriv_plain" as const, plain_files: "chosen" as const },
+    };
+    expect(validateCreateVaultStep("advanced", plain, [], [], lists())).toEqual([]);
+  });
+
+  it("leaves a vault that follows the app's switch to the app's own settings", () => {
+    const appOn: AppUnlockedFolders = { encrypted_vaults: true, devices: {} };
+    const draft = createVaultDraftFixture();
+    expect(validateCreateVaultStep("advanced", draft, [], [], lists(appOn))).toEqual([]);
   });
 
   it("allows upriv_plain on the advanced step", () => {
@@ -468,14 +502,6 @@ describe("canSubmitCreateVault", () => {
     });
     expect(validateCreateVaultStep("advanced", draft, [])).toEqual([]);
     expect(canSubmitCreateVault(draft, [])).toBe(true);
-  });
-
-  it("still submits when mount is default", () => {
-    const draft = createVaultDraftFixture([], {
-      mount: vaultWorkspace(),
-    });
-    expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([]);
-    expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(true);
   });
 });
 

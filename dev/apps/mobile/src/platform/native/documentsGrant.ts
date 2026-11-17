@@ -1,5 +1,3 @@
-import { isSafLogicalRoot } from "./androidVaultHome";
-
 /**
  * `ACTION_OPEN_DOCUMENT_TREE` result ids.
  *
@@ -9,7 +7,7 @@ import { isSafLogicalRoot } from "./androidVaultHome";
  * folder. `content://…/tree/primary%3ADocuments/document/…` grants the whole
  * Documents directory. `primary:Documents/Upriv` is the folder inside it.
  */
-export function safTreeDocumentId(uri: string): string | null {
+function safTreeDocumentId(uri: string): string | null {
   const marker = "/tree/";
   const start = uri.indexOf(marker);
   if (start < 0) return null;
@@ -41,43 +39,4 @@ export function isAndroidDocumentsUprivFolder(uri: string): boolean {
  */
 export function isAndroidDocumentsDefaultGrant(uri: string): boolean {
   return isAndroidSharedDocumentsRoot(uri) || isAndroidDocumentsUprivFolder(uri);
-}
-
-/**
- * Path to restore when the user switches to a custom folder.
- * The Documents default grant is the default radio, so restoring it snaps
- * that radio back on. The logical mount path is not a folder the user chose.
- */
-export function rememberedCustomFolderPath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed || isAndroidDocumentsDefaultGrant(trimmed) || isSafLogicalRoot(trimmed)) return "";
-  return trimmed;
-}
-
-export interface SafSwitchPlan {
-  /** Previous custom grant to release. Null keeps every existing grant. */
-  releaseUri: string | null;
-  /** Custom folder to store. Null leaves the stored value unchanged. */
-  rememberCustomUri: string | null;
-}
-
-/**
- * Moving the active data folder.
- * A custom folder that is not Documents/Upriv stays saved when the next
- * folder is the default. Choosing a different custom folder replaces it
- * and releases the previous custom grant.
- */
-export function planSafSwitch(previous: string | null | undefined, next: string): SafSwitchPlan {
-  const prevCustom = rememberedCustomFolderPath(previous ?? "");
-  const nextCustom = rememberedCustomFolderPath(next);
-  if (nextCustom) {
-    return {
-      rememberCustomUri: nextCustom,
-      releaseUri: prevCustom && prevCustom !== nextCustom ? prevCustom : null,
-    };
-  }
-  return {
-    rememberCustomUri: prevCustom || null,
-    releaseUri: null,
-  };
 }

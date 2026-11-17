@@ -2,15 +2,39 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDefaultAppSettings, type AppSettingsConfig } from "@upriv/shared";
+import {
+  createDefaultAppSettings,
+  type DataFolderApplied,
+  type DataFolderListView,
+  type DataFolderStatus,
+} from "@upriv/shared";
 import type { DataFolderExportJob } from "@upriv/shared/react";
 import type { DataFolderExportControls } from "@/features/system/data-folder-export";
 import { pressStop } from "@/lib/tests/pressStop";
 import { VaultRootDataFolderModal } from "../VaultRootDataFolderModal";
 
-let settings: AppSettingsConfig = createDefaultAppSettings();
+const HERE = "a".repeat(32);
 const pickFolder = vi.fn<(initial: string | null, title: string) => Promise<string | null>>();
-const setupDefaultRoot = vi.fn<() => Promise<{ rootPath: string }>>();
+const apply = vi.fn<() => Promise<DataFolderApplied>>();
+const adoptDataFolder = vi.fn(async () => undefined);
+
+/** This device keeps one row, `Other`; `selected` is the data folder in use. */
+function view(selected: 1 | "default"): DataFolderListView {
+  return {
+    groups: {
+      [HERE]: {
+        system: "linux",
+        selected,
+        next_number: 2,
+        rows: [{ number: 1, name: "Other", path: "/data/other" }],
+      },
+    },
+    defaultFolder: "/app",
+    explicit: null,
+  };
+}
+let listed = view("default");
+const VALID: DataFolderStatus = { state: "ok", content: "valid", details: null };
 
 vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key, locale: "en" }) }));
 vi.mock("@/lib/appVersion", () => ({
@@ -18,23 +42,23 @@ vi.mock("@/lib/appVersion", () => ({
   getSessionAppVersion: () => null,
 }));
 vi.mock("../AppSettingsContext", () => ({
-  useAppSettingsContext: () => ({ settings, patchSettings: async () => true }),
+  useAppSettingsContext: () => ({ settings: createDefaultAppSettings(), adoptDataFolder }),
 }));
 vi.mock("@/platform/services", () => {
-  // One object, as the real provider gives: effects keyed on it run once.
+  // One object each, as the real provider gives: effects keyed on them run once.
   const service = {
     pickFolder: (initial: string | null, title: string) => pickFolder(initial, title),
-    defaultRootStatus: async () => ({ status: "valid", defaultRootAnchor: "/app" }),
-    inspectAtPath: async () => ({ status: "valid" }),
-    readAlias: async () => ({ path: "/data/other" }),
+    list: async () => listed,
+    status: async () => VALID,
+    apply: () => apply(),
     suggestedCustomRootPath: async () => "",
-    setupDefaultRoot: () => setupDefaultRoot(),
   };
-  return { useVaultRootService: () => service };
+  const device = { info: async () => ({ id: HERE, system: "linux" }) };
+  return { useVaultRootService: () => service, useDeviceService: () => device };
 });
 
-const DEFAULT_TITLE = "modal.app_settings.option.upriv_root.default_root";
-const CUSTOM_TITLE = "modal.app_settings.option.upriv_root.custom_root";
+const DEFAULT_TITLE = "folder_list.choice.default";
+const ROW_TITLE = "Other";
 const EXPORT_TITLE = "modal.data_folder_export.title";
 
 function controls(patch: Partial<DataFolderExportControls> = {}): DataFolderExportControls {
@@ -92,7 +116,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   pickFolder.mockReset();
-  settings = createDefaultAppSettings();
+  apply.mockReset();
+  listed = view("default");
 });
 
 function nameInput(): HTMLInputElement {
@@ -119,6 +144,7 @@ const DEFAULT_NAME = /^upriv-\d{4}-\d{2}-\d{2}-\d{6}$/;
 describe("VaultRootDataFolderModal export choice", () => {
   it("swaps Apply for Export, and a folder option brings Apply back", async () => {
     show(controls());
+    await screen.findByText(ROW_TITLE);
     expect(footerButton("action.apply")).not.toBeNull();
 
     fireEvent.click(screen.getByText(EXPORT_TITLE));
@@ -134,7 +160,7 @@ describe("VaultRootDataFolderModal export choice", () => {
     const onDirtyChange = vi.fn();
     show(controls(), { onDirtyChange });
 
-    fireEvent.click(screen.getByText(CUSTOM_TITLE));
+    fireEvent.click(await screen.findByText(ROW_TITLE));
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
 
     fireEvent.click(screen.getByText(EXPORT_TITLE));
@@ -175,7 +201,7 @@ describe("VaultRootDataFolderModal export choice", () => {
     await waitFor(() => expect(folderInput().value).toBe("/media/usb"));
 
     fireEvent.change(folderInput(), { target: { value: "Downloads" } });
-    expect(screen.getByText("modal.workspace.error.not_absolute")).toBeDefined();
+    expect(screen.getByText("modal.export_folder.not_absolute")).toBeDefined();
     expect(needsStep(EXPORT_TITLE)).toBe(true);
     expect(footerButton("modal.data_folder_export.confirm")).toHaveProperty("disabled", true);
   });
@@ -308,11 +334,11 @@ describe("VaultRootDataFolderModal export choice", () => {
     expect(exportControls.clearWritten).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps Export a copy chosen while it runs and offers Stop", () => {
+  it("keeps Export a copy chosen while it runs and offers Stop", async () => {
     const exportControls = controls({ canStart: false, job: running });
     show(exportControls, { vaultActivityBlocksChange: true });
 
-    fireEvent.click(screen.getByText(DEFAULT_TITLE));
+    fireEvent.click(await screen.findByText(DEFAULT_TITLE));
     expect(footerButton("action.apply")).toBeNull();
 
     const stop = footerButton("modal.data_folder_export.stop");
@@ -342,68 +368,69 @@ describe("VaultRootDataFolderModal export choice", () => {
     expect(shown()).toEqual(["modal.data_folder_export.finishing"]);
   });
 
-  it("marks the folder in use", () => {
+  it("marks the folder in use", async () => {
     show(controls());
-    expect(screen.getAllByText("modal.settings.badge.in_use")).toHaveLength(1);
+    await screen.findByText(ROW_TITLE);
+    expect(screen.getAllByText("folder_list.badge.in_use")).toHaveLength(1);
   });
 
-  it("titles Export a copy apart from the folder options, with a subtitle", () => {
+  it("titles Export a copy apart from the folder list, with a subtitle", async () => {
     show(controls());
+    const defaultOption = await screen.findByText(DEFAULT_TITLE);
     const heading = screen.getByRole("heading", { name: "modal.data_folder.copy_heading" });
     const hint = screen.getByText("modal.data_folder.copy_hint");
     const exportOption = screen.getByText(EXPORT_TITLE);
-    const customOption = screen.getByText(CUSTOM_TITLE);
     const follows = (before: Node, after: Node) =>
       Boolean(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(follows(customOption, heading)).toBe(true);
+    expect(follows(defaultOption, heading)).toBe(true);
     expect(follows(heading, hint)).toBe(true);
     expect(follows(hint, exportOption)).toBe(true);
-    expect(screen.getByText("modal.app_settings.field.upriv_root_mode_help")).toBeDefined();
   });
 });
 
 describe("VaultRootDataFolderModal apply", () => {
-  /** Apply the default folder while the custom one is in use; the setup waits for `finish`. */
+  /** Apply Default while the row is in use; the apply waits for `finish`. */
   async function applyDefault(onClose: () => void, onNotice: (message: string) => void) {
-    settings = {
-      ...createDefaultAppSettings(),
-      app: {
-        ...createDefaultAppSettings().app,
-        vault_root_mode: "custom_root",
-        upriv_root_path: "/data/other",
-      },
-    };
+    listed = view(1);
     let finish: () => void = () => undefined;
-    setupDefaultRoot.mockImplementationOnce(
+    apply.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          finish = () => resolve({ rootPath: "/app" });
+          finish = () =>
+            resolve({ rootPath: "/app", source: "default", switched: true, ended: [] });
         }),
     );
     const props = { open: true, onClose, onNotice, exportControls: controls() };
-    const view = render(createElement(VaultRootDataFolderModal, props));
-    fireEvent.click(screen.getByText(DEFAULT_TITLE));
-    // The folder check settles first; a change of its result closes an open confirm.
+    const rendered = render(createElement(VaultRootDataFolderModal, props));
+    fireEvent.click(await screen.findByText(DEFAULT_TITLE));
+    // Default's check settles first; Apply waits for it.
     await waitFor(() => {
-      const apply = footerButton("action.apply");
-      if (apply) fireEvent.click(apply);
+      const button = footerButton("action.apply");
+      if (button) fireEvent.click(button);
       expect(footerButton("modal.data_folder.apply_confirm_action")).not.toBeNull();
     });
     fireEvent.click(footerButton("modal.data_folder.apply_confirm_action") as HTMLElement);
-    await waitFor(() => expect(setupDefaultRoot).toHaveBeenCalledTimes(1));
-    return { view, props, finish: () => finish() };
+    await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    return { rendered, props, finish: () => finish() };
   }
 
   it("closes while Apply runs, and the list toast reports how it ended", async () => {
     const onClose = vi.fn();
     const onNotice = vi.fn();
-    const { view, props, finish } = await applyDefault(onClose, onNotice);
+    const { rendered, props, finish } = await applyDefault(onClose, onNotice);
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
-    view.rerender(createElement(VaultRootDataFolderModal, { ...props, open: false }));
+    rendered.rerender(createElement(VaultRootDataFolderModal, { ...props, open: false }));
 
     await act(async () => finish());
     await waitFor(() => expect(onNotice).toHaveBeenCalledWith("modal.data_folder.applied"));
+    expect(adoptDataFolder).toHaveBeenCalled();
+  });
+
+  it("holds Apply until the list changes", async () => {
+    show(controls());
+    await screen.findByText(ROW_TITLE);
+    expect(footerButton("action.apply")).toHaveProperty("disabled", true);
   });
 });

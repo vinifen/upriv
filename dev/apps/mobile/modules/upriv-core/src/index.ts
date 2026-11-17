@@ -5,9 +5,9 @@ import { requireNativeModule } from "expo-modules-core";
  *
  * `appVersion` / `invoke` are the UniFFI-backed Rust bridge (same envelope as
  * the desktop daemon). The `saf*` methods are Kotlin-side helpers for the
- * Android Storage Access Framework — used when the user picks a
- * `content://` folder. Vault bytes for that folder go through `mountSafRoot`
- * (`SafFs.kt`): Rust sees `/upriv-saf-root` and the grant holds the files.
+ * Android Storage Access Framework. The data folder in use goes through
+ * `mountSafRoot` (`SafFs.kt`): Rust sees `/upriv-saf-root` and the grant
+ * holds the files. Every other picked folder is a tree (`mountTree`).
  */
 export type UprivCoreNativeModule = {
   appVersion(): string;
@@ -28,42 +28,41 @@ export type UprivCoreNativeModule = {
   safPersistPermission(treeUri: string): void;
   /**
    * Best-effort `releasePersistableUriPermission`. Missing perm is not an error.
-   * Native side refuses to drop the active vault-root tree.
+   * The data folder in use, Default's Documents grant, and a mounted tree keep theirs.
    */
   safReleasePermission(treeUri: string): void;
   /**
-   * Inspect `.upriv/settings.toml` under the SAF tree.
-   * Returns `"absent"|"valid"|"incomplete"|"unauthorized"|"unreadable"|"unreachable"`.
-   * `unauthorized` is a revoked grant. `unreachable` is a held grant whose volume is gone.
+   * The held grant Default's data folder lives in: Documents, or
+   * Documents/Upriv. Empty until the person confirms Documents once.
    */
-  safInspectRoot(treeUri: string): SafRootStatus;
-  /** Read `.upriv/settings.toml` body as UTF-8. Returns `null` when absent. */
-  safReadSettings(treeUri: string): string | null;
-  /** Currently active SAF tree URI (empty string when SAF mode is inactive). */
-  safGetActiveUri(): string;
-  /** Save the active SAF tree URI (empty string clears it). */
-  safSetActiveUri(uri: string): void;
+  safDocumentsGrant(): string;
   /**
    * Document URI for the shared Documents directory, used as the folder screen's start.
    */
   safDocumentsInitialUri(): string;
   /**
-   * Mount Rust `/upriv-saf-root` on this persisted tree so vault create and
-   * edit write there. Throws `saf_unreachable` when the tree's volume is gone
-   * (drive unplugged) while the grant is still held.
+   * Mount Rust `/upriv-saf-root` on this persisted tree: the data folder the
+   * list selects (a row, or Default's Documents grant). Throws
+   * `saf_unreachable` when the tree's volume is gone while the grant is held.
    */
   mountSafRoot(treeUri: string): void;
   /** Drop that mount. */
   unmountSafRoot(): void;
   /**
-   * Mount Rust `/upriv-saf-export` on a folder picked for Export data folder,
-   * beside the data folder mount. The zip is written straight into that tree.
-   * Throws `saf_unreachable` when its volume is gone, `saf_unauthorized` when
-   * the grant is.
+   * Let Rust reach a tree the person picked (a row of a folder list, an
+   * export's folder) at its own root, and return that root. Binds only: no
+   * I/O, so a drive that is away fails on its first use.
    */
-  mountSafExport(treeUri: string): void;
-  /** Drop the export mount. */
-  unmountSafExport(): void;
+  mountTree(treeUri: string): string;
+  /** Drop a tree's mount. Its grant stays until it is released. */
+  unmountTree(treeUri: string): void;
+  /** The trees Rust reaches now. */
+  mountedTrees(): string[];
+  /**
+   * Before writing into a picked folder: throws `saf_unauthorized` when its
+   * grant is gone, `saf_unreachable` when its volume does not answer.
+   */
+  checkTree(treeUri: string): void;
   /**
    * Open an existing OS path in the system Files app (Android).
    * Encrypted vaults have no OS folder — only a live mount / `upriv_plain` path.
@@ -81,13 +80,6 @@ export type UprivCoreNativeModule = {
     job: string,
   ): Promise<string>;
 };
-
-/**
- * Full set of Rust `VaultRootDirStatus` values plus SAF-specific
- * `"unauthorized"` (URI perm gone — treat as re-pick required).
- */
-export type SafRootStatus =
-  "absent" | "valid" | "incomplete" | "unauthorized" | "unreadable" | "unreachable";
 
 let cached: UprivCoreNativeModule | null | undefined;
 

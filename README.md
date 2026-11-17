@@ -9,13 +9,13 @@
 | **Mobile** | Expo / React Native + UniFFI (`upriv-ffi`) |
 | **UI languages** | English · Português (Brasil) · Español |
 
-> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, the Windows vault folder (WinFsp, installed when that folder is turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. Password change and unlock-RAM change are live on a closed vault.
+> **Today:** greenfield. One store format (`format_version` 1). Data folder setup, settings, per-device folder lists, vault list, create, groups, open/close, the in-app file manager, unlocked folders (Linux FUSE, Windows WinFsp, installed when they are turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. Password change and unlock-RAM change are live on a closed vault.
 
 ---
 
 ## ✨ What it does
 
-- 📁 **Data folder** — pick a default or custom root; repair / recover if something’s incomplete
+- 📁 **Folder lists** — each device keeps its own list of data, unlocked, and backup folders; a folder that fails hands over to the next one, with a notice; repair if a data folder is incomplete
 - 🗂️ **Vault list** — create, group, sort, search, hide, open / lock
 - 🔑 **Unlock** — Argon2id + AEAD at rest; optional public password hint
 - 📦 **Export** — `.zip` of `store/` (envelope only), `.7z` (weaker offline guessing), or a plain-text `.zip` (not encrypted, clearly marked)
@@ -153,7 +153,7 @@ upriv/
 
 ## Third-party notice
 
-WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos. The Windows setup and the portable app ship the official unmodified WinFsp installer and ask to install it when the file manager folder is turned on. Declining leaves that switch unchanged. Repository: https://github.com/winfsp/winfsp
+WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos. The Windows setup and the portable app ship the official unmodified WinFsp installer and ask to install it when encrypted vaults' unlocked folders are turned on. Declining leaves that switch unchanged. Repository: https://github.com/winfsp/winfsp
 
 ## 📚 Docs
 

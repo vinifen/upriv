@@ -60,7 +60,7 @@ src/
 │   │   └── file-manager/    # File tree + editor (shell/, workspace/, tree/, editor/, lib/)
 │   └── system/
 │       ├── refresh/         # useAppRefresh — reload settings, vaults, lifecycle, file manager
-│       ├── settings/        # App settings + VaultRootGate / setup / repair / alias recovery
+│       ├── settings/        # App settings + VaultRootGate / Setup / Data folder window (data folder list)
 │       ├── logs/            # App log viewer
 │       └── help/            # Help modal + search
 │

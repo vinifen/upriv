@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  currentWorkspaceSystem,
   resolveVaultDisplayStatus,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
@@ -8,7 +7,7 @@ import {
   vaultRootUprivOpenPath,
 } from "../domain";
 import type { AppSettingsConfig, SystemInfoSnapshot, VaultGroup, VaultListItem } from "../domain";
-import type { VaultRootService } from "../services";
+import type { DeviceService, VaultRootService } from "../services";
 
 export type SystemInfoAppVersion = SystemInfoSnapshot["app"];
 
@@ -18,11 +17,10 @@ export interface UseSystemInfoDataOptions {
   groups: readonly VaultGroup[];
   settings: AppSettingsConfig;
   vaultRootService: VaultRootService;
+  deviceService: DeviceService;
   getVersion: () => Promise<SystemInfoAppVersion> | SystemInfoAppVersion;
   /** Effective list show-hidden (persisted always-show or session). */
   showHiddenVaults?: boolean;
-  /** React Native `Platform.OS`. Omit in Electron; that renderer has no Node `process`. */
-  host?: string | null;
 }
 
 export function useSystemInfoData({
@@ -31,9 +29,9 @@ export function useSystemInfoData({
   groups,
   settings,
   vaultRootService,
+  deviceService,
   getVersion,
   showHiddenVaults = false,
-  host,
 }: UseSystemInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<SystemInfoSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -52,13 +50,9 @@ export function useSystemInfoData({
   const groupsTotal = groups.filter((group) => !group.hidden).length;
   const ui = settings.ui;
   const logging = settings.logging;
-  const workspace = settings.workspace;
+  const unlockedFolders = settings.unlocked_folders;
   const backups = settings.backups;
-  const backupsKey = JSON.stringify(backups);
-  const workspaceSystem = currentWorkspaceSystem(host);
-  const workspacePath = workspace[workspaceSystem].path;
-  const workspaceMount = workspace.file_manager_folder;
-  const vaultRootMode = settings.app.vault_root_mode;
+  const listsKey = JSON.stringify([unlockedFolders, backups]);
   const lastOpenedRaw = settings.app.last_opened_vault ?? "";
   const lastOpenedIsHidden = vaults.some(
     (vault) => vault.id === lastOpenedRaw && Boolean(vault.hidden),
@@ -83,27 +77,24 @@ export function useSystemInfoData({
 
     void (async () => {
       try {
-        const [versionInfo, root, defaultStatus] = await Promise.all([
+        const [versionInfo, device, root, dataFolders] = await Promise.all([
           Promise.resolve(getVersion()),
-          vaultRootService.resolve({ vaultRootMode }),
-          vaultRootService.defaultRootStatus(),
+          deviceService.info(),
+          vaultRootService.resolve(),
+          vaultRootService.list(),
         ]);
         if (cancelled) return;
         if (root.status !== "found") {
           throw vaultRootGoneRpcError();
         }
 
-        // App home = `.upriv-data-folder` parent (default-root anchor). Vault-root
-        // (found `rootPath`) may be a different folder in `custom_root`.
-        const appHome = defaultStatus.defaultRootAnchor;
-        const vaultRootBase =
-          root.status === "found" && root.rootPath.trim()
-            ? root.rootPath
-            : defaultStatus.defaultRootAnchor;
+        // The app home holds the data folder list; on a computer it is Default's folder.
+        const appHome = dataFolders.defaultFolder ?? "—";
         setSnapshot({
           app: versionInfo,
+          device,
           root,
-          rootMode: vaultRootMode,
+          dataFolders,
           inventory: {
             vaultsTotal,
             vaultsOpen,
@@ -111,14 +102,13 @@ export function useSystemInfoData({
           },
           ui,
           logging,
-          workspace,
+          unlockedFolders,
           backups,
-          workspaceSystem,
           lastOpenedVault,
           paths: {
             appHome,
-            logsDir: vaultRootLogsDisplayPath(vaultRootBase),
-            logsOpenPath: vaultRootUprivOpenPath(vaultRootBase, "logs"),
+            logsDir: vaultRootLogsDisplayPath(root.rootPath),
+            logsOpenPath: vaultRootUprivOpenPath(root.rootPath, "logs"),
           },
         });
       } catch (error) {
@@ -143,7 +133,6 @@ export function useSystemInfoData({
     vaultsTotal,
     vaultsOpen,
     groupsTotal,
-    vaultRootMode,
     lastOpenedVault,
     ui.locale,
     ui.theme,
@@ -174,11 +163,9 @@ export function useSystemInfoData({
     logging.level,
     logging.entries_per_file,
     logging.keep_last_entries,
-    workspacePath,
-    workspaceMount,
-    backupsKey,
-    workspaceSystem,
+    listsKey,
     vaultRootService,
+    deviceService,
     getVersion,
     loadAttempt,
   ]);

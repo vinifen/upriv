@@ -1,7 +1,7 @@
 import { RpcError } from "../core-rpc/errors";
 import { suggestedImportDisplayName } from "../vault/displayName";
 import { VAULT_ERROR_CODES } from "../vault/errors/codes";
-import { isAbsoluteOsFilesystemPath, isContentUri } from "../workspace";
+import { isAbsoluteOsFilesystemPath, isContentUri } from "../folder-lists";
 import type { CreateVaultDraft, CreateVaultImportKind, CreateVaultImportShape } from "./types";
 
 export type CreateVaultImportDraft = Pick<

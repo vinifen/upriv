@@ -36,25 +36,21 @@ platform/desktop/
     └── vaultService.ts
 ```
 
-### Dev vs prod default_root create
+### Where Default is
 
-| Mode                             | `UPRIV_DISTRIBUTION` | App home                         | Default vault (default_root) |
-| -------------------------------- | -------------------- | -------------------------------- | ---------------------------- |
-| Unpackaged Electron              | `dev`                | `upriv/dev/`                     | Same                         |
-| Packaged AppImage / portable exe | `portable`           | Beside the downloaded file / exe | Same                         |
-| Packaged `.deb` / NSIS / system  | `installed`          | User data dir                    | Same as app home             |
-| Daemon without Electron env      | inferred             | writable exe dir or user data    | distribution-aware           |
+| Launch                           | `UPRIV_DISTRIBUTION` | App home                         | Default          |
+| -------------------------------- | -------------------- | -------------------------------- | ---------------- |
+| Unpackaged Electron              | `dev`                | `upriv/dev/`                     | Same as app home |
+| Packaged AppImage / portable exe | `portable`           | Beside the downloaded file / exe | Same as app home |
+| Packaged `.deb` / NSIS / system  | `installed`          | User data dir                    | Same as app home |
+| Daemon without Electron env      | inferred             | writable exe dir or user data    | Same as app home |
 
-First-run setup defaults to **`default_root`** for all distributions (beside the app when portable; user data dir when installed). A Windows NSIS install is **installed** even when its folder is writable, so `.upriv` is not created inside the directory the uninstaller deletes.
+The app home holds the data folder list (`.upriv-data-folder`), every device's group. A device with no group uses Default, so a portable copy opens the data folder beside it on any machine. A Windows NSIS install is **installed** even when its folder is writable, so `.upriv` is not created inside the directory the uninstaller deletes.
 
-**Strict vs loose:** Electron always sets `UPRIV_DEFAULT_ROOT_ANCHOR` when unpackaged or packaged, so portable installs and `electron .` are strict — a sibling folder with `.upriv` next to the AppImage is **not** auto-imported; use `custom_root` mode / create in the default data folder. Loose walk (`discover_vault_root_upward`) is the fallback when the env is absent.
-
-Alias `.upriv-data-folder` is created only for `custom_root` mode; lives in the **app home** (not necessarily beside the FUSE-mounted binary).
-Switching to `default_root` marks it `status=inactive` (path kept); `custom_root` sets `status=active`.
-Mode+path are **not** stored in `settings.toml` — the UI fields are derived from `.upriv-data-folder` on load.
+**Strict vs loose:** Electron always sets `UPRIV_DEFAULT_ROOT_ANCHOR` when unpackaged or packaged, so Default is that exact folder — a sibling folder with `.upriv` next to the AppImage is **not** picked up; add it as a row of the list instead. The upward walk (`discover_vault_root_upward`) is the fallback only when the env is absent.
 
 ### RPC naming convention
 
-- **Settings payload** (`app_settings_get` result / nested `settings` on save): **snake_case** nested keys (`ui`, `logging`, `app.vault_root_mode`).
-- **Vault-root command params** (`vault_root_resolve`, `vault_root_setup_*`, …): **camelCase** (`vaultRootMode`, `replaceIncomplete`, `replacePolicy`).
-- **`app_settings_save` envelope:** `{ "settings": { … }, "syncAlias": true }` — `syncAlias` is camelCase only (`sync_alias` is rejected). Settings are **not** flattened with the flag.
+- **Settings payload** (`app_settings_get` result / nested `settings` on save): **snake_case** nested keys (`ui`, `logging`, `app`, `unlocked_folders`, `backups`).
+- **Data folder command params** (`vault_root_resolve`, `data_folder_list`, `data_folder_apply`, `data_folder_search`): **camelCase** (`explicitPath`, `newList`, `replaceIncomplete`, `replacePolicy`, `adoptPrivateRoot`).
+- **`app_settings_save` envelope:** `{ "settings": { … }, "lists": { … } }`. The folder lists inside `settings` are not read: `lists` carries what changed in them (`AppListChanges`), and core applies that to the file it reads again.

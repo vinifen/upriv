@@ -25,11 +25,13 @@ import { importZipClassificationFromProbe } from "../zipClassification";
 import { createVaultDraftFixture, vaultSettingsFixture } from "./fixtures";
 
 describe("createDraftFromBackup", () => {
+  const backup = { key: "data/20260528120000-notes.zip", fileName: "20260528120000-notes.zip" };
+
   it("seeds import source with a backup-named display name", () => {
-    const draft = createDraftFromBackup("20260528120000", "notes", "Notes", [1]);
+    const draft = createDraftFromBackup(backup, "notes", "Notes", [1]);
     expect(draft.source).toBe("import");
     expect(draft.importKind).toBe("backup");
-    expect(draft.importFilePath).toBe("vaults/notes/backups/20260528120000-notes.zip");
+    expect(draft.importFilePath).toBe("vaults/notes/backups/data/20260528120000-notes.zip");
     expect(draft.importFileName).toBe("20260528120000-notes.zip");
     expect(draft.displayName).toBe("Notes backup");
     expect(draft.order).toBe(2);
@@ -37,62 +39,25 @@ describe("createDraftFromBackup", () => {
   });
 
   it("suffixes the backup name when that name is taken", () => {
-    const draft = createDraftFromBackup("20260528120000", "notes", "Notes", [1], ["Notes backup"]);
+    const draft = createDraftFromBackup(backup, "notes", "Notes", [1], ["Notes backup"]);
     expect(draft.displayName).toBe("Notes backup 2");
   });
 
-  it("uses the listed snapshot file as the locator", () => {
+  it("points at the backup by its key, a pin in another folder too, never at a path", () => {
     const draft = createDraftFromBackup(
-      "20260528120000",
+      { key: "f1/saves/20260528120000-notes Trip.zip", fileName: "20260528120000-notes Trip.zip" },
       "notes",
       "Notes",
       [1],
-      [],
-      null,
-      "20260528120000-old-notes.zip",
     );
-    expect(draft.importFileName).toBe("20260528120000-old-notes.zip");
-    expect(draft.importFilePath).toBe("vaults/notes/backups/20260528120000-old-notes.zip");
-  });
-
-  it("points a pin at backups/saves", () => {
-    const draft = createDraftFromBackup(
-      "20260528120000",
-      "notes",
-      "Notes",
-      [1],
-      [],
-      null,
-      "20260528120000-notes.zip",
-      true,
+    expect(draft.importFileName).toBe("20260528120000-notes Trip.zip");
+    expect(draft.importFilePath).toBe(
+      "vaults/notes/backups/f1/saves/20260528120000-notes Trip.zip",
     );
-    expect(draft.importFileName).toBe("20260528120000-notes.zip");
-    expect(draft.importFilePath).toBe("vaults/notes/backups/saves/20260528120000-notes.zip");
-  });
-
-  it("points a zip of the chosen folder at its locator, never at a path", () => {
-    const draft = createDraftFromBackup(
-      "20260528120000",
-      "notes",
-      "Notes",
-      [1],
-      [],
-      null,
-      "20260528120000-notes.zip",
-      true,
-      "chosen",
-    );
-    expect(draft.importFileName).toBe("20260528120000-notes.zip");
-    expect(draft.importFilePath).toBe("vaults/notes/backups/chosen/saves/20260528120000-notes.zip");
-  });
-
-  it("starts with no backup folders carried from a file", () => {
-    const draft = createDraftFromBackup("20260528120000", "notes", "Notes", [1]);
-    expect(draft.carriedBackupFolders).toBeNull();
   });
 
   it("pre-selects the source vault group", () => {
-    const draft = createDraftFromBackup("20260528120000", "notes", "Notes", [1], [], "work");
+    const draft = createDraftFromBackup(backup, "notes", "Notes", [1], [], "work");
     expect(draft.groupMode).toBe("existing");
     expect(draft.groupId).toBe("work");
   });

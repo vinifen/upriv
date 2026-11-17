@@ -12,7 +12,9 @@ import { CreateVaultModal } from "../CreateVaultModal";
 const settings = createDefaultAppSettings();
 const createVaultService = {};
 const jobService = {};
-const vaultRootService = { resolve: async () => ({ status: "found", rootPath: "/data" }) };
+const deviceService = {
+  info: async () => ({ id: "a".repeat(32), system: "linux" }),
+};
 
 vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key, locale: "en" }) }));
 vi.mock("@/features/system/settings", () => ({
@@ -25,7 +27,7 @@ vi.mock("@/features/system/settings", () => ({
 vi.mock("@/platform/services", () => ({
   useCreateVaultService: () => createVaultService,
   useJobService: () => jobService,
-  useVaultRootService: () => vaultRootService,
+  useDeviceService: () => deviceService,
 }));
 vi.mock("../createVaultSteps", () => ({
   renderCreateVaultStep: () => null,

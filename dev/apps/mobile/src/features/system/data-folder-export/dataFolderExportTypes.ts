@@ -15,6 +15,8 @@ export interface DataFolderExportControls {
   /** True when the export of `<name>.zip` started and took the folder. */
   onStart: (destDir: string, name: string, includeBackups: boolean) => boolean;
   onStop: () => void;
+  /** Vaults with backups outside the data folder: no copy holds those. */
+  outsideBackups: number;
 }
 
 /**

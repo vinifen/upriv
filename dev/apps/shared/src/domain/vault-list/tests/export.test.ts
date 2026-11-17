@@ -145,7 +145,11 @@ describe("vaultExportSavedAs", () => {
       "My notes-upriv-2.zip",
     );
     expect(
-      vaultExportSavedAs("My notes", "seven_zip", "/upriv-saf-export/My notes-sevenzip-3.7z"),
+      vaultExportSavedAs(
+        "My notes",
+        "seven_zip",
+        "/upriv-saf-tree/0f1e2d3c4b5a69788796a5b4c3d2e1f0/My notes-sevenzip-3.7z",
+      ),
     ).toBe("My notes-sevenzip-3.7z");
   });
 

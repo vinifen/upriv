@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isVaultBlockingDataFolderChange,
-  isVaultBlockingWorkspaceClear,
+  isVaultSessionLive,
   isVaultFileManagerEligible,
   isVaultFileManagerRetained,
   isVaultListClosed,
@@ -12,7 +12,7 @@ import {
   isVaultCloseQueued,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
-  listHasVaultBlockingWorkspaceClear,
+  listHasLiveVaultSession,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   vaultDeleteHold,
@@ -178,17 +178,17 @@ describe("isVaultFileManagerRetained", () => {
   });
 });
 
-describe("isVaultBlockingWorkspaceClear", () => {
+describe("isVaultSessionLive", () => {
   it("blocks clear while open, closing, or unlocking", () => {
     const open = vaultRowFixture({ id: "a", session: "open" });
     const closing = vaultRowFixture({ id: "a", session: "closing" });
     const closed = vaultRowFixture({ id: "a", session: null });
-    expect(isVaultBlockingWorkspaceClear(open)).toBe(true);
-    expect(isVaultBlockingWorkspaceClear(closing)).toBe(true);
-    expect(isVaultBlockingWorkspaceClear(closed, { openingVaultIds: ["a"] })).toBe(true);
-    expect(isVaultBlockingWorkspaceClear(closed, { queuedVaultIds: ["a"] })).toBe(true);
-    expect(isVaultBlockingWorkspaceClear(closed)).toBe(false);
-    expect(listHasVaultBlockingWorkspaceClear([closed], { openingVaultIds: ["a"] })).toBe(true);
+    expect(isVaultSessionLive(open)).toBe(true);
+    expect(isVaultSessionLive(closing)).toBe(true);
+    expect(isVaultSessionLive(closed, { openingVaultIds: ["a"] })).toBe(true);
+    expect(isVaultSessionLive(closed, { queuedVaultIds: ["a"] })).toBe(true);
+    expect(isVaultSessionLive(closed)).toBe(false);
+    expect(listHasLiveVaultSession([closed], { openingVaultIds: ["a"] })).toBe(true);
   });
 });
 

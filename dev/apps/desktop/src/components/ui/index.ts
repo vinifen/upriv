@@ -28,3 +28,4 @@ export { JobStopButton } from "./JobStopButton";
 export { JobProgressBar } from "./JobProgressBar";
 export { ContentSkeleton } from "./ContentSkeleton";
 export { Collapse } from "./Collapse";
+export { DisclosureChevron } from "./DisclosureChevron";

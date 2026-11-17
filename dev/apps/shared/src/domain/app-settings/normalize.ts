@@ -1,12 +1,11 @@
-import { appWorkspace, normalizeWorkspaceTable } from "../workspace";
-import { appBackupFolders, normalizeAppBackupFolders } from "../backups/folders";
+import { APP_BACKUP_LIST, APP_UNLOCKED_LIST, parseDeviceGroups } from "../folder-lists";
 import {
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
   normalizeLogKeepLastEntries,
   normalizeLogLevel,
 } from "./logging";
-import { DEFAULT_UI_THEME, type AppSettingsConfig, type VaultRootMode } from "./types";
+import { DEFAULT_UI_THEME, type AppSettingsConfig } from "./types";
 
 /** Max characters for `[ui].vault_list_search` (matches vault display-name cap). */
 export const VAULT_LIST_SEARCH_MAX_LENGTH = 128;
@@ -24,13 +23,6 @@ export function normalizeVaultListSearch(value: unknown): string {
     out += value[i];
   }
   return out;
-}
-
-/** Normalize wire/UI vault-root mode (`"default_root"` | `"custom_root"` only). */
-export function normalizeVaultRootMode(mode: unknown): VaultRootMode {
-  if (mode === "custom_root" || mode === "default_root") return mode;
-  // Unknown tokens fail closed to default_root.
-  return "default_root";
 }
 
 /** Cross-platform defaults before the first `AppSettingsService.load()`. */
@@ -70,16 +62,14 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       keep_last_entries: LOG_KEEP_LAST_DEFAULT,
     },
     app: {
-      vault_root_mode: "default_root",
-      upriv_root_path: "",
       last_opened_vault: "",
     },
-    workspace: appWorkspace(),
-    backups: appBackupFolders(),
+    unlocked_folders: { encrypted_vaults: false, devices: {} },
+    backups: { devices: {} },
   };
 }
 
-/** Default-root mode and a custom path are mutually exclusive. */
+/** Fill what the wire leaves out and drop what it cannot hold. */
 export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConfig {
   const logging = {
     ...config.logging,
@@ -118,19 +108,16 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
     },
     logging,
     app: {
-      ...config.app,
-      vault_root_mode: normalizeVaultRootMode(config.app.vault_root_mode),
       last_opened_vault:
-        typeof config.app.last_opened_vault === "string" ? config.app.last_opened_vault.trim() : "",
+        typeof config.app?.last_opened_vault === "string"
+          ? config.app.last_opened_vault.trim()
+          : "",
     },
-    workspace: normalizeWorkspaceTable(config.workspace, "app"),
-    backups: normalizeAppBackupFolders(config.backups),
+    unlocked_folders: {
+      encrypted_vaults: config.unlocked_folders?.encrypted_vaults === true,
+      devices: parseDeviceGroups(config.unlocked_folders?.devices, APP_UNLOCKED_LIST),
+    },
+    backups: { devices: parseDeviceGroups(config.backups?.devices, APP_BACKUP_LIST) },
   };
-
-  if (normalized.app.vault_root_mode !== "default_root") return normalized;
-  if (!normalized.app.upriv_root_path) return normalized;
-  return {
-    ...normalized,
-    app: { ...normalized.app, upriv_root_path: "" },
-  };
+  return normalized;
 }

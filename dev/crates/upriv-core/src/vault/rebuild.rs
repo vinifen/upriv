@@ -106,8 +106,7 @@ fn rebuild(root: &VaultRoot, vault_id: &str, password: &[u8], job: &Job) -> Resu
         };
         // Until the seal starts, a stop or a failure leaves the store as it
         // was, so the copy goes with it.
-        let backup_zips =
-            || super::backup::every_backup_zip_newest_first(root, vault_id, &vault_dir);
+        let backup_zips = || super::backup::every_backup_zip_newest_first(&vault_dir);
         let built = lost
             .rebuild_tree(&store, &backup_zips, &mut || job.ensure_running())
             .and_then(|rebuilt| job.final_step().map(|()| rebuilt));
@@ -119,7 +118,12 @@ fn rebuild(root: &VaultRoot, vault_id: &str, password: &[u8], job: &Job) -> Resu
             }
         };
         lost.seal(&store, &mut rebuilt.index)?;
-        record_rebuild(&vault_dir, vault_id, &store);
+        record_rebuild(
+            &vault_dir,
+            vault_id,
+            &store,
+            super::files_bytes(&rebuilt.index),
+        );
         let counts = [
             ("files", rebuilt.placed),
             ("from_backups", rebuilt.from_backups),
@@ -153,12 +157,19 @@ fn unlock(vault_dir: &Path, store: &Path, password: &[u8]) -> Result<LostIndex> 
     }
 }
 
-/// The store's new hash, so the list does not read the rebuild as a crash.
-/// The tree is sealed by then, so a failure here is logged, not returned.
-fn record_rebuild(vault_dir: &Path, vault_id: &str, store: &Path) {
+/// The store's new hash, so the list does not read the rebuild as a crash,
+/// and what the rebuilt tree holds. The tree is sealed by then, so a failure
+/// here is logged, not returned.
+fn record_rebuild(vault_dir: &Path, vault_id: &str, store: &Path, files_bytes: u64) {
     let recorded = load_vault_config(vault_dir).and_then(|config| {
         let hash = content_hash_hex(store)?;
-        record_store_rewritten(vault_dir, vault_id, &config.vault.display_name, &hash)
+        record_store_rewritten(
+            vault_dir,
+            vault_id,
+            &config.vault.display_name,
+            &hash,
+            Some(files_bytes),
+        )
     });
     if recorded.is_err() {
         log_event(
@@ -176,17 +187,15 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
-    use crate::paths::{VaultBackupFolderRow, VaultBackupPlace};
     use crate::session::cancel_job;
     use crate::store::{
         open_store, KdfUnlockPreset, CHUNK_SIZE, DATA_DIR_NAME, INDEX_COPY_FILE_NAME,
         INDEX_DIR_NAME, INDEX_FILE_NAME,
     };
-    use crate::test_support::{test_job_id, vault_root_with};
+    use crate::test_support::{backup_rows, test_job_id, vault_root_with};
     use crate::vault::{
         change_vault_password, close_vault, create_vault, fs_delete, fs_held_list, fs_held_restore,
         fs_list_tree, fs_mkdir, fs_read_file, fs_write_file, list_backups, open_vault,
-        BackupLocation,
     };
 
     const PW: &[u8] = b"pass-word-ok";
@@ -575,23 +584,17 @@ mode = "encrypted_dir"
         assert_eq!(saves(&root), before);
     }
 
-    /// A vault `notes` whose backups go to its own folder in `drive`.
+    /// A vault `notes` whose backups go to its own row in `drive`.
     fn notes_backing_up_to(drive: &std::path::Path) -> (tempfile::TempDir, VaultRoot) {
         let (tmp, root) = vault_root_with(&[]);
         let mut config = sample_config("notes", "Notes");
-        let row = VaultBackupFolderRow {
-            place: VaultBackupPlace::Custom,
-            path: drive.to_string_lossy().into_owned(),
-        };
-        config.backup.linux = row.clone();
-        config.backup.windows = row.clone();
-        config.backup.macos = row;
+        backup_rows(&mut config, &[drive]);
         create_vault(&root, config, PW, KdfUnlockPreset::M32).unwrap();
         (tmp, root)
     }
 
     #[test]
-    fn a_blob_with_no_record_comes_back_from_a_backup_in_the_chosen_folder() {
+    fn a_blob_with_no_record_comes_back_from_a_backup_in_a_row() {
         let drive = tempfile::tempdir().unwrap();
         let (_tmp, root) = notes_backing_up_to(drive.path());
         open_vault(&root, "notes", PW).unwrap();
@@ -625,7 +628,7 @@ mode = "encrypted_dir"
             .filter(|backup| backup.saved)
             .collect();
         assert_eq!(copies.len(), 1);
-        assert_eq!(copies[0].location, BackupLocation::DataFolder);
+        assert!(copies[0].key.starts_with("data/"));
         assert!(copies[0].path.host_is_file());
     }
 }

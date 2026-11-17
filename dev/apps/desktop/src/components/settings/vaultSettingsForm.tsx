@@ -1,49 +1,44 @@
-import { useEffect, useId, type ReactNode } from "react";
-import { PathField } from "@/components/PathField";
+import { useCallback, useId, type ReactNode } from "react";
 import { Button, Select, SwitchRow } from "@/components/ui";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
 import {
   AUTO_CLOSE_WHEN_BUSY,
-  BACKUP_FOLDER_SYSTEMS,
   COMPRESSION_PRESETS,
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   POLICY_RADIO_BADGE_I18N,
+  APP_BACKUP_LIST,
+  APP_UNLOCKED_LIST,
+  VAULT_BACKUP_LIST,
+  VAULT_UNLOCKED_LIST,
   policyRadioBadgeList,
   IDLE_AUTO_CLOSE_MINUTES_MAX,
   IDLE_AUTO_CLOSE_MINUTES_MIN,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
-  workspaceSystemsCurrentFirst,
-  appBackupFolders,
-  appWorkspace,
-  appWorkspacePlace,
-  backupFolderIssue,
-  backupFolderStatusI18nKey,
-  backupFolderSystem,
   compressionPresetFromSevenZip,
+  encryptedFolderOn,
+  encryptedFolderUnchosen,
+  folderStatusLine,
+  isPhoneSystem,
+  selectionHere,
+  selectionLabel,
   sevenZipPatchFromCompressionPreset,
-  validateWorkspaceTable,
-  vaultFolderChosen,
-  vaultFolderRow,
-  currentWorkspaceSystem,
-  workspaceSystemHasShortcut,
-  workspacePathIssueI18nKey,
-  type BackupFolderTable,
+  type AppBackupFolders,
+  type AppUnlockedFolders,
   type CompressionPreset,
+  type DeviceGroups,
+  type FolderRow,
+  type EncryptedFolderSwitch,
+  type HereDevice,
   type KdfUnlockPreset,
   type PolicyRadioBadge,
-  type VaultBackupFolders,
-  type VaultBackupPlace,
+  type VaultBackupChoice,
   type VaultConfigEditHold,
   type VaultDeleteHold,
   type VaultGroup,
   type VaultSettingsConfig,
-  type WorkspaceOsEntry,
-  type WorkspacePathIssue,
-  type WorkspaceSystem,
-  type WorkspaceTable,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
   requireVaultConfigEditLockedI18nKey,
@@ -51,16 +46,12 @@ import {
   displayNameErrorI18nKey,
   VAULT_DELETE_HOLD_I18N_KEY,
 } from "@upriv/shared";
-import { useBackupFolderCheck } from "@upriv/shared/react";
+import { useFolderStatuses } from "@upriv/shared/react";
+import { FolderList, StatusLine } from "@/components/folder-list";
 import { useTranslation } from "@/i18n";
-import { useBackupService, useVaultRootService } from "@/platform/services";
-import { useErrorToast } from "@/hooks/useErrorToast";
+import { useFolderListService, useVaultRootService } from "@/platform/services";
 import { IntegerInput } from "./IntegerInput";
-import {
-  FileManagerDriverNotice,
-  useFileManagerMountHost,
-  type MountHostKind,
-} from "@/features/system/settings/fileManagerMountHost";
+import { UnlockedFolderDriverNotice, useUnlockedFolderDriver } from "./unlockedFolderDriver";
 
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
@@ -353,347 +344,188 @@ export function VaultSettingsStorageSection({
   );
 }
 
-interface VaultSettingsMountSectionProps extends SectionPatchProps<"mount"> {
-  vaultRootPath?: string | null;
-  /** Notifies parent when the mount path UI is invalid (blocks save / create). */
-  onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
-  /** Selected file-manager choice still needs the WinFsp driver. Blocks save. */
-  onDriverAttentionChange?: (active: boolean) => void;
-  /** `mount.workspace_path` requires vault_quiet. */
-  controlsDisabled?: boolean;
-  /** Work beside the vault's status that locks fields (`vaultConfigEditHold`). */
-  editHold?: VaultConfigEditHold;
-  /** Plain text writes files in the folder and has no file manager folder switch. */
-  plaintext?: boolean;
-  /** App workspace, so "Use the app folder" can follow that file manager folder. */
-  appWorkspace?: WorkspaceTable;
+/**
+ * The status line of each of this device's rows of an unlocked folder or
+ * backup list, each checked on its own (`folder_status`), and the vaults open
+ * in a row's folder now (`openIn`), which keep that row in the list.
+ */
+export function useRowStatuses<F extends string>(
+  list: "unlocked" | "backup",
+  groups: DeviceGroups<F>,
+  here: HereDevice | null,
+  vaultId: string | null,
+) {
+  const { t } = useTranslation();
+  const folderLists = useFolderListService();
+  const paths = (here ? groups[here.id]?.rows : undefined)?.map((row) => row.path) ?? [];
+  const check = useCallback(
+    (path: string) => folderLists.status(list, path, vaultId),
+    [folderLists, list, vaultId],
+  );
+  const { statuses } = useFolderStatuses(paths, check);
+  const renderStatus = useCallback(
+    (path: string) => {
+      const key = path.trim();
+      // A check that could not run leaves the row with no status line.
+      if (!statuses.has(key)) return null;
+      return <StatusLine line={folderStatusLine(statuses.get(key) ?? null, list, t)} />;
+    },
+    [list, statuses, t],
+  );
+  const openIn = useCallback(
+    (path: string): readonly string[] => statuses.get(path.trim())?.details?.openVaults ?? [],
+    [statuses],
+  );
+  return { renderStatus, openIn };
 }
 
-export function VaultSettingsMountSection({
+/** Where the folder picker of a list starts on this computer. */
+export function usePickFolder() {
+  const { t } = useTranslation();
+  const vaultRoot = useVaultRootService();
+  return useCallback(
+    (start: string | null) => vaultRoot.pickFolder(start, t("folder_list.action.browse")),
+    [t, vaultRoot],
+  );
+}
+
+interface VaultSettingsUnlockedFolderSectionProps extends SectionPatchProps<"unlocked_folder"> {
+  /** As loaded; an empty list for a vault being created. */
+  saved: VaultSettingsConfig["unlocked_folder"];
+  here: HereDevice | null;
+  /** The vault's id; `null` while it is being created. */
+  vaultId: string | null;
+  /** The app's unlocked folders: what Use the app's means here. */
+  appUnlocked: AppUnlockedFolders;
+  /** A plain-text vault writes its files there and has no switch. */
+  plaintext: boolean;
+  /** Why this device's group cannot change now (`unlocked_folder` gate); `null` when it can. */
+  lockedHint?: string | null;
+  /**
+   * The list says when the vault should get a folder and none is chosen on
+   * this device. The create wizard reports that as its step's error instead.
+   */
+  showUnchosen?: boolean;
+}
+
+/**
+ * The vault's unlocked folder: the encrypted switch for every device, and
+ * the vault's own list of folders on this device.
+ */
+export function VaultSettingsUnlockedFolderSection({
   config,
   onChange,
-  vaultRootPath = null,
-  onPathIssueChange,
-  onDriverAttentionChange,
-  controlsDisabled = false,
-  editHold,
-  plaintext = false,
-  appWorkspace: appFolders = appWorkspace(),
-}: VaultSettingsMountSectionProps) {
+  saved,
+  here,
+  vaultId,
+  appUnlocked,
+  plaintext,
+  lockedHint = null,
+  showUnchosen = true,
+}: VaultSettingsUnlockedFolderSectionProps) {
   const { t } = useTranslation();
-  const pathId = useId();
-  const current = currentWorkspaceSystem();
-  const pathIssue = validateWorkspaceTable(config, vaultRootPath);
-  const driver = useFileManagerMountHost();
+  const switchId = useId();
+  const driver = useUnlockedFolderDriver();
+  const { renderStatus, openIn } = useRowStatuses("unlocked", config.devices, here, vaultId);
+  const pickFolder = usePickFolder();
+  const phone = here ? isPhoneSystem(here.system) : false;
+  const hereId = here?.id ?? null;
+  // Core keeps a saved row while a vault is open in its folder: it may not
+  // go or change its path then.
+  const savedRows = hereId ? (saved.devices[hereId]?.rows ?? []) : [];
+  const rowInUse = (row: FolderRow) =>
+    savedRows.some((old) => old.number === row.number && old.path.trim() === row.path.trim()) &&
+    openIn(row.path).length > 0;
+  const appChoice = selectionLabel(
+    selectionHere(appUnlocked.devices, hereId, APP_UNLOCKED_LIST),
+    hereId ? appUnlocked.devices[hereId] : undefined,
+    t,
+  );
+  const inheritState = t(
+    appUnlocked.encrypted_vaults
+      ? "modal.settings.option.unlocked_folder.encrypted.on"
+      : "modal.settings.option.unlocked_folder.encrypted.off",
+  );
 
-  const choiceNeedsDriver =
-    !plaintext &&
-    workspaceSystemHasShortcut(current) &&
-    (config[current].path.trim() !== "" || config.app_file_manager_folder === "on");
-  // Unknown status still blocks save, so a click cannot land before the check returns.
-  const driverAttention = choiceNeedsDriver && (!driver.known || driver.missing);
+  const folderWanted = !plaintext && encryptedFolderOn(appUnlocked, config);
+  const unchosen = showUnchosen && !plaintext && encryptedFolderUnchosen(appUnlocked, config, here);
 
-  useEffect(() => {
-    onPathIssueChange?.(pathIssue);
-  }, [onPathIssueChange, pathIssue]);
-
-  useEffect(() => {
-    onDriverAttentionChange?.(driverAttention);
-    return () => onDriverAttentionChange?.(false);
-  }, [onDriverAttentionChange, driverAttention]);
+  const setEncrypted = (encrypted: EncryptedFolderSwitch) => {
+    const turnsOn = encryptedFolderOn(appUnlocked, { ...config, encrypted });
+    void (async () => {
+      if (turnsOn && !(await driver.ensureInstalled())) return;
+      onChange({ encrypted });
+    })();
+  };
 
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("modal.settings.section.mount_intro")}
+        {t(
+          plaintext
+            ? "modal.settings.section.unlocked_folder_intro_plain"
+            : "modal.settings.section.unlocked_folder_intro",
+        )}
       </p>
-      {controlsDisabled ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", editHold))}
-        </p>
-      ) : null}
-      {workspaceSystemsCurrentFirst().map((system) => {
-        const active = system === current && !controlsDisabled;
-        const entry = config[system];
-        return (
-          <SettingsField
-            key={system}
-            label={t(`modal.app_settings.field.workspace.system.${system}`)}
-            hint={
-              system === current
-                ? t(
-                    plaintext
-                      ? "modal.settings.field.mount.plain_help"
-                      : workspaceSystemHasShortcut(system)
-                        ? "modal.settings.field.mount.path_help"
-                        : "modal.settings.field.mount.phone_help",
-                  )
-                : t("modal.app_settings.field.workspace.other_system")
-            }
-            htmlFor={system === current ? pathId : undefined}
-            disabled={!active}
-          >
-            {system === current ? (
-              <CurrentVaultFolderChoices
-                system={system}
-                entry={entry}
-                appEntry={appFolders[system]}
-                appShortcutOn={appFolders.file_manager_folder}
-                vaultAppShortcut={config.app_file_manager_folder}
-                vaultCustomShortcut={config.custom_file_manager_folder}
-                active={active}
-                plaintext={plaintext}
-                driverKind={driver.kind}
-                driverMissing={driver.missing}
-                driverBusy={driver.busy || !driver.known}
-                ensureDriver={driver.ensureInstalled}
-                pathId={pathId}
-                onChange={onChange}
-              />
-            ) : (
-              <div className="flex flex-col gap-2 opacity-60">
-                <PathField
-                  value={entry.path}
-                  disabled
-                  placeholder={t("modal.settings.field.mount.inherit")}
-                />
-              </div>
-            )}
-          </SettingsField>
-        );
-      })}
-      {pathIssue ? (
-        <p className="text-xs text-on-error-container" role="alert">
-          {t(workspacePathIssueI18nKey(pathIssue))}
-        </p>
-      ) : null}
+      {plaintext ? null : (
+        <SettingsField
+          label={t("modal.settings.field.unlocked_folder.encrypted")}
+          hint={t(
+            phone
+              ? "modal.settings.field.unlocked_folder.phone"
+              : "modal.settings.field.unlocked_folder.encrypted_help",
+          )}
+          htmlFor={switchId}
+          disabled={phone}
+        >
+          <Select
+            id={switchId}
+            value={config.encrypted}
+            disabled={phone || !driver.known || driver.busy || lockedHint !== null}
+            aria-label={t("modal.settings.field.unlocked_folder.encrypted")}
+            onChange={(value) => setEncrypted(value as EncryptedFolderSwitch)}
+            options={[
+              {
+                value: "inherit",
+                label: t("modal.settings.option.unlocked_folder.encrypted.inherit", {
+                  state: inheritState,
+                }),
+              },
+              { value: "on", label: t("modal.settings.option.unlocked_folder.encrypted.on") },
+              { value: "off", label: t("modal.settings.option.unlocked_folder.encrypted.off") },
+            ]}
+          />
+          <UnlockedFolderDriverNotice
+            kind={driver.kind}
+            missing={folderWanted && driver.missing}
+            busy={driver.busy}
+            onInstall={driver.ensureInstalled}
+          />
+        </SettingsField>
+      )}
+      <FolderList
+        label={t("modal.settings.field.unlocked_folder.list")}
+        policy={VAULT_UNLOCKED_LIST}
+        groups={config.devices}
+        saved={saved.devices}
+        here={here}
+        lockedHint={lockedHint}
+        selectionMissing={unchosen ? t("modal.settings.field.unlocked_folder.unchosen") : null}
+        fixed={[
+          {
+            choice: "inherit",
+            title: t("folder_list.choice.inherit"),
+            description: t("folder_list.choice.inherit_now", { choice: appChoice }),
+          },
+        ]}
+        renderStatus={renderStatus}
+        rowInUse={rowInUse}
+        // A vault being created has nothing saved yet.
+        markUnsaved={vaultId !== null}
+        pickFolder={pickFolder}
+        onChange={(devices) => onChange({ devices })}
+      />
     </SettingsFormGrid>
-  );
-}
-
-function CurrentVaultFolderChoices({
-  system,
-  entry,
-  appEntry,
-  appShortcutOn,
-  vaultAppShortcut,
-  vaultCustomShortcut,
-  active,
-  plaintext,
-  driverKind,
-  driverMissing,
-  driverBusy,
-  ensureDriver,
-  pathId,
-  onChange,
-}: {
-  system: WorkspaceSystem;
-  entry: WorkspaceOsEntry;
-  appEntry: WorkspaceOsEntry;
-  appShortcutOn: boolean;
-  vaultAppShortcut: VaultSettingsConfig["mount"]["app_file_manager_folder"];
-  vaultCustomShortcut: boolean;
-  active: boolean;
-  plaintext: boolean;
-  driverKind: MountHostKind;
-  driverMissing: boolean;
-  driverBusy: boolean;
-  ensureDriver: () => Promise<boolean>;
-  pathId: string;
-  onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
-}) {
-  const { t } = useTranslation();
-  const { showError } = useErrorToast();
-  const placeGroup = useId();
-  const shortcutGroup = useId();
-  const vaultRootService = useVaultRootService();
-  const trimmed = entry.path.trim();
-  // Another folder can be chosen before its path is typed or picked: that path
-  // is the step left, so the option carries the attention border and Save waits.
-  const custom = vaultFolderChosen(entry);
-  const customPathMissing = custom && trimmed === "";
-  const showShortcut = workspaceSystemHasShortcut(system) && !plaintext;
-  const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
-  const shortcutLocked = !active || !workspaceReady;
-  const radiosDisabled = shortcutLocked || custom;
-  const driverNeededForOn = showShortcut && !custom && driverMissing;
-  const onNeedsDriver = driverNeededForOn && vaultAppShortcut === "on";
-  const customNeedsDriver = showShortcut && custom && driverMissing;
-  const appFolderTitle = workspaceReady
-    ? t("modal.settings.field.mount.inherit")
-    : `${t("modal.settings.field.mount.inherit")} (${t("modal.app_settings.field.workspace.unset")})`;
-  const followTitle = workspaceReady
-    ? `${t("modal.settings.field.mount.shortcut_inherit")} (${t(
-        appShortcutOn
-          ? "modal.settings.field.mount.shortcut_on"
-          : "modal.settings.field.mount.shortcut_off",
-      )})`
-    : t("modal.settings.field.mount.shortcut_inherit");
-
-  // Kept as typed, so a space inside a folder name survives; saving trims it.
-  function writePath(path: string) {
-    onChange({ [system]: vaultFolderRow(path) });
-  }
-
-  function pickFolder(initial: string | null) {
-    if (!active) return;
-    void (async () => {
-      try {
-        const picked = await vaultRootService.pickFolder(
-          initial,
-          t("modal.app_settings.action.pick_workspace_folder"),
-        );
-        if (!picked?.trim()) return;
-        writePath(picked.trim());
-      } catch (error) {
-        showError(error, "error.unexpected");
-      }
-    })();
-  }
-
-  return (
-    <div className={active ? "flex flex-col gap-2" : "flex flex-col gap-2 opacity-60"}>
-      <div
-        role="radiogroup"
-        aria-label={t(`modal.app_settings.field.workspace.system.${system}`)}
-        className="grid gap-2"
-      >
-        <PolicyRadioOption
-          groupName={placeGroup}
-          value="inherit"
-          checked={!custom}
-          title={appFolderTitle}
-          description={t("modal.settings.field.mount.inherit_desc")}
-          disabled={!active}
-          muted={!workspaceReady}
-          attention={onNeedsDriver}
-          onSelect={() => {
-            if (!active) return;
-            onChange({ [system]: { place: "unset", path: "" } });
-          }}
-          footer={
-            showShortcut ? (
-              <div
-                role="radiogroup"
-                aria-label={t("modal.settings.field.mount.mount")}
-                className="grid gap-2"
-              >
-                <div>
-                  <p className="text-sm font-medium leading-snug text-on-surface">
-                    {t("modal.settings.field.mount.mount")}
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
-                    {t(
-                      workspaceReady
-                        ? "modal.settings.field.mount.inherit_shortcut_help"
-                        : "modal.settings.field.mount.shortcut_unset",
-                    )}
-                  </p>
-                </div>
-                {(["inherit", "on", "off"] as const).map((mode) => (
-                  <PolicyRadioOption
-                    key={mode}
-                    groupName={shortcutGroup}
-                    value={mode}
-                    checked={vaultAppShortcut === mode}
-                    disabled={shortcutLocked || driverBusy}
-                    attention={mode === "on" && driverNeededForOn}
-                    title={
-                      mode === "inherit"
-                        ? followTitle
-                        : t(`modal.settings.field.mount.shortcut_${mode}`)
-                    }
-                    onSelect={() => {
-                      if (radiosDisabled || driverBusy) return;
-                      if (mode !== "on") {
-                        onChange({ app_file_manager_folder: mode });
-                        return;
-                      }
-                      void (async () => {
-                        if (!(await ensureDriver())) return;
-                        onChange({ app_file_manager_folder: "on" });
-                      })();
-                    }}
-                    footer={
-                      mode === "on" && driverNeededForOn ? (
-                        <FileManagerDriverNotice
-                          kind={driverKind}
-                          missing
-                          busy={driverBusy}
-                          onInstall={ensureDriver}
-                        />
-                      ) : undefined
-                    }
-                  />
-                ))}
-              </div>
-            ) : null
-          }
-        />
-        <PolicyRadioOption
-          groupName={placeGroup}
-          value="custom"
-          checked={custom}
-          title={t("modal.settings.field.mount.custom")}
-          description={t("modal.settings.field.mount.custom_desc")}
-          disabled={!active}
-          attention={customNeedsDriver || customPathMissing}
-          onSelect={() => {
-            if (!active || custom) return;
-            writePath("");
-          }}
-          footer={
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <PathField
-                  id={pathId}
-                  className="sm:flex-1"
-                  value={entry.path}
-                  disabled={!active || !custom}
-                  placeholder={t("modal.folder_field.placeholder")}
-                  onChange={(path) => {
-                    if (!active) return;
-                    writePath(path);
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  className="w-full shrink-0 sm:w-auto"
-                  disabled={!active}
-                  onClick={() => pickFolder(trimmed || null)}
-                >
-                  {t("modal.app_settings.action.pick_workspace_folder")}
-                </Button>
-              </div>
-              {showShortcut ? (
-                <SwitchRow
-                  checked={vaultCustomShortcut}
-                  disabled={!active || !custom || driverBusy}
-                  onChange={(checked) => {
-                    void (async () => {
-                      if (checked && !(await ensureDriver())) return;
-                      onChange({ custom_file_manager_folder: checked });
-                    })();
-                  }}
-                  label={t("modal.settings.field.mount.mount")}
-                  hint={t("modal.settings.field.mount.mount_help")}
-                />
-              ) : null}
-              {customNeedsDriver ? (
-                <FileManagerDriverNotice
-                  kind={driverKind}
-                  missing
-                  busy={driverBusy}
-                  onInstall={ensureDriver}
-                />
-              ) : null}
-            </div>
-          }
-        />
-      </div>
-    </div>
   );
 }
 
@@ -822,190 +654,37 @@ export function VaultSettingsCloseSection({
   );
 }
 
-interface BackupFolderChoicesProps {
-  /** Names the group of options for a screen reader. */
-  groupLabel: string;
-  active: boolean;
-  place: VaultBackupPlace;
-  path: string;
-  /** Only a vault can follow the app default. Says what that default is. */
-  inheritDescription?: string;
-  dataFolderTitle: string;
-  dataFolderDescription: string;
-  customTitle: string;
-  customDescription: string;
-  /** The vault that would use this folder as its own; null is the app default. */
-  vaultId: string | null;
-  vaultRootPath: string | null;
-  /** The row as saved. A folder already saved that fails never holds Save. */
-  savedPlace: VaultBackupPlace | null;
-  savedPath: string;
-  onChange: (place: VaultBackupPlace, path: string) => void;
-  /** True while this row holds Save: its path is missing, invalid, or newly typed and not usable. */
-  onBlockingChange?: (blocking: boolean) => void;
-}
-
-/** Where backups go on this system, as the app default or for one vault. */
-export function BackupFolderChoices({
-  groupLabel,
-  active,
-  place,
-  path,
-  inheritDescription,
-  dataFolderTitle,
-  dataFolderDescription,
-  customTitle,
-  customDescription,
-  vaultId,
-  vaultRootPath,
-  savedPlace,
-  savedPath,
-  onChange,
-  onBlockingChange,
-}: BackupFolderChoicesProps) {
-  const { t } = useTranslation();
-  const { showError } = useErrorToast();
-  const group = useId();
-  const pathId = useId();
-  const vaultRootService = useVaultRootService();
-  const backupService = useBackupService();
-  const custom = place === "custom";
-  const issue = backupFolderIssue(place, path, vaultRootPath);
-  const check = useBackupFolderCheck(backupService, custom && !issue ? path : "", vaultId);
-  const problem = check.status !== null && check.status !== "ok" ? check.status : null;
-  const typed = savedPlace !== "custom" || savedPath.trim() !== path.trim();
-  const blocking = custom && (issue !== null || (typed && (check.checking || problem !== null)));
-
-  useEffect(() => {
-    onBlockingChange?.(blocking);
-    return () => onBlockingChange?.(false);
-  }, [onBlockingChange, blocking]);
-
-  function pickFolder() {
-    if (!active) return;
-    void (async () => {
-      try {
-        const picked = await vaultRootService.pickFolder(
-          path.trim() || null,
-          t("modal.app_settings.action.pick_workspace_folder"),
-        );
-        if (picked?.trim()) onChange("custom", picked.trim());
-      } catch (error) {
-        showError(error, "error.unexpected");
-      }
-    })();
-  }
-
-  return (
-    <div
-      role="radiogroup"
-      aria-label={groupLabel}
-      className={active ? "grid gap-2" : "grid gap-2 opacity-60"}
-    >
-      {inheritDescription !== undefined ? (
-        <PolicyRadioOption
-          groupName={group}
-          value="inherit"
-          checked={place === "inherit"}
-          title={t("modal.settings.field.backup.folder_inherit")}
-          description={inheritDescription}
-          disabled={!active}
-          onSelect={() => onChange("inherit", path)}
-        />
-      ) : null}
-      <PolicyRadioOption
-        groupName={group}
-        value="data_folder"
-        checked={place === "data_folder"}
-        title={dataFolderTitle}
-        description={dataFolderDescription}
-        disabled={!active}
-        onSelect={() => onChange("data_folder", path)}
-      />
-      <PolicyRadioOption
-        groupName={group}
-        value="custom"
-        checked={custom}
-        title={customTitle}
-        description={customDescription}
-        disabled={!active}
-        attention={issue !== null || problem !== null}
-        onSelect={() => onChange("custom", path)}
-        footer={
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <PathField
-                id={pathId}
-                className="sm:flex-1"
-                value={path}
-                disabled={!active || !custom}
-                placeholder={t("modal.folder_field.placeholder")}
-                onChange={(next) => onChange("custom", next)}
-              />
-              <Button
-                type="button"
-                variant="secondary"
-                size="md"
-                className="w-full shrink-0 sm:w-auto"
-                disabled={!active}
-                onClick={pickFolder}
-              >
-                {t("modal.app_settings.action.pick_workspace_folder")}
-              </Button>
-            </div>
-            {issue ? (
-              <p className="text-xs text-on-error-container" role="alert">
-                {t(workspacePathIssueI18nKey(issue))}
-              </p>
-            ) : check.checking ? (
-              <p className="text-xs text-on-surface-variant" role="status">
-                {t("modal.backup.folder.checking")}
-              </p>
-            ) : problem ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="min-w-0 flex-1 text-xs text-on-error-container" role="alert">
-                  {t(backupFolderStatusI18nKey(problem))}
-                </p>
-                <Button type="button" variant="ghost" size="sm" onClick={check.retry}>
-                  {t("action.retry")}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        }
-      />
-    </div>
-  );
-}
-
 interface VaultSettingsBackupSectionProps extends SectionPatchProps<"backup"> {
-  /** App default, so Follow the app default can say where that is. */
-  appBackups?: BackupFolderTable;
-  vaultId?: string | null;
-  vaultRootPath?: string | null;
-  /** Rows as saved. Absent for a vault still being created. */
-  saved?: VaultBackupFolders | null;
-  onFolderBlockingChange?: (blocking: boolean) => void;
+  /** As loaded; an empty list for a vault being created. */
+  saved: DeviceGroups<VaultBackupChoice>;
+  here: HereDevice | null;
+  /** The vault's id; `null` while it is being created. */
+  vaultId: string | null;
+  /** The app's backup folders: what Use the app's means here. */
+  appBackups: AppBackupFolders;
 }
 
 export function VaultSettingsBackupSection({
   config,
   onChange,
-  appBackups = appBackupFolders(),
-  vaultId = null,
-  vaultRootPath = null,
-  saved = null,
-  onFolderBlockingChange,
+  saved,
+  here,
+  vaultId,
+  appBackups,
 }: VaultSettingsBackupSectionProps) {
   const { t } = useTranslation();
   const modeId = useId();
   const keepId = useId();
   const enabledId = useId();
   const skipId = useId();
-  const current = backupFolderSystem(currentWorkspaceSystem());
-  const currentRow = current ? config[current] : null;
-  const appRow = current ? appBackups[current] : null;
-  const dataFolderLabel = t("modal.settings.field.backup.folder_data");
+  const { renderStatus } = useRowStatuses("backup", config.devices, here, vaultId);
+  const pickFolder = usePickFolder();
+  const hereId = here?.id ?? null;
+  const appChoice = selectionLabel(
+    selectionHere(appBackups.devices, hereId, APP_BACKUP_LIST),
+    hereId ? appBackups.devices[hereId] : undefined,
+    t,
+  );
 
   return (
     <SettingsFormGrid>
@@ -1055,48 +734,34 @@ export function VaultSettingsBackupSection({
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
         />
       </SettingsField>
-      {current && currentRow && appRow ? (
-        <SettingsField
+      <SettingsField
+        label={t("modal.settings.field.backup.folder")}
+        hint={t("modal.settings.field.backup.folder_help")}
+      >
+        <FolderList
           label={t("modal.settings.field.backup.folder")}
-          hint={t("modal.settings.field.backup.folder_help")}
-        >
-          <BackupFolderChoices
-            groupLabel={t("modal.settings.field.backup.folder")}
-            active
-            place={currentRow.place}
-            path={currentRow.path}
-            inheritDescription={appRow.place === "custom" ? appRow.path : dataFolderLabel}
-            dataFolderTitle={dataFolderLabel}
-            dataFolderDescription={t("modal.settings.field.backup.folder_data_desc")}
-            customTitle={t("modal.settings.field.backup.folder_custom")}
-            customDescription={t("modal.settings.field.backup.folder_custom_desc")}
-            vaultId={vaultId}
-            vaultRootPath={vaultRootPath}
-            savedPlace={saved ? saved[current].place : null}
-            savedPath={saved ? saved[current].path : ""}
-            onChange={(place, path) => onChange({ [current]: { place, path } })}
-            onBlockingChange={onFolderBlockingChange}
-          />
-        </SettingsField>
-      ) : null}
-      {BACKUP_FOLDER_SYSTEMS.filter((system) => system !== current).map((system) => (
-        <SettingsField
-          key={system}
-          label={t(`modal.app_settings.field.workspace.system.${system}`)}
-          hint={t("modal.app_settings.field.workspace.other_system")}
-          disabled
-        >
-          <PathField
-            value={config[system].place === "custom" ? config[system].path : ""}
-            disabled
-            placeholder={
-              config[system].place === "data_folder"
-                ? dataFolderLabel
-                : t("modal.settings.field.backup.folder_inherit")
-            }
-          />
-        </SettingsField>
-      ))}
+          policy={VAULT_BACKUP_LIST}
+          groups={config.devices}
+          saved={saved}
+          here={here}
+          fixed={[
+            {
+              choice: "inherit",
+              title: t("folder_list.choice.inherit"),
+              description: t("folder_list.choice.inherit_now", { choice: appChoice }),
+            },
+            {
+              choice: "data_folder",
+              title: t("folder_list.choice.data_folder"),
+              description: t("modal.settings.field.backup.folder_data_desc"),
+            },
+          ]}
+          renderStatus={renderStatus}
+          markUnsaved={vaultId !== null}
+          pickFolder={pickFolder}
+          onChange={(devices) => onChange({ devices })}
+        />
+      </SettingsField>
     </SettingsFormGrid>
   );
 }

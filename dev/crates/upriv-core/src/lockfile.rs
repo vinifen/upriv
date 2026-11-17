@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, UprivError};
 use crate::time::utc_timestamp_iso_millis;
 
+/// Who holds the lock. Only the flock decides whether a holder is live; the
+/// body says which process and device it was.
 #[derive(Debug, Serialize, Deserialize)]
 struct LockBody {
     pid: u32,
-    hostname: String,
+    /// [`crate::device::ThisDevice::record_key`]: the device ID, or the run.
+    device: String,
     started_at: String,
 }
 
@@ -42,62 +45,6 @@ impl Drop for VaultLock {
             let _ = fs::remove_file(&self.path);
         }
     }
-}
-
-/// This computer's host name. Vault locks and plaintext folder records name
-/// the computer that wrote them with it.
-pub(crate) fn hostname() -> Result<String> {
-    let name = os_hostname().map_err(|error| UprivError::VaultStoreInvalid {
-        path: PathBuf::from("runtime"),
-        detail: format!("could not read OS hostname for vault lock: {error}"),
-    })?;
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(UprivError::VaultStoreInvalid {
-            path: PathBuf::from("runtime"),
-            detail: "OS hostname is empty; refusing vault lock".into(),
-        });
-    }
-    Ok(name.to_string())
-}
-
-#[cfg(unix)]
-fn os_hostname() -> std::io::Result<String> {
-    let mut buf = [0u8; 256];
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let end = buf
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "hostname too long"))?;
-    String::from_utf8(buf[..end].to_vec())
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-}
-
-#[cfg(windows)]
-fn os_hostname() -> std::io::Result<String> {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetComputerNameW(buffer: *mut u16, size: *mut u32) -> i32;
-    }
-    let mut buf = [0u16; 256];
-    let mut size = buf.len() as u32;
-    let ok = unsafe { GetComputerNameW(buf.as_mut_ptr(), &mut size) };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let n = (size as usize).min(buf.len());
-    Ok(String::from_utf16_lossy(&buf[..n]))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn os_hostname() -> std::io::Result<String> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "no OS hostname API on this platform",
-    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,8 +95,9 @@ pub fn acquire_vault_lock(path: PathBuf) -> Result<VaultLock> {
             }
         }
         // The exclusive flock is ours, so the previous holder is gone. Rewrite
-        // the body even when it names another host (copied vault root, renamed
-        // machine). A lock still held by a live process never reaches here.
+        // the body even when it names another device (a copied data folder, a
+        // run of an unknown device). A lock still held by a live process never
+        // reaches here.
         write_lock_body(&mut file)?;
         return Ok(VaultLock {
             path,
@@ -162,7 +110,7 @@ pub fn acquire_vault_lock(path: PathBuf) -> Result<VaultLock> {
 fn write_lock_body(file: &mut File) -> Result<()> {
     let body = LockBody {
         pid: std::process::id(),
-        hostname: hostname()?,
+        device: crate::device::this_device().record_key(),
         started_at: utc_timestamp_iso_millis(),
     };
     let bytes =
@@ -505,32 +453,40 @@ mod tests {
         acquire_vault_lock(path).unwrap();
     }
 
+    fn written_body(path: &Path) -> LockBody {
+        serde_json::from_slice(&crate::host_fs::read(path).unwrap()).unwrap()
+    }
+
     #[test]
-    fn takes_over_free_lock_recorded_for_another_host() {
+    fn a_free_lock_another_device_wrote_is_taken_over_and_names_this_device() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("notes.lock");
         let body = LockBody {
             pid: 1,
-            hostname: "other-machine.example".into(),
+            device: "3e301fc022fc5185e12822bc2a251f64".into(),
             started_at: utc_timestamp_iso_millis(),
         };
         crate::host_fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
         assert!(!lock_held_by_live_process(&path));
         let _lock = acquire_vault_lock(path.clone()).unwrap();
         assert!(lock_held_by_live_process(&path));
+        let taken = written_body(&path);
+        assert_eq!(taken.device, crate::device::this_device().record_key());
+        assert_eq!(taken.pid, std::process::id());
     }
 
     #[test]
-    fn steals_lock_from_dead_pid_on_this_host() {
+    fn a_free_lock_of_a_process_that_ended_here_is_taken_over() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("notes.lock");
         let body = LockBody {
             pid: u32::MAX,
-            hostname: hostname().unwrap(),
+            device: crate::device::this_device().record_key(),
             started_at: utc_timestamp_iso_millis(),
         };
         crate::host_fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
         let _lock = acquire_vault_lock(path.clone()).unwrap();
         assert!(path.host_is_file());
+        assert_eq!(written_body(&path).pid, std::process::id());
     }
 }

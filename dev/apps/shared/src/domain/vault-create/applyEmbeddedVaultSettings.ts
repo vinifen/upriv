@@ -1,5 +1,9 @@
-import { normalizeVaultBackupFolders } from "../backups/folders";
-import { normalizeWorkspaceTable } from "../workspace";
+import {
+  VAULT_BACKUP_LIST,
+  VAULT_UNLOCKED_LIST,
+  parseDeviceGroups,
+  type EncryptedFolderSwitch,
+} from "../folder-lists";
 import { uniqueDisplayName } from "../vault/displayName";
 import { AUTO_CLOSE_WHEN_BUSY, parseKdfUnlockPreset } from "../vault-settings";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
@@ -67,13 +71,14 @@ export function applyEmbeddedVaultSettings(
     hidden: unchanged(draft.hidden, snapshot.hidden, source.vault.hidden),
     order: unchanged(draft.order, snapshot.order, source.vault.order),
     storage: unchanged(draft.storage, snapshot.storage, { ...source.storage }),
-    mount: unchanged(draft.mount, snapshot.mount, source.mount),
+    unlocked_folder: unchanged(draft.unlocked_folder, snapshot.unlocked_folder, {
+      ...source.unlocked_folder,
+    }),
     backup: unchanged(draft.backup, snapshot.backup, { ...source.backup }),
     auto_close: unchanged(draft.auto_close, snapshot.auto_close, { ...source.auto_close }),
     security: unchanged(draft.security, snapshot.security, security),
     seven_zip: unchanged(draft.seven_zip, snapshot.seven_zip, { ...source.seven_zip }),
     file_manager: unchanged(draft.file_manager, snapshot.file_manager, { ...source.file_manager }),
-    carriedBackupFolders: normalizeVaultBackupFolders(source.backup),
     archiveUnlockPreset: embedded.unlockPreset,
   };
   if (embedded.unlockPreset && createVaultChoosesKdf(next)) {
@@ -89,9 +94,8 @@ const EMBEDDED_DRAFT_FIELDS = [
   "hidden",
   "order",
   "storage",
-  "mount",
+  "unlocked_folder",
   "backup",
-  "carriedBackupFolders",
   "auto_close",
   "security",
   "seven_zip",
@@ -144,9 +148,8 @@ export function parseEmbeddedVaultSettings(
 ): EmbeddedVaultSettings | null {
   if (!isRecord(record.settings)) return null;
   const settings = record.settings;
-  if (!isRecord(settings.vault) || !isRecord(settings.storage) || !isRecord(settings.mount)) {
-    return null;
-  }
+  if (!isRecord(settings.vault) || !isRecord(settings.storage)) return null;
+  const unlocked = isRecord(settings.unlocked_folder) ? settings.unlocked_folder : {};
   if (
     !isRecord(settings.backup) ||
     !isRecord(settings.security) ||
@@ -217,13 +220,18 @@ export function parseEmbeddedVaultSettings(
         hidden,
       },
       storage: { mode, plain_files: plainFiles },
-      mount: normalizeWorkspaceTable(settings.mount, "vault"),
+      unlocked_folder: {
+        encrypted:
+          oneOf<EncryptedFolderSwitch>(str(unlocked.encrypted) ?? "", ["inherit", "on", "off"]) ??
+          "inherit",
+        devices: parseDeviceGroups(unlocked.devices, VAULT_UNLOCKED_LIST),
+      },
       backup: {
         enabled,
         mode: backupMode,
         keep_last: keepLast,
         skip_unchanged: skipUnchanged,
-        ...normalizeVaultBackupFolders(settings.backup),
+        devices: parseDeviceGroups(settings.backup.devices, VAULT_BACKUP_LIST),
       },
       security: {
         wipe_passes: wipePasses,

@@ -1,15 +1,12 @@
 import { useCallback, useRef } from "react";
 import type { VaultRebuildResult } from "../domain";
 import type { JobService, VaultSecurityService } from "../services";
-import { useCoreJob, type CoreJob } from "./useCoreJob";
+import { useCoreJob } from "./useCoreJob";
 
 /** The vault a rebuild runs for. */
 export interface VaultRebuildTarget {
   vaultId: string;
 }
-
-/** The rebuild of a lost index in flight. Its row shows `recovering`. */
-export type VaultRebuildJob = CoreJob<VaultRebuildTarget>;
 
 export interface VaultRebuildJobEvents {
   /**

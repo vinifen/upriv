@@ -211,14 +211,11 @@ async function resolveVaultMountOsPath(
   );
   const record =
     typeof resolved === "object" && resolved !== null
-      ? (resolved as { osPath?: unknown; reason?: unknown })
+      ? (resolved as { osPath?: unknown; state?: unknown })
       : {};
   const osPath = typeof record.osPath === "string" ? record.osPath.trim() : "";
-  if (!osPath) {
-    if (record.reason === "unsupported_filesystem") {
-      throw new Error("vault_mount_filesystem: the disk cannot hold the file manager folder");
-    }
-    throw new Error("vault_mount_failed: OS mount is not available");
+  if (record.state !== "ready" || !osPath) {
+    throw new Error("vault_mount_failed: the vault has no unlocked folder now");
   }
   return osPath;
 }

@@ -1,6 +1,4 @@
 import type { StorageMode } from "../../vault";
-import { vaultWorkspace } from "../../workspace";
-import { vaultBackupFolders } from "../../backups/folders";
 import type { VaultSettingsConfig } from "..";
 
 /** Minimal valid `VaultSettingsConfig` for domain tests. */
@@ -23,13 +21,13 @@ export function vaultSettingsFixture(
       ...overrides.vault,
     },
     storage: { mode: storageMode, plain_files: "chosen" },
-    mount: vaultWorkspace(),
+    unlocked_folder: { encrypted: "inherit", devices: {} },
     backup: {
       enabled: true,
       mode: "keep_last",
       keep_last: 1,
       skip_unchanged: true,
-      ...vaultBackupFolders(),
+      devices: {},
     },
     security: {
       wipe_passes: 1,

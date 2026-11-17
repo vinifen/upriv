@@ -11,8 +11,8 @@ use crate::error::{Result, UprivError};
 pub use types::{
     AutoCloseWhenBusy, VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode,
     VaultBackupSection, VaultConfig, VaultFileManagerSection, VaultIdentitySection,
-    VaultMountSection, VaultPlainFiles, VaultSecuritySection, VaultSevenZipSection,
-    VaultStorageMode, VaultStorageSection, VaultWipePattern,
+    VaultPlainFiles, VaultSecuritySection, VaultSevenZipSection, VaultStorageMode,
+    VaultStorageSection, VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -26,42 +26,11 @@ pub fn vault_config_path(vault_dir: impl AsRef<Path>) -> PathBuf {
     vault_dir.as_ref().join(CONFIG_FILE_NAME)
 }
 
-/// Derive vault-root from `…/.upriv/vaults/<id>` (parent of `.upriv`).
-///
-/// Returns `None` when the vault dir is not under the canonical layout (e.g. a
-/// temp fixture written as `tmp/notes` without `.upriv/vaults/`).
-fn vault_root_for_config(vault_dir: &Path) -> Option<&Path> {
-    let vaults = vault_dir.parent()?;
-    let upriv = vaults.parent()?;
-    let root = upriv.parent()?;
-    let vaults_name = vaults.file_name()?;
-    let upriv_name = upriv.file_name()?;
-    if !vaults_name.eq_ignore_ascii_case("vaults") {
-        return None;
-    }
-    if !upriv_name.eq_ignore_ascii_case(".upriv") {
-        return None;
-    }
-    Some(root)
-}
-
-fn map_mount_validate_error(path: &Path, error: UprivError) -> UprivError {
-    match error {
-        UprivError::WorkspacePathInvalid { path: p, detail } => UprivError::VaultConfigInvalid {
-            path: path.to_path_buf(),
-            detail: format!("[mount] path ({}): {detail}", p.display()),
-        },
-        UprivError::WorkspacePathReserved(p) => UprivError::VaultConfigInvalid {
-            path: path.to_path_buf(),
-            detail: format!("[mount] path reserved: {}", p.display()),
-        },
-        other => other,
-    }
-}
-
-/// Parse + identity/storage validate; normalizes mount path. **Does not** validate
-/// mount absolute/reserved — use for list so a bad mount does not hide the vault.
-pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig> {
+/// Load `vaults/<id>/config.toml`: `[vault].id` must match the folder and a
+/// display name must be set. Other sections use their defaults when absent.
+/// A folder list is checked as a list (row numbers, a selection that names a
+/// row); its paths are checked when they are saved and when they are used.
+pub fn load_vault_config(vault_dir: impl AsRef<Path>) -> Result<VaultConfig> {
     let vault_dir = vault_dir.as_ref();
     let path = vault_config_path(vault_dir);
     if !path.host_is_file() {
@@ -109,6 +78,24 @@ pub(crate) fn parse_vault_config_toml(raw: &str, path: &Path) -> Result<VaultCon
     let mut parsed: VaultConfig =
         toml::from_str(raw).map_err(|error| invalid_config(path, &error))?;
     parsed.auto_close.idle_minutes = types::clamp_idle_minutes(parsed.auto_close.idle_minutes);
+    let lists = parsed
+        .unlocked_folder
+        .devices
+        .check()
+        .map_err(|detail| format!("[unlocked_folder] {detail}"))
+        .and_then(|()| {
+            parsed
+                .backup
+                .devices
+                .check()
+                .map_err(|detail| format!("[backup] {detail}"))
+        });
+    if let Err(detail) = lists {
+        return Err(UprivError::VaultConfigInvalid {
+            path: path.to_path_buf(),
+            detail,
+        });
+    }
     Ok(parsed)
 }
 
@@ -157,21 +144,6 @@ pub(crate) fn normalize_and_validate_display_name(raw: &str) -> Result<String> {
     Ok(name)
 }
 
-/// Load and fully validate a vault `config.toml` (identity + mount).
-///
-/// Requires `[vault].id` and `[vault].display_name`. Other sections use defaults when absent.
-/// Mount validation uses [`vault_root_for_config`] when the vault sits under
-/// `.upriv/vaults/<id>`.
-pub fn load_vault_config(vault_dir: impl AsRef<Path>) -> Result<VaultConfig> {
-    let vault_dir = vault_dir.as_ref();
-    let path = vault_config_path(vault_dir);
-    let config = load_vault_config_raw(vault_dir)?;
-    let vault_root = vault_root_for_config(vault_dir);
-    crate::paths::validate_workspace_table(&config.mount, vault_root)
-        .map_err(|error| map_mount_validate_error(&path, error))?;
-    Ok(config)
-}
-
 /// Persist a full `config.toml`. Does not create the vault directory (parent must exist).
 pub fn save_vault_config(vault_dir: impl AsRef<Path>, config: &VaultConfig) -> Result<()> {
     let path = vault_config_path(vault_dir);
@@ -180,42 +152,19 @@ pub fn save_vault_config(vault_dir: impl AsRef<Path>, config: &VaultConfig) -> R
 }
 
 /// Set `[vault].hidden`. Returns whether the flag changed.
-///
-/// Uses raw load + skip mount revalidation so a bad mount path
-/// cannot block hide/unhide (list already shows those vaults).
 pub fn set_vault_hidden(vault_dir: impl AsRef<Path>, hidden: bool) -> Result<bool> {
     let vault_dir = vault_dir.as_ref();
-    let mut config = load_vault_config_raw(vault_dir)?;
+    let mut config = load_vault_config(vault_dir)?;
     if config.vault.hidden == hidden {
         return Ok(false);
     }
     config.vault.hidden = hidden;
-    let path = vault_config_path(vault_dir);
-    let body = serialize_vault_config_toml_unchecked(&config)?;
-    crate::paths::write_bytes_atomic_existing_parent(&path, body.as_bytes())?;
+    save_vault_config(vault_dir, &config)?;
     Ok(true)
 }
 
-/// Serialize a vault config to TOML (full-file; all sections). Used by
-/// [`save_vault_config`] — missing sections must not be dropped.
-///
-/// Validates each `[mount.<os>].path` before writing (relative / reserved rejected).
+/// Serialize a vault config to TOML: the whole file, so no section is dropped.
 pub fn serialize_vault_config_toml(config: &VaultConfig) -> Result<String> {
-    crate::paths::validate_workspace_table(&config.mount, None).map_err(|error| match error {
-        UprivError::WorkspacePathInvalid { path: p, detail } => UprivError::VaultConfigInvalid {
-            path: PathBuf::from("config.toml"),
-            detail: format!("[mount] path ({}): {detail}", p.display()),
-        },
-        UprivError::WorkspacePathReserved(p) => UprivError::VaultConfigInvalid {
-            path: PathBuf::from("config.toml"),
-            detail: format!("[mount] path reserved: {}", p.display()),
-        },
-        other => other,
-    })?;
-    serialize_vault_config_toml_unchecked(config)
-}
-
-fn serialize_vault_config_toml_unchecked(config: &VaultConfig) -> Result<String> {
     let mut config = config.clone();
     config.vault.display_name = crate::paths::normalize_stored_name(&config.vault.display_name);
     config.auto_close.idle_minutes = types::clamp_idle_minutes(config.auto_close.idle_minutes);
@@ -247,14 +196,6 @@ mod tests {
         let vaults = root.join(".upriv").join("vaults");
         crate::host_fs::create_dir_all(&vaults).unwrap();
         write_vault_dir(&vaults, &VaultSpec::encrypted("notes", "Notes", 1))
-    }
-
-    #[test]
-    fn vault_root_for_config_walks_upriv_vaults() {
-        let root = Path::new("/data/user/Upriv");
-        let vault_dir = root.join(".upriv/vaults/notes");
-        assert_eq!(vault_root_for_config(&vault_dir), Some(root));
-        assert!(vault_root_for_config(Path::new("/tmp/notes")).is_none());
     }
 
     #[test]
@@ -434,7 +375,7 @@ mode = "encrypted_dir"
 not_a_field = true
 "#;
         crate::host_fs::write(vault_dir.join("config.toml"), original).unwrap();
-        let err = load_vault_config_raw(&vault_dir).unwrap_err();
+        let err = load_vault_config(&vault_dir).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
         let after = crate::host_fs::read_to_string(vault_dir.join("config.toml")).unwrap();
         assert_eq!(after, original);
@@ -452,7 +393,7 @@ display_name = \"Notes\"
 ";
         let path = vault_dir.join("config.toml");
         crate::host_fs::write(&path, original).unwrap();
-        load_vault_config_raw(&vault_dir).unwrap();
+        load_vault_config(&vault_dir).unwrap();
         let saved = crate::host_fs::read_to_string(&path).unwrap();
         assert_eq!(saved, original);
     }
@@ -472,7 +413,7 @@ idle_minutes = "soon"
 "#;
         let path = vault_dir.join("config.toml");
         crate::host_fs::write(&path, original).unwrap();
-        let err = load_vault_config_raw(&vault_dir).unwrap_err();
+        let err = load_vault_config(&vault_dir).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
         let saved = crate::host_fs::read_to_string(&path).unwrap();
         assert_eq!(saved, original);
@@ -494,7 +435,7 @@ idle_minutes = 40000
 ";
         let path = vault_dir.join("config.toml");
         crate::host_fs::write(&path, original).unwrap();
-        let cfg = load_vault_config_raw(&vault_dir).unwrap();
+        let cfg = load_vault_config(&vault_dir).unwrap();
         assert_eq!(cfg.auto_close.idle_minutes, types::IDLE_MINUTES_MAX);
         assert_eq!(crate::host_fs::read_to_string(&path).unwrap(), original);
 
@@ -503,12 +444,12 @@ idle_minutes = 40000
             original.replace("idle_minutes = 40000", "idle_minutes = 0"),
         )
         .unwrap();
-        let raised = load_vault_config_raw(&vault_dir).unwrap();
+        let raised = load_vault_config(&vault_dir).unwrap();
         assert_eq!(raised.auto_close.idle_minutes, types::IDLE_MINUTES_MIN);
         assert!(crate::host_fs::read_to_string(&path)
             .unwrap()
             .contains("idle_minutes = 0"));
-        let saved = serialize_vault_config_toml_unchecked(&raised).unwrap();
+        let saved = serialize_vault_config_toml(&raised).unwrap();
         assert!(saved.contains("idle_minutes = 1"));
     }
 
@@ -544,18 +485,17 @@ display_name = "X"
         assert_eq!(cfg.auto_close.when_busy, AutoCloseWhenBusy::Wait);
         assert!(cfg.seven_zip.encrypt_file_names);
         assert_eq!(cfg.seven_zip.archive_mode, VaultArchiveMode::EncryptOnly);
-        assert!(cfg.mount.linux.path.is_empty());
         assert_eq!(
-            cfg.mount.app_file_manager_folder,
-            crate::paths::VaultShortcut::Inherit
+            cfg.unlocked_folder.encrypted,
+            crate::folder_list::unlocked::EncryptedSwitch::Inherit
         );
-        assert!(!cfg.mount.file_manager_folder);
-        assert!(!cfg.mount.custom_file_manager_folder);
+        assert!(cfg.unlocked_folder.devices.is_empty());
+        assert!(cfg.backup.devices.is_empty());
         assert!(!cfg.vault.hidden);
     }
 
     #[test]
-    fn load_rejects_relative_mount_under_canonical_layout() {
+    fn a_list_whose_selection_names_no_row_does_not_load() {
         let tmp = tempfile::tempdir().unwrap();
         let vault_dir = vault_dir_under_root(tmp.path());
         crate::host_fs::write(
@@ -564,37 +504,23 @@ display_name = "X"
 [vault]
 id = "notes"
 display_name = "Notes"
-[mount.linux]
-path = "relative/mount"
-[mount.windows]
-path = "relative/mount"
-[mount.macos]
-path = "relative/mount"
-[mount.android]
-path = "relative/mount"
-[mount.ios]
-path = "relative/mount"
+[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 3
+next_number = 1
 "#,
         )
         .unwrap();
-        let err = load_vault_config(&vault_dir).unwrap_err();
-        match err {
+        match load_vault_config(&vault_dir).unwrap_err() {
             UprivError::VaultConfigInvalid { detail, .. } => {
-                assert!(detail.contains("[mount]"), "unexpected detail: {detail}");
+                assert!(detail.contains("[unlocked_folder]"), "{detail}");
             }
             other => panic!("expected VaultConfigInvalid, got {other:?}"),
         }
-        // Raw/list path still loads identity.
-        let raw = load_vault_config_raw(&vault_dir).expect("raw load");
-        assert_eq!(raw.id(), "notes");
-        assert_eq!(
-            raw.mount.row(crate::paths::WorkspaceSystem::current()).path,
-            "relative/mount"
-        );
     }
 
     #[test]
-    fn load_keeps_a_backup_path_that_does_not_validate() {
+    fn a_row_path_that_does_not_validate_still_loads() {
         let tmp = tempfile::tempdir().unwrap();
         let vault_dir = vault_dir_under_root(tmp.path());
         crate::host_fs::write(
@@ -603,47 +529,30 @@ path = "relative/mount"
 [vault]
 id = "notes"
 display_name = "Notes"
-[backup.linux]
-place = "custom"
+[backup.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1
+next_number = 2
+[[backup.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
 path = "relative/backups"
 "#,
         )
         .unwrap();
-        let cfg = load_vault_config(&vault_dir).expect("a backup path never fails a load");
-        assert_eq!(cfg.backup.linux.path, "relative/backups");
-        assert!(cfg.backup.validate_folders(None).is_err());
-    }
-
-    #[test]
-    fn serialize_rejects_relative_mount() {
-        let cfg = VaultConfig {
-            vault: VaultIdentitySection {
-                id: "notes".into(),
-                display_name: "Notes".into(),
-                order: 0,
-                note: String::new(),
-                hidden: false,
-                password_hint: String::new(),
-            },
-            storage: VaultStorageSection::default(),
-            mount: {
-                let mut mount = VaultMountSection::default();
-                mount.linux.path = "relative/mount".into();
-                mount
-            },
-            backup: VaultBackupSection::default(),
-            security: VaultSecuritySection::default(),
-            auto_close: VaultAutoCloseSection::default(),
-            file_manager: VaultFileManagerSection::default(),
-            seven_zip: VaultSevenZipSection::default(),
-        };
-        let err = serialize_vault_config_toml(&cfg).unwrap_err();
-        assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
+        let cfg = load_vault_config(&vault_dir).expect("a row path never fails a load");
+        let rows: Vec<_> = cfg
+            .backup
+            .devices
+            .0
+            .values()
+            .flat_map(|group| group.rows.iter())
+            .collect();
+        assert_eq!(rows[0].path, "relative/backups");
     }
 
     #[test]
     fn serialize_roundtrip_preserves_all_ts_sections() {
-        let mut cfg = VaultConfig {
+        let cfg = VaultConfig {
             vault: VaultIdentitySection {
                 id: "notes".into(),
                 display_name: "Notes".into(),
@@ -653,20 +562,15 @@ path = "relative/backups"
                 password_hint: "".into(),
             },
             storage: VaultStorageSection::default(),
-            mount: {
-                let mut mount = VaultMountSection::default();
-                mount.linux.path = "/tmp/open".into();
-                mount
+            unlocked_folder: crate::folder_list::unlocked::VaultUnlockedFolder {
+                encrypted: crate::folder_list::unlocked::EncryptedSwitch::On,
+                devices: Default::default(),
             },
             backup: VaultBackupSection {
                 enabled: false,
                 mode: VaultBackupMode::KeepAll,
                 keep_last: 5,
                 skip_unchanged: false,
-                linux: crate::paths::VaultBackupFolderRow {
-                    place: crate::paths::VaultBackupPlace::Custom,
-                    path: "/mnt/backups".into(),
-                },
                 ..VaultBackupSection::default()
             },
             security: VaultSecuritySection {
@@ -700,20 +604,18 @@ path = "relative/backups"
             "[auto_close]",
             "[file_manager]",
             "[seven_zip]",
-            "[mount.linux]",
-            "[backup.linux]",
+            "[unlocked_folder]",
         ] {
             assert!(raw.contains(section), "missing {section} in:\n{raw}");
         }
         crate::host_fs::write(vault_dir.join("config.toml"), &raw).unwrap();
         let loaded = load_vault_config(&vault_dir).expect("reload");
-        cfg.mount.linux.path = "/tmp/open".into();
         assert_eq!(loaded.backup, cfg.backup);
+        assert_eq!(loaded.unlocked_folder, cfg.unlocked_folder);
         assert_eq!(loaded.security, cfg.security);
         assert_eq!(loaded.auto_close, cfg.auto_close);
         assert_eq!(loaded.file_manager, cfg.file_manager);
         assert_eq!(loaded.seven_zip, cfg.seven_zip);
-        assert_eq!(loaded.mount.linux.path, "/tmp/open");
         assert!(loaded.vault.hidden);
         assert!(
             raw.contains("hidden = true"),

@@ -1,21 +1,21 @@
-import { createLiveBackupService } from "@upriv/shared";
+import type { BackupService } from "@upriv/shared";
 import {
   rpcBackupDelete,
   rpcBackupExport,
-  rpcBackupFolderCheck,
-  rpcBackupFolderReuse,
+  rpcBackupFolderForget,
   rpcBackupList,
   rpcBackupPromote,
+  rpcBackupRename,
   rpcBackupSave,
 } from "@/lib/rpc";
 
 /** Desktop → daemon `backup_*`. */
-export const desktopBackupService = createLiveBackupService({
+export const desktopBackupService: BackupService = {
   listBackups: (vaultId) => rpcBackupList(vaultId),
-  deleteBackups: (vaultId, stamps) => rpcBackupDelete(vaultId, stamps),
-  promoteToSave: (vaultId, stamp) => rpcBackupPromote(vaultId, stamp),
+  deleteBackups: (vaultId, keys) => rpcBackupDelete(vaultId, keys),
+  promoteToSave: (vaultId, key) => rpcBackupPromote(vaultId, key),
+  renameBackup: (vaultId, key, name) => rpcBackupRename(vaultId, key, name),
+  forgetFolder: (vaultId, folder) => rpcBackupFolderForget(vaultId, folder),
   saveNow: (vaultId, job) => rpcBackupSave(vaultId, job),
   exportTo: (vaultId, keys, destDir, job) => rpcBackupExport(vaultId, keys, destDir, job),
-  checkFolder: (path, vaultId) => rpcBackupFolderCheck(path, vaultId),
-  reuseFolder: (vaultId) => rpcBackupFolderReuse(vaultId),
-});
+};

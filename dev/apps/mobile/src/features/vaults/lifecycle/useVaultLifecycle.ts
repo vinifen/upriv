@@ -1,29 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { AppState, Platform } from "react-native";
+import { AppState } from "react-native";
 import {
   appConfigEditAllowed,
-  applyPlainPlaceChoice,
   canRunIdleAutoClose,
-  currentWorkspaceSystem,
   idleWarningText,
   type AutoCloseWhenBusy,
   type IdleAutoCloseWarning,
   type IdleLockResult,
   isRpcError,
   isVaultCredentialChallengeI18nKey,
-  normalizeVaultSettingsConfig,
   offersVaultRebuild,
   plainFolderClassI18nKey,
+  plainPlaceChanges,
   resolveVaultDisplayStatus,
   storageModeIsPlaintext,
+  switchesMessage,
   BACKUP_CLOSE_TOAST_MS,
   backupCloseFailureToastKey,
   type BackupFailureReason,
   touchVaultLastAccessed,
   isVaultOpenJobPending,
+  type FolderSwitch,
   type PlainCloseSummary,
+  type DeviceGroups,
   type PlainFolderClass,
   type PlainLeftover,
+  type PlainPlaceChoice,
   type PlainRecoveryAction,
   type VaultClosePrompt,
   type VaultLifecycleIntent,
@@ -32,6 +34,7 @@ import {
   type VaultPipelineKind,
   type VaultRowWork,
   type VaultRuntimePatch,
+  type VaultUnlockedChoice,
   vaultRowJobWork,
   scheduleOpenFileManagerIfIdle,
   saveDirtyVaultDrafts,
@@ -41,19 +44,24 @@ import {
   fileManagerDismissIntent,
   hasUnsavedWorkspaceChanges,
   vaultCloseBlocker,
-  WORKSPACE_ERROR_CODES,
+  NO_APP_LIST_CHANGES,
+  NO_VAULT_LIST_CHANGES,
+  VAULT_ERROR_CODES,
 } from "@upriv/shared";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
+  useDeviceService,
   useJobService,
   useVaultFileSystemService,
   useVaultLifecycleService,
 } from "@/platform/services";
 import {
   TOAST_DEFAULT_MS,
+  hereDevice,
   useClosingDisplayHold,
+  useDeviceInfo,
   usePlainRemoveJob,
   useVaultPipelineRun,
 } from "@upriv/shared/react";
@@ -105,7 +113,8 @@ export function useVaultLifecycle({
   blockOpenVaultIdsRef,
 }: UseVaultLifecycleOptions) {
   const { t } = useTranslation();
-  const { settings, patchSettings, getSettingsSnapshot } = useAppSettingsContext();
+  const { settings, patchSettings, replaceSettings, getSettingsSnapshot } = useAppSettingsContext();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
   const lifecycleService = useVaultLifecycleService();
   const fs = useVaultFileSystemService();
   const jobs = useJobService();
@@ -169,6 +178,12 @@ export function useVaultLifecycle({
   const unlockRetainPasswordsRef = useRef(new Map<string, string>());
   /** Drops a stale close-all loop when the user starts another. */
   const closeAllGenRef = useRef(0);
+  /** A Close all reports the backup folders its closes switched in one toast. */
+  const closeAllBackupsRef = useRef<{ waiting: Set<string>; switches: FolderSwitch[] } | null>(
+    null,
+  );
+  /** The switches an open made, shown once it lands. */
+  const openSwitchesRef = useRef(new Map<string, FolderSwitch[]>());
   const [closePrompt, setClosePrompt] = useState<VaultClosePrompt | null>(null);
   const closePromptRef = useRef(closePrompt);
   closePromptRef.current = closePrompt;
@@ -189,11 +204,43 @@ export function useVaultLifecycle({
   const [placeVaultId, setPlaceVaultId] = useState<string | null>(null);
   const [placeSubmitting, setPlaceSubmitting] = useState(false);
   const [placeWarningClass, setPlaceWarningClass] = useState<PlainFolderClass | null>(null);
+  /**
+   * The vault's own unlocked folders while "Where should the files go?" is
+   * open, so a picked folder is checked against them; `null` while they load.
+   */
+  const [placeVaultUnlocked, setPlaceVaultUnlocked] =
+    useState<DeviceGroups<VaultUnlockedChoice> | null>(null);
+  useEffect(() => {
+    setPlaceVaultUnlocked(null);
+    if (!placeVaultId) return;
+    let cancelled = false;
+    void rpcVaultConfigGet(placeVaultId).then(
+      (config) => {
+        if (!cancelled) setPlaceVaultUnlocked(config.unlocked_folder.devices);
+      },
+      () => {
+        // Unread, the folder is checked without the vault's rows; Continue
+        // reads the settings again and reports what fails.
+        if (!cancelled) setPlaceVaultUnlocked({});
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [placeVaultId]);
   const [heldPrompt, setHeldPrompt] = useState<{ vaultId: string; count: number } | null>(null);
   const [heldSubmitting, setHeldSubmitting] = useState(false);
   const [recoveryLeftover, setRecoveryLeftover] = useState<PlainLeftover | null | undefined>(null);
   const plainCloseRef = useRef<Map<string, PlainCloseSummary | null>>(new Map());
   const backupFailureRef = useRef<Map<string, BackupFailureReason>>(new Map());
+  const backupSwitchesRef = useRef<Map<string, FolderSwitch[]>>(new Map());
+
+  /** A vault's name for a toast, by id. */
+  const vaultName = useCallback(
+    (vaultId: string) =>
+      vaultsRef.current.find((item) => item.id === vaultId)?.displayName ?? vaultId,
+    [],
+  );
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
@@ -373,7 +420,12 @@ export function useVaultLifecycle({
         stepCount: lifecycleService.openingStepCount,
         presentation: "background",
         failureMode: "advance",
-        runPipeline: (id, onStep, job) => lifecycleService.runOpeningPipeline(id, onStep, job),
+        runPipeline: async (id, onStep, job) => {
+          openSwitchesRef.current.set(
+            id,
+            await lifecycleService.runOpeningPipeline(id, onStep, job),
+          );
+        },
         onComplete: () => {
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
@@ -400,14 +452,16 @@ export function useVaultLifecycle({
             lifecycleService.setPasswordInSession(vaultId, retain);
           }
           notifyPipelineComplete(vaultId, "open");
+          const switched = switchesMessage(
+            openSwitchesRef.current.get(vaultId) ?? [],
+            t,
+            vaultName,
+          );
+          openSwitchesRef.current.delete(vaultId);
+          if (switched) showToast(switched);
         },
         onError: (errorI18nKey) => {
-          if (errorI18nKey === "plain.open.cancelled") {
-            lifecycleService.clearPasswordInSession(vaultId);
-            unlockRetainPasswordsRef.current.delete(vaultId);
-            if (lifecycleRequestRef.current?.vaultId === vaultId) setLifecycleRequest(null);
-            return;
-          }
+          openSwitchesRef.current.delete(vaultId);
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
             if (lifecycleRequestRef.current?.vaultId === vaultId) {
@@ -443,6 +497,7 @@ export function useVaultLifecycle({
         },
         onStopped: () => {
           // The vault stays closed; the typed password goes with the attempt.
+          openSwitchesRef.current.delete(vaultId);
           clearCredentialVerify(vaultId);
           unlockRetainPasswordsRef.current.delete(vaultId);
           lifecycleService.clearPasswordInSession(vaultId);
@@ -474,6 +529,7 @@ export function useVaultLifecycle({
       settingsPersistVaultIdsRef,
       showToast,
       t,
+      vaultName,
     ],
   );
 
@@ -540,6 +596,25 @@ export function useVaultLifecycle({
     return asked;
   }, []);
 
+  /**
+   * A close in a Close all ended. True when it belongs to that batch, whose
+   * backup folder switches are reported once, by the last close to end.
+   */
+  const settleCloseAllBackup = useCallback(
+    (vaultId: string, switches: readonly FolderSwitch[]): boolean => {
+      const batch = closeAllBackupsRef.current;
+      if (!batch?.waiting.has(vaultId)) return false;
+      batch.waiting.delete(vaultId);
+      batch.switches.push(...switches);
+      if (batch.waiting.size > 0) return true;
+      closeAllBackupsRef.current = null;
+      const switched = switchesMessage(batch.switches, t, vaultName);
+      if (switched) showToast(switched, BACKUP_CLOSE_TOAST_MS);
+      return true;
+    },
+    [showToast, t, vaultName],
+  );
+
   const hurryRunningClose = useCallback(
     (vaultId: string) => {
       closeNowAskedRef.current.add(vaultId);
@@ -599,6 +674,7 @@ export function useVaultLifecycle({
           } else {
             backupFailureRef.current.delete(id);
           }
+          backupSwitchesRef.current.set(id, outcome.backupSwitches);
         },
         onComplete: () => {
           const immediate = forgetCloseNow(vaultId) || opts?.now === true;
@@ -616,6 +692,9 @@ export function useVaultLifecycle({
           plainCloseRef.current.delete(vaultId);
           const backupFailure = backupFailureRef.current.get(vaultId) ?? null;
           backupFailureRef.current.delete(vaultId);
+          const backupSwitches = backupSwitchesRef.current.get(vaultId) ?? [];
+          backupSwitchesRef.current.delete(vaultId);
+          const reportedWithCloseAll = settleCloseAllBackup(vaultId, backupSwitches);
           const name = vault?.displayName ?? vaultId;
           closingHold.settle(
             vaultId,
@@ -637,6 +716,13 @@ export function useVaultLifecycle({
                 );
                 return;
               }
+              const switched = reportedWithCloseAll
+                ? null
+                : switchesMessage(backupSwitches, t, vaultName);
+              if (switched) {
+                showToast(switched, BACKUP_CLOSE_TOAST_MS);
+                return;
+              }
               if (summary && summary.kept > 0) {
                 showToast(
                   t("plain.close.kept", {
@@ -653,6 +739,8 @@ export function useVaultLifecycle({
         },
         onError: (errorI18nKey) => {
           forgetCloseNow(vaultId);
+          backupSwitchesRef.current.delete(vaultId);
+          settleCloseAllBackup(vaultId, []);
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
             if (lifecycleRequestRef.current?.vaultId === vaultId) {
@@ -704,8 +792,10 @@ export function useVaultLifecycle({
       revertCloseFailure,
       setLifecycleRequest,
       setVaultRuntimeState,
+      settleCloseAllBackup,
       showToast,
       t,
+      vaultName,
     ],
   );
 
@@ -875,7 +965,7 @@ export function useVaultLifecycle({
               setLifecycleRequest({ vaultId });
             })
             .catch((error) => {
-              if (isRpcError(error) && error.code === WORKSPACE_ERROR_CODES.UNSET) {
+              if (isRpcError(error) && error.code === VAULT_ERROR_CODES.UNLOCKED_FOLDER_UNSET) {
                 setPlaceVaultId(vaultId);
                 return;
               }
@@ -999,6 +1089,7 @@ export function useVaultLifecycle({
       }
       const alreadyRunning = pipeline.isRunningNow();
       const importing: string[] = [];
+      const startedIds = new Set<string>();
       let started = 0;
       let queuedName = "";
       for (const vault of open) {
@@ -1011,10 +1102,12 @@ export function useVaultLifecycle({
         }
         if (startClosePipeline(vault.id, { quietQueue: true, unsavedResolved })) {
           started += 1;
+          startedIds.add(vault.id);
           queuedName = vault.displayName;
         }
       }
       if (generation !== closeAllGenRef.current) return;
+      if (started > 1) closeAllBackupsRef.current = { waiting: startedIds, switches: [] };
       if (importing.length > 0) {
         setClosePrompt({ blocker: "import", vaultIds: importing, all: importing.length > 1 });
       }
@@ -1287,32 +1380,32 @@ export function useVaultLifecycle({
     [setLifecycleRequest],
   );
 
+  /** Save "Where should the files go?" as a choice or a new row of one list, then go on. */
   const applyPlace = useCallback(
-    async (choice: "default" | "custom" | "vault_only", path: string) => {
-      if (!placeVaultId) return;
+    async (choice: PlainPlaceChoice, path: string) => {
+      if (!placeVaultId || !here) return;
       const vaultId = placeVaultId;
       setPlaceSubmitting(true);
       try {
-        const system = currentWorkspaceSystem(Platform.OS);
-        await applyPlainPlaceChoice({
+        const vaultSettings = await rpcVaultConfigGet(vaultId);
+        const appSettings = getSettingsSnapshot();
+        const place = plainPlaceChanges({
           choice,
           path,
-          system,
-          saveWorkspace: (entry) => patchSettings({ workspace: { [system]: entry } }),
-          saveVaultFolder: async (folder) => {
-            const settings = await rpcVaultConfigGet(vaultId);
-            await rpcVaultConfigSave(
-              vaultId,
-              normalizeVaultSettingsConfig({
-                ...settings,
-                mount: {
-                  ...settings.mount,
-                  [system]: { ...settings.mount[system], place: "unset", path: folder },
-                },
-              }),
-            );
-          },
+          here,
+          appUnlocked: appSettings.unlocked_folders.devices,
+          vaultUnlocked: vaultSettings.unlocked_folder.devices,
         });
+        if (place.list === "app") {
+          await replaceSettings(appSettings, {
+            lists: { ...NO_APP_LIST_CHANGES, unlockedFolders: place.changes },
+          });
+        } else {
+          await rpcVaultConfigSave(vaultId, vaultSettings, {
+            ...NO_VAULT_LIST_CHANGES,
+            unlockedFolder: place.changes,
+          });
+        }
         const dest = await rpcVaultPlainDestination(vaultId);
         if (plainFolderClassI18nKey(dest.class)) {
           setPlaceWarningClass(dest.class);
@@ -1325,7 +1418,15 @@ export function useVaultLifecycle({
         setPlaceSubmitting(false);
       }
     },
-    [openPasswordAfterPlace, patchSettings, placeVaultId, showToast, t],
+    [
+      getSettingsSnapshot,
+      here,
+      openPasswordAfterPlace,
+      placeVaultId,
+      replaceSettings,
+      showToast,
+      t,
+    ],
   );
 
   const settleHeld = useCallback(
@@ -1409,7 +1510,9 @@ export function useVaultLifecycle({
     recoveryLeftover,
     placeOpen: placeVaultId !== null,
     placeVaultName: placeVault?.displayName ?? "",
-    placeWorkspaceChoices: appConfigEditAllowed("workspace.path", vaults),
+    placeAppChoices: appConfigEditAllowed("unlocked_folders", vaults),
+    placeAppUnlocked: settings.unlocked_folders.devices,
+    placeVaultUnlocked,
     placeSubmitting,
     placeWarningClass,
     onPlaceClose: () => {
@@ -1417,7 +1520,7 @@ export function useVaultLifecycle({
       setPlaceVaultId(null);
       setPlaceWarningClass(null);
     },
-    onPlaceContinue: (choice: "default" | "custom" | "vault_only", path: string) => {
+    onPlaceContinue: (choice: PlainPlaceChoice, path: string) => {
       void applyPlace(choice, path);
     },
     onPlaceAcceptWarning: () => {

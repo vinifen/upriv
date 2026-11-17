@@ -1,3 +1,4 @@
+import type { PlainRecord } from "../vault-plain/types";
 /** Runtime session state while the app is running. */
 export type VaultSession = "open" | "closing" | "recovery";
 
@@ -6,8 +7,8 @@ export type VaultSession = "open" | "closing" | "recovery";
  *
  * - `encrypted_dir` — default. Rest = `store/`. While open: decrypt in RAM
  *   (FUSE/WinFsp on desktop; in-app file manager on mobile).
- * - `upriv_plain` — rest = `store/`. While open: plaintext under the open
- *   mount folder on disk (wipe on close) — not app `[workspace].path` alone.
+ * - `upriv_plain` — rest = `store/`. While open: plaintext in the vault's
+ *   unlocked folder on disk (wipe on close).
  */
 export type StorageMode = "encrypted_dir" | "upriv_plain";
 
@@ -218,8 +219,13 @@ export interface VaultRow {
   hidden?: boolean;
   /** A plaintext folder from an earlier session waits to be removed. */
   plainLeftover?: boolean;
-  /** Backups of this vault went to the folder it uses now outside the data folder. */
+  /** Backups of this vault are recorded in folders outside the data folder. */
   outsideBackups?: boolean;
+  /**
+   * The plain-text folders of this vault on record: a leftover to remove, or
+   * a folder this device cannot reach, which keeps the vault from opening.
+   */
+  plainRecords?: PlainRecord[];
 }
 
 /**
@@ -251,22 +257,19 @@ export function isVaultFileManagerRetained(row: VaultRow): boolean {
 }
 
 /**
- * Workspace Clear / path wipe must stay blocked while core may still have
- * the vault open (open, renderer closing, or in-flight unlock).
+ * True while core may hold the vault's session: open, closing, or an unlock
+ * in flight or waiting. This device's unlocked folders keep their rows then.
  */
-export function isVaultBlockingWorkspaceClear(
-  row: VaultRow,
-  pipeline: VaultPipelineListStatus = {},
-): boolean {
+export function isVaultSessionLive(row: VaultRow, pipeline: VaultPipelineListStatus = {}): boolean {
   const status = resolveVaultListStatus(row, pipeline);
   return status === "open" || status === "closing" || status === "opening" || status === "queued";
 }
 
-export function listHasVaultBlockingWorkspaceClear(
+export function listHasLiveVaultSession(
   vaults: readonly VaultRow[],
   pipeline: VaultPipelineListStatus = {},
 ): boolean {
-  return vaults.some((vault) => isVaultBlockingWorkspaceClear(vault, pipeline));
+  return vaults.some((vault) => isVaultSessionLive(vault, pipeline));
 }
 
 /**

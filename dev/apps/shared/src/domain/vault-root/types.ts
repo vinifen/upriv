@@ -1,11 +1,19 @@
-import type { VaultRootMode } from "../app-settings";
+import type {
+  ChoiceName,
+  DataFolderChoice,
+  DeviceGroups,
+  FolderState,
+  FolderSwitch,
+} from "../folder-lists";
 
-/**
- * How resolve found the vault-root this launch (wire `source`).
- * Distinct from `VaultRootMode` (`vault_root_mode` preference) — never pass a mode
- * where a source is expected (or vice versa), even when both are `"custom_root"`.
- */
-export type VaultRootResolveSource = "explicit" | "custom_root" | "default_root";
+/** How resolve found the data folder this launch (wire `source`). */
+export type VaultRootResolveSource =
+  /** `UPRIV_VAULT_ROOT`: it wins over the list, and nothing is written for it. */
+  | "explicit"
+  /** Default: beside the app, the per-user app folder, or Documents/Upriv on a phone. */
+  | "default"
+  /** A row of this device's data folder list. */
+  | "row";
 
 export type VaultRootRelocateNotice = "left_behind" | "move_failed";
 
@@ -14,82 +22,68 @@ export type VaultRootPrivateRoot = "none" | "moved" | "left_behind";
 /** How the desktop app was distributed (packaging). */
 export type AppDistribution = "portable" | "installed" | "dev";
 
-/**
- * Snapshot for Gate-owned setup / recovery UI: one place for mode, disk alias, and
- * `default_root` anchor so modals do not each re-derive labels from partial state.
- *
- * Naming stays `defaultRoot*` (not `appHome`) to match wire/`default_root` mode.
- */
-export type VaultRootPresentationState = {
-  mode: VaultRootMode;
-  /** Folder for creating `.upriv/` — app home; parent of `aliasPath`. */
-  defaultRootAnchor: string;
-  /** Absolute path of the `.upriv-data-folder` file. */
-  aliasPath: string;
-  /**
-   * Path remembered inside `.upriv-data-folder` (active or inactive).
-   * May be set while `mode === "default_root"` (inactive alias).
-   */
-  rememberedAliasTarget: string | null;
-};
+interface RelocateFields {
+  /** Set when a Windows install directory still holds `.upriv`, or the move failed. */
+  relocateNotice?: VaultRootRelocateNotice;
+  relocatePath?: string;
+}
 
 export type VaultRootResolveResult =
-  | {
-      status: "found";
-      rootPath: string;
-      source: VaultRootResolveSource;
-      /** Set when a Windows install directory still holds `.upriv`, or the move failed. */
-      relocateNotice?: VaultRootRelocateNotice;
-      relocatePath?: string;
-    }
-  | {
-      status: "needs_setup";
+  | ({ status: "found"; rootPath: string; source: VaultRootResolveSource } & RelocateFields)
+  | ({
       /**
-       * Absolute path of `.upriv-data-folder`. Invariant: parent directory equals
-       * `defaultRootAnchor` (both are app home).
+       * The first run: Default is selected, holds no data folder, and this
+       * device has no row to try. Continue makes one there.
        */
-      aliasPath: string;
-      /** `default_root` create target (app home for all distributions). */
+      status: "needs_setup";
+      /** Default's folder on a computer (app home); the phone's logical data folder. */
       defaultRootAnchor: string;
       distribution: AppDistribution;
-      relocateNotice?: VaultRootRelocateNotice;
-      relocatePath?: string;
-    };
+      /** The vaults that ended with the data folder in use, when it was lost. */
+      ended: string[];
+    } & RelocateFields)
+  | ({
+      /**
+       * The selected choice did not answer as a data folder, at launch or
+       * once the one in use was lost: a search looks for one that does.
+       */
+      status: "selected_failed";
+      choice: ChoiceName;
+      reason: FolderState;
+      /** The vaults that ended with the data folder in use, when it was lost. */
+      ended: string[];
+    } & RelocateFields);
 
-/** Contents of `.upriv-data-folder` when the file exists (active or inactive). */
-export type VaultRootAliasInfo = {
-  path: string;
-  active: boolean;
-  /** Android last Custom folder (`content://` on `android_custom_folder=`). Absent when none is saved. */
-  customPath?: string;
-};
+/** `data_folder_list`: every device's group, and where Default is. */
+export interface DataFolderListView {
+  groups: DeviceGroups<DataFolderChoice>;
+  /** Default's folder on a computer. `null` on a phone, where Default is Documents/Upriv. */
+  defaultFolder: string | null;
+  /** The data folder the environment sets (`UPRIV_VAULT_ROOT`): it wins over the list. */
+  explicit: string | null;
+}
 
-/** Status of `.upriv/` at the default-root anchor. */
-export type VaultRootDirStatus =
-  | "absent"
-  | "valid"
-  | "incomplete"
-  | "unreadable"
-  /** SAF tree permission revoked — re-pick required (Android). */
-  | "unauthorized"
-  /**
-   * Grant or bookmark is held, but the volume does not answer. The pointer stays.
-   * Not a writable-location failure and not a missing folder.
-   * Only Android SAF inspect returns this today. iOS bookmarks reuse it.
-   * Desktop Rust inspect does not: a missing path stays alias recovery.
-   */
-  | "unreachable";
+/** What `data_folder_apply` did. */
+export interface DataFolderApplied {
+  rootPath: string;
+  source: VaultRootResolveSource;
+  /** False when only the list changed and the data folder in use stayed. */
+  switched: boolean;
+  /** A phone's copy of its private data folder, when it asked for one. */
+  privateRoot?: VaultRootPrivateRoot;
+  /** The vaults that ended with the lost data folder it replaced. */
+  ended: string[];
+}
 
-export type DefaultRootStatusResult = {
-  status: VaultRootDirStatus;
-  defaultRootAnchor: string;
-};
-
-/** Inspect `.upriv/` at an arbitrary absolute path (does not create/repair). */
-export type VaultRootInspectResult = {
-  status: VaultRootDirStatus;
-  path: string;
-};
+/** What `data_folder_search` found. */
+export interface DataFolderSearchResult {
+  /** A data folder answers: the selection, kept or switched to it. */
+  found: boolean;
+  /** The switch, when the selection changed. */
+  switch: FolderSwitch | null;
+  /** The vaults that ended with the lost data folder. */
+  ended: string[];
+}
 
 /**
  * How to repair an incomplete `.upriv/` when the UI confirms.
@@ -100,24 +94,14 @@ export type VaultRootInspectResult = {
 export type IncompleteReplacePolicy = "reset_settings" | "rename" | "delete";
 
 /**
- * Bootstrap UI prefs applied **only when creating** a new `.upriv/` (absent
- * init or incomplete→replace). Selecting an already-valid vault-root ignores
- * this bag — see AGENT.md § "Selecting an existing `.upriv`".
- *
- * Today the only pre-root pref is UI locale. Future pre-root UI prefs (theme
- * selector on Gate, high-contrast, etc.) extend this bag without renaming the
- * `setupDefaultRoot` / `setupAtPath` service methods again.
- *
- * Nested under `bootstrap` on the daemon wire (never a top-level peer of
- * `path` / `replaceIncomplete`).
+ * Bootstrap UI prefs applied **only when creating** a new `.upriv/`. Opening
+ * an already-valid data folder ignores this bag — see AGENT.md § "Selecting
+ * an existing `.upriv`". Today the only pre-root pref is the UI locale.
+ * Nested under `bootstrap` on the wire.
  */
 export type VaultRootBootstrapPrefs = {
-  /**
-   * UI locale (`en` | `pt-BR` | `es`). `null` / empty / whitespace-only →
-   * daemon falls back to the built-in `"en"` default on create. Required
-   * (non-empty) when the target folder does not yet contain a Valid `.upriv/`.
-   */
-  locale?: string | null;
+  locale: string;
 };
 
-export const VAULT_ROOT_ALIAS_FILE = ".upriv-data-folder";
+/** The data folder list in the app home. */
+export const DATA_FOLDER_LIST_FILE = ".upriv-data-folder";

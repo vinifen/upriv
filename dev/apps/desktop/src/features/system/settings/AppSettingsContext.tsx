@@ -13,27 +13,29 @@ import { useAppSettingsService } from "@/platform/services";
 import { I18nProvider, useTranslation } from "@/i18n";
 import { applyDocumentTheme } from "@/theme";
 import {
+  NO_LISTS_SAVED,
   createDefaultAppSettings,
+  isEmptyAppListChanges,
   normalizeAppSettings,
   RpcError,
   isVaultRootGoneError,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
 } from "@upriv/shared";
-import type { AppSettingsConfig, AppSettingsPatch } from "@upriv/shared";
+import type {
+  AppListChanges,
+  AppSettingsConfig,
+  AppSettingsPatch,
+  ListsSaved,
+} from "@upriv/shared";
 import { useToast } from "@upriv/shared/react";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { Toast } from "@/components/ui";
 import type { I18nKey } from "@/i18n";
 
 interface PersistOptions {
-  /**
-   * Caller already ran `setupDefaultRoot` / `setupAtPath` (Data folder / Setup /
-   * Repair / Recovery). Reload that root’s `settings.toml` — do not overwrite it
-   * with the previous session’s in-memory UI prefs. Vault-root disk mutations are
-   * modal-owned; Context never calls setup*.
-   */
-  vaultRootAlreadyApplied?: boolean;
+  /** What changed in the app's folder lists: core applies it to the file as it is now. */
+  lists?: AppListChanges;
   /**
    * Apply the patch in RAM only. Used when core already wrote the same field
    * (`vault_rename` patches `[app].last_opened_vault`).
@@ -57,11 +59,18 @@ interface AppSettingsContextValue {
    * failure on persist — `VaultRootGate` re-resolves on this.
    */
   vaultRootEpoch: number;
-  replaceSettings: (next: AppSettingsConfig, options?: PersistOptions) => Promise<void>;
+  /** Save `next`; resolves with what a list change left beyond `settings.toml`. */
+  replaceSettings: (next: AppSettingsConfig, options?: PersistOptions) => Promise<ListsSaved>;
   /** Persists a partial update. Returns `false` when save failed (toast already shown). */
   patchSettings: (patch: AppSettingsPatch, options?: PersistOptions) => Promise<boolean>;
   /** Reload settings.toml (or defaults) without persisting. */
   reloadSettings: () => Promise<void>;
+  /**
+   * After `data_folder_apply` switched or made the data folder: read that
+   * folder's `settings.toml`, never writing the previous session's prefs into
+   * it, and have the Gate resolve again.
+   */
+  adoptDataFolder: () => Promise<void>;
   /**
    * Mid-session vault-root A/B failure outside Settings save (e.g. Logs list):
    * bump Gate epoch, reload settings, toast. Caller closes its own modal.
@@ -226,100 +235,60 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const persistUnlocked = useCallback(
-    async (next: AppSettingsConfig, options?: PersistOptions) => {
+    async (next: AppSettingsConfig, options?: PersistOptions): Promise<ListsSaved> => {
       const normalized = normalizeAppSettings(next);
 
       if (options?.memoryOnly) {
         settingsRef.current = normalized;
         setSettings(normalized);
-        return;
+        return NO_LISTS_SAVED;
       }
 
-      const previous = settingsRef.current;
-      const rootModeChanged =
-        previous.app.vault_root_mode !== normalized.app.vault_root_mode ||
-        previous.app.upriv_root_path !== normalized.app.upriv_root_path;
-
       try {
-        if (
-          normalized.app.vault_root_mode === "custom_root" &&
-          !normalized.app.upriv_root_path.trim()
-        ) {
-          throw new RpcError(
-            "invalid_request",
-            "custom_root mode requires a non-empty upriv_root_path",
-          );
-        }
-
-        // Vault-root disk changes belong to Data folder / Gate modals (setup* first).
-        // After setup*, callers pass vaultRootAlreadyApplied and we only reload.
-        if (rootModeChanged && !options?.vaultRootAlreadyApplied) {
-          throw new RpcError(
-            "invalid_request",
-            "vault-root mode/path changes require setup* then vaultRootAlreadyApplied",
-          );
-        }
-
-        // Bootstrap / broken alias: no writable `.upriv/settings.toml` yet (`onDisk: false`).
-        // Keep UI prefs (locale, theme, …) in memory only until a root exists; creating a
-        // new root stamps locale via setup*, then we reload that root’s TOML.
-        if (!settingsOnDiskRef.current && !options?.vaultRootAlreadyApplied) {
+        // No `.upriv/settings.toml` yet (`onDisk: false`): keep UI prefs (locale,
+        // theme, …) in memory only until a data folder exists; making one stamps
+        // the locale, then we reload that data folder's TOML.
+        if (!settingsOnDiskRef.current) {
           settingsRef.current = normalized;
           setSettings(normalized);
-          return;
+          return NO_LISTS_SAVED;
         }
 
-        // After switching/creating a vault-root, adopt THAT root’s settings.toml.
-        // Never write the previous session’s theme/locale into a selected existing folder.
-        if (options?.vaultRootAlreadyApplied) {
-          await reloadSettings();
-          setVaultRootEpoch((n) => n + 1);
-          return;
-        }
-
-        const wrote = await appSettingsService.save(normalized, { syncAlias: true });
-        if (!wrote) {
-          // Soft `wrote: false` is only empty custom path bootstrap. After onDisk,
-          // treat as integrity failure (safety net if daemon regresses to soft miss).
+        const saved = await appSettingsService.save(normalized, options?.lists);
+        if (!saved.wrote) {
+          // `wrote: false` is only the first run with no data folder. After
+          // onDisk it is an integrity failure.
           if (settingsOnDiskRef.current) {
             throw new RpcError(
               "vault_root_not_found",
-              "settings save did not write: vault-root missing",
+              "settings save did not write: data folder missing",
             );
           }
           settingsRef.current = normalized;
           setSettings(normalized);
-          return;
+          return NO_LISTS_SAVED;
         }
-        settingsRef.current = normalized;
-        setSettings(normalized);
+        if (options?.lists && !isEmptyAppListChanges(options.lists)) {
+          // Core applied the change to the lists as the file held them: read them back.
+          await reloadSettings();
+        } else {
+          settingsRef.current = normalized;
+          setSettings(normalized);
+        }
         setSettingsOnDisk(true);
+        return { unchangedVaults: saved.unchangedVaults, keptFolders: saved.keptFolders };
       } catch (error) {
-        // Disk/alias may already match the new root (Gate / Data folder setup).
-        // Prefer adopting that root’s TOML over keeping previous-session memory.
-        if (options?.vaultRootAlreadyApplied) {
-          try {
-            await reloadSettings();
-          } catch {
-            // Fall through to toast; caller still sees the original error.
-          }
-          // Setup may already have changed the on-disk root — always re-resolve Gate.
-          setVaultRootEpoch((n) => n + 1);
-          notifyPersistFailed(error);
-          throw error;
-        }
         await applyVaultRootIntegrityFailure(error);
         // Preserve RpcError codes for UI mapping (do not collapse to settings_save_failed).
         throw error;
       }
     },
-    [appSettingsService, applyVaultRootIntegrityFailure, notifyPersistFailed, reloadSettings],
+    [appSettingsService, applyVaultRootIntegrityFailure, reloadSettings],
   );
 
   const replaceSettings = useCallback(
-    async (next: AppSettingsConfig, options?: PersistOptions) => {
-      await enqueuePersist(() => persistUnlocked(next, options));
-    },
+    (next: AppSettingsConfig, options?: PersistOptions) =>
+      enqueuePersist(() => persistUnlocked(next, options)),
     [enqueuePersist, persistUnlocked],
   );
 
@@ -332,9 +301,6 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           ui: patch.ui ? { ...current.ui, ...patch.ui } : current.ui,
           logging: patch.logging ? { ...current.logging, ...patch.logging } : current.logging,
           app: patch.app ? { ...current.app, ...patch.app } : current.app,
-          workspace: patch.workspace
-            ? { ...current.workspace, ...patch.workspace }
-            : current.workspace,
         });
         try {
           await persistUnlocked(next, options);
@@ -346,6 +312,21 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       });
     },
     [enqueuePersist, persistUnlocked],
+  );
+
+  const adoptDataFolder = useCallback(
+    () =>
+      enqueuePersist(async () => {
+        try {
+          await reloadSettings();
+        } catch (error) {
+          // The apply took place: the toast says the settings did not load.
+          notifyPersistFailed(error);
+        } finally {
+          setVaultRootEpoch((n) => n + 1);
+        }
+      }),
+    [enqueuePersist, notifyPersistFailed, reloadSettings],
   );
 
   const getSettingsSnapshot = useCallback(() => settingsRef.current, []);
@@ -360,6 +341,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       replaceSettings,
       patchSettings,
       reloadSettings,
+      adoptDataFolder,
       reportVaultRootIntegrityFailure,
       getSettingsSnapshot,
       showHiddenVaultsSession,
@@ -374,6 +356,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       replaceSettings,
       patchSettings,
       reloadSettings,
+      adoptDataFolder,
       reportVaultRootIntegrityFailure,
       getSettingsSnapshot,
       showHiddenVaultsSession,

@@ -13,71 +13,59 @@ See `dev/docs/ARCHITECTURE.md` and `dev/docs/sdd.md` §4.
 
 | Module | Role |
 |--------|------|
-| `config/` | App `.upriv/settings.toml`, per-vault `vaults/<id>/config.toml`, vault groups, edit policy |
-| `vault/` | List / create / open / close / rename / delete, in-app file manager (`fs`), export / import, backups, password and unlock-RAM rewrap, `plain/` (`upriv_plain` folders), in-RAM `.7z`, data-folder export |
+| `config/` | App `.upriv/settings.toml`, per-vault `vaults/<id>/config.toml`, vault groups, edit policy, list saves |
+| `device` | This device's ID and system; no name of the computer or phone is read |
+| `folder_list/` | Per-device folder lists: model, path rules, chains, the data folder list file, unlocked folder and backup layouts |
+| `folder_probe` | Time-limited folder checks, one thread per stuck folder |
+| `vault/` | List / create / open / close / rename / delete, in-app file manager (`fs`), export / import, backups, password and unlock-RAM rewrap, `plain/` (`upriv_plain` folders and their records), unlocked folder attach, data folder apply and search, in-RAM `.7z`, data-folder export |
 | `store/` | At-rest ciphertext: header (Argon2id wrap), sealed index (AES-SIV names), XChaCha20-Poly1305 chunks |
 | `session/` | Open session keys in RAM, unlock throttle |
 | `mount/` | Linux FUSE host, Windows WinFsp |
-| `paths/` | Layout, vault-root resolve, `.upriv-data-folder` alias, workspace paths, `initialize_vault_root` |
+| `paths/` | Layout, launch resolution of the data folder, reserved paths, `initialize_vault_root` |
 | `logging/` | Structured `.upriv/logs/` writers |
 | `runtime_state` / `lockfile` | `.upriv/state.json` open records and `runtime/<id>.lock` (dirty-close recovery) |
 | `host_fs` | Filesystem access, including Android storage-access trees |
 | `time/`, `error` | UTC stamps; `UprivError` / `Result` |
 | `app_version()` | From repo-root `VERSION` via `build.rs` |
 
-## Vault-root resolve
+## Data folder at launch
 
 ```rust
-use upriv_core::{resolve_vault_root, ResolveVaultRootOptions, ResolveVaultRoot, VaultRootMode};
+use upriv_core::{resolve_vault_root, ResolveVaultRoot, ResolveVaultRootOptions};
 
-let outcome = resolve_vault_root(ResolveVaultRootOptions {
-    explicit: None,
-    mode: VaultRootMode::DefaultRoot,
-    binary_dir: None,
-})?;
+let outcome = resolve_vault_root(ResolveVaultRootOptions::default())?;
 ```
 
 Order (see `paths/resolve.rs`):
 
-1. **Explicit** path / `UPRIV_VAULT_ROOT` — always wins over wire mode/path; must be valid or error  
-2. **CustomRoot** (`VaultRootMode::CustomRoot`): open **active** `.upriv-data-folder` path only (inactive → NeedsSetup)  
-3. **DefaultRoot** (`VaultRootMode::DefaultRoot`): search default_root from app home (then cwd); **active alias is ignored**  
-4. **NeedsSetup** — UI offers create `default_root` vs choose-path (+ alias + `distribution`)
+1. **Explicit** path / `UPRIV_VAULT_ROOT` — wins over the list for the whole process and must be valid; nothing is written for it.
+2. **This device's choice** in the data folder list (`.upriv-data-folder` in the app home, `folder_list/data_folder.rs`; a device with no group uses Default):
+   - **Default** holding a `.upriv` → `Found` (`source` `default`). None there → `SelectedFailed` while this device has rows to try, else `NeedsSetup` (the first run).
+   - **A row** that answers as a data folder → `Found` (`source` `row`). One that does not → `SelectedFailed`.
+   - On `SelectedFailed` the UI runs `search_data_folder` while the person may pick. A data folder lost while Upriv runs stays selected, so the resolve after it lands here too. Core keeps the data folder in use (`data_folder_entered`); the RPC resolve that finds it lost ends every vault still open there (`leave_lost_data_folder`), and the search waits for a close or an open still running there before it switches.
+3. A list file that cannot be read fails `DataFolderListInvalid`; an incomplete `.upriv` in the selected folder fails `VaultRootIncomplete` (Repair).
 
-**Distribution** (`paths/distribution.rs`, env `UPRIV_DISTRIBUTION`):
+**Default** (`paths/distribution.rs`, env `UPRIV_DISTRIBUTION`) is the app home:
 
-| Kind | Default vault folder (default_root) | App home (alias) |
-|------|-------------------------------|------------------|
-| `portable` | Beside AppImage / exe | Same |
-| `installed` | User data dir (`~/.local/share/upriv`, …) | Same |
-| `dev` | `UPRIV_DEFAULT_ROOT_ANCHOR` (`dev/`) | Same |
+| Kind | Default and app home |
+|------|----------------------|
+| `portable` | Beside AppImage / exe |
+| `installed` | User data dir (`~/.local/share/upriv`, …) |
+| `dev` | `UPRIV_DEFAULT_ROOT_ANCHOR` (`dev/`) |
 
-Installed default_root search does **not** walk cwd/parents — only the app-home vault path. `suggested_vault_root()` (`~/Documents/Upriv`) is a Rust helper for **`custom_root` folder-picker hints** — wired as daemon RPC `vault_root_suggested_custom_path` / `VaultRootService.suggestedCustomRootPath()`.
+`suggested_vault_root()` (`~/Documents/Upriv`) is where Add folder's picker starts on desktop — daemon RPC `vault_root_suggested_custom_path` / `VaultRootService.suggestedCustomRootPath()`.
 
-`UPRIV_VAULT_ROOT` overrides Settings mode/path for the whole process; the desktop Gate shows a dismissible notice when resolve `source` is `explicit` and Settings disagree.
-
-**Default-root search strictness** (see `resolve_vault_root` / Electron `daemon.ts`):
+**How Default is searched** (see `resolve_vault_root` / Electron `daemon.ts`):
 
 | Distribution | Behavior |
 |--------------|----------|
-| `installed` | Exact default vault path only |
-| `portable` / `dev` with `UPRIV_DEFAULT_ROOT_ANCHOR` | **Strict** at default vault anchor |
-| Env unset (daemon only) | **Loose** — `discover_vault_root_upward` (walk parents upward) |
+| `installed` | Exact Default path only |
+| `portable` / `dev` with `UPRIV_DEFAULT_ROOT_ANCHOR` | Exact Default path only |
+| Env unset (daemon only) | `discover_vault_root_upward` (walk parents upward) |
 
-### `.upriv-data-folder` alias (app home)
+### `.upriv-data-folder` (app home)
 
-| File state | Meaning |
-|------------|---------|
-| Missing | Default-root mode (no custom path remembered) |
-| `status=inactive` + `data_folder=` | Default_root in use; path kept for switching back to custom_root |
-| `status=active` + `data_folder=` | Custom vault-root (when settings say `custom_root`) |
-| A line without a known key | Invalid (`VaultRootAliasInvalid`) |
-
-Android adds `android_custom_folder=` (the last Custom folder, `content://`) once one is picked.
-
-- Switching to default_root **deactivates** the alias (keeps path); custom_root reactivates / rewrites it  
-- File is created only when the user first chooses another folder  
-- Mode switches call `deactivate_app_home_alias` (the helper that takes a home is crate-internal)  
+The data folder list: one TOML table per device (`[devices.<id>]`: `system`, `selected`, `next_number`, `rows`). It exists only while some group differs from the defaults, and holds no secrets. `data_folder_list` reads it, `data_folder_apply` saves a change to it under its lock and opens the folder it selects, and Start a new list (`newList`) replaces a file that cannot be read.
 
 ## Logging
 

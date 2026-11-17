@@ -4,6 +4,7 @@ import type {
   VaultFileContent,
   VaultFileLanguage,
 } from "../../domain/file-tree";
+import type { OsFolderAnswer } from "../../domain/folder-lists";
 
 /** Slice-only byte source so large files never sit in RAM as one buffer. */
 export interface VaultBinaryByteSource {
@@ -65,10 +66,11 @@ export interface VaultFileSystemService {
   deletePath(vaultId: string, path: string): Promise<boolean>;
   movePath(vaultId: string, fromPath: string, toFolderPath: string): Promise<string | null>;
   /**
-   * Absolute OS path of `path` on the live FUSE/WinFsp mount.
-   * `null` when this vault has no OS folder (switch off, macOS, or mobile).
+   * Where `path` is in the OS: on the unlocked folder of an encrypted vault,
+   * or in a plain-text vault's folder. `attaching` while the unlocked folder
+   * is still being attached after the open; `none` with why there is none.
    */
-  osPath(vaultId: string, path: string): Promise<string | null>;
+  osPath(vaultId: string, path: string): Promise<OsFolderAnswer>;
   /** Put these paths in a plain-text vault's folder. Resolves to how many files go there. */
   sendToFolder(vaultId: string, paths: string[]): Promise<number>;
   /** Take these paths out of a plain-text vault's folder. The vault keeps them. */

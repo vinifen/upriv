@@ -8,6 +8,25 @@ import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { revealInOsFileManager } from "@/lib/revealInFileManager";
 
+/**
+ * Opening a folder in the system Files app, for a button or a menu item:
+ * `locate` gives the absolute path or `content://` tree a path opens at
+ * (`null` when it opens nowhere), `open` opens it, and a failure shows in
+ * `toast`, which the caller renders once.
+ */
+export function useRevealFolder() {
+  const { t } = useTranslation();
+  const { toast, show, dismiss } = useToast();
+  const locate = (path: string | null | undefined): string | null =>
+    revealableLocation(path) ?? null;
+  const open = (location: string) => {
+    void revealInOsFileManager(location).catch((error: unknown) => {
+      show(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
+    });
+  };
+  return { locate, open, toast: <FloatingToast toast={toast} onDismiss={dismiss} /> };
+}
+
 /** Opens an absolute path or `content://` tree in the system Files app. */
 export function RevealPathButton({
   path,
@@ -19,16 +38,12 @@ export function RevealPathButton({
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { toast, show, dismiss } = useToast();
-  const location = revealableLocation(path);
+  const reveal = useRevealFolder();
+  const location = reveal.locate(path);
   if (!location) return null;
 
-  const open = () => {
-    void revealInOsFileManager(location).catch((error: unknown) => {
-      show(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
-    });
-  };
-  const label = t("modal.file_manager.context.open_system");
+  const open = () => reveal.open(location);
+  const label = t("action.open_folder");
 
   return (
     <>
@@ -48,7 +63,7 @@ export function RevealPathButton({
       ) : (
         <IconButton label={label} icon="file-manager" size={18} onPress={open} />
       )}
-      <FloatingToast toast={toast} onDismiss={dismiss} />
+      {reveal.toast}
     </>
   );
 }

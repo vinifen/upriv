@@ -1,6 +1,6 @@
-import type { AppSettingsConfig, VaultRootMode } from "../app-settings";
-import type { AppDistribution, VaultRootResolveResult } from "../vault-root";
-import type { WorkspaceSystem } from "../workspace";
+import type { AppSettingsConfig } from "../app-settings";
+import type { DeviceInfo } from "../device";
+import type { DataFolderListView, AppDistribution, VaultRootResolveResult } from "../vault-root";
 
 export interface SystemInfoSnapshot {
   app: {
@@ -8,8 +8,11 @@ export interface SystemInfoSnapshot {
     distribution: AppDistribution | null;
     versionOffline: boolean;
   };
+  /** This device as core knows it. */
+  device: DeviceInfo;
   root: VaultRootResolveResult;
-  rootMode: VaultRootMode;
+  /** The data folder list: this device's group names the folder in use. */
+  dataFolders: DataFolderListView;
   inventory: {
     vaultsTotal: number;
     vaultsOpen: number;
@@ -17,10 +20,8 @@ export interface SystemInfoSnapshot {
   };
   ui: AppSettingsConfig["ui"];
   logging: AppSettingsConfig["logging"];
-  workspace: AppSettingsConfig["workspace"];
+  unlockedFolders: AppSettingsConfig["unlocked_folders"];
   backups: AppSettingsConfig["backups"];
-  /** Row Info shows. The Electron renderer cannot read Node `process`. */
-  workspaceSystem: WorkspaceSystem;
   /** `[app].last_opened_vault` from settings.toml (may be empty). */
   lastOpenedVault: string;
   paths: {

@@ -19,7 +19,6 @@ use crate::store::{is_reserved_logical, parent_logical, to_ui_path};
 use crate::vault::fs as vfs;
 
 const FUSE_LIBRARY_NAME: &str = "libupriv_fuse.so";
-const FUSE_NOT_INSTALLED: &str = "FUSE is not installed; use the in-app file manager";
 
 pub(crate) struct FuseSession {
     raw: *mut libc::c_void,
@@ -81,11 +80,13 @@ pub(crate) fn library_beside(exe: &Path) -> PathBuf {
     }
 }
 
-pub(crate) fn library_error(detail: &str) -> String {
+/// A helper that cannot load because the system's `libfuse3` is missing is
+/// a missing driver; any other load failure is the helper's own.
+pub(crate) fn library_error(detail: &str) -> UprivError {
     if detail.to_ascii_lowercase().contains("libfuse") {
-        FUSE_NOT_INSTALLED.to_string()
+        UprivError::MountDriverMissing
     } else {
-        format!("FUSE mount helper failed to load: {detail}")
+        UprivError::VaultMountFailed(format!("FUSE mount helper failed to load: {detail}"))
     }
 }
 
@@ -140,7 +141,7 @@ fn load_api() -> Result<FuseApi> {
     unsafe { libc::dlerror() };
     let handle = unsafe { libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
     if handle.is_null() {
-        return Err(UprivError::VaultMountFailed(library_error(&dlerror_text())));
+        return Err(library_error(&dlerror_text()));
     }
     let mount = match unsafe { symbol(handle, b"upriv_fuse_mount\0") } {
         Ok(symbol) => symbol,
@@ -174,7 +175,7 @@ unsafe fn symbol<T>(handle: *mut libc::c_void, name: &[u8]) -> Result<T> {
     unsafe { libc::dlerror() };
     let ptr = unsafe { libc::dlsym(handle, name.as_ptr().cast()) };
     if ptr.is_null() {
-        return Err(UprivError::VaultMountFailed(library_error(&dlerror_text())));
+        return Err(library_error(&dlerror_text()));
     }
     Ok(unsafe { std::mem::transmute_copy(&ptr) })
 }
@@ -551,7 +552,7 @@ fn call_logical(
 
 #[cfg(test)]
 mod tests {
-    use super::{io_errno, library_beside, library_error, relocate_refused, FUSE_NOT_INSTALLED};
+    use super::{io_errno, library_beside, library_error, relocate_refused};
     use crate::error::UprivError;
     use std::path::Path;
 
@@ -565,11 +566,14 @@ mod tests {
 
     #[test]
     fn a_missing_libfuse_is_the_install_message() {
-        assert_eq!(
+        assert!(matches!(
             library_error("libfuse3.so.3: cannot open shared object file"),
-            FUSE_NOT_INSTALLED
-        );
-        assert!(library_error("libupriv_fuse.so: undefined symbol").contains("failed to load"));
+            UprivError::MountDriverMissing
+        ));
+        assert!(matches!(
+            library_error("libupriv_fuse.so: undefined symbol"),
+            UprivError::VaultMountFailed(detail) if detail.contains("failed to load")
+        ));
     }
 
     #[test]

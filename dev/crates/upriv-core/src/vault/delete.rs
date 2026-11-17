@@ -1,7 +1,7 @@
 //! Traceless vault delete: unmount, drop session/lock/state, wipe, unlink.
 
 use crate::config::{
-    load_app_settings_at, load_vault_config, remove_vault_from_groups, save_app_settings,
+    load_app_settings_at, load_vault_config, remove_vault_from_groups, update_app_settings,
     vault_config_path,
 };
 use crate::error::{Result, UprivError};
@@ -41,10 +41,11 @@ fn clear_last_opened(root: &VaultRoot, vault_id: &str) -> Result<()> {
     if loaded.settings.app.last_opened_vault.trim() != vault_id {
         return Ok(());
     }
-    let mut settings = loaded.settings;
-    settings.app.last_opened_vault.clear();
-    save_app_settings(root.root(), &settings)?;
-    Ok(())
+    update_app_settings(root.root(), |settings| {
+        if settings.app.last_opened_vault.trim() == vault_id {
+            settings.app.last_opened_vault.clear();
+        }
+    })
 }
 
 /// What a delete did with the backups the vault keeps outside the data folder.
@@ -55,7 +56,7 @@ pub enum OutsideBackups {
     /// The person left them, so they stay where they were created.
     Kept,
     Removed,
-    /// The person asked, and their folder could not be reached or a zip stayed.
+    /// The person asked, and a folder could not be reached or a zip stayed.
     Failed,
 }
 
@@ -73,15 +74,17 @@ impl OutsideBackups {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultDeleteOutcome {
     pub outside: OutsideBackups,
-    /// The folder those backups are in.
-    pub folder: Option<std::path::PathBuf>,
+    /// The folders whose backups stay: every one when the person kept them,
+    /// those that could not be reached or kept a zip otherwise.
+    pub folders: Vec<std::path::PathBuf>,
 }
 
 /// Delete `vaults/<id>/` after a secure wipe. Vault must be closed.
 ///
-/// With `remove_outside_backups`, the zips it wrote to its chosen folder go
-/// too, after the vault is gone, so a delete that fails costs no backup. Only
-/// zips on its own list, and only the folders that end up empty.
+/// With `remove_outside_backups`, the zips it wrote to folders outside the
+/// data folder go too, after the vault is gone, so a delete that fails costs
+/// no backup. Only zips on its own list, and only the folders that end up
+/// empty; a folder that cannot be reached keeps them.
 pub fn delete_vault(
     root: &VaultRoot,
     vault_id: &str,
@@ -103,6 +106,7 @@ pub fn delete_vault(
                 target: "action.delete".into(),
             });
         }
+        super::plain::refuse_if_elsewhere(root, vault_id)?;
         let config = load_vault_config(&vault_dir).ok();
         if let Some(mount) = crate::runtime_state::load_runtime_state(root)
             .ok()
@@ -122,7 +126,7 @@ pub fn delete_vault(
         let _ = crate::runtime_state::forget_vault(root, vault_id);
         record_unlock_success(&vault_dir);
         // The wipe takes the record of them away.
-        let outside = super::backup::outside_zips(root, vault_id, &vault_dir);
+        let outside = super::backup::outside_zips(&vault_dir);
 
         let opts = config
             .as_ref()
@@ -138,15 +142,19 @@ pub fn delete_vault(
         Ok(match outside {
             None => VaultDeleteOutcome {
                 outside: OutsideBackups::None,
-                folder: None,
+                folders: Vec::new(),
             },
             Some(zips) => {
-                let settled = if !remove_outside_backups {
-                    OutsideBackups::Kept
-                } else if zips.remove(root) {
-                    OutsideBackups::Removed
+                let (settled, folders) = if !remove_outside_backups {
+                    (OutsideBackups::Kept, zips.folders())
                 } else {
-                    OutsideBackups::Failed
+                    let kept = zips.remove();
+                    let settled = if kept.is_empty() {
+                        OutsideBackups::Removed
+                    } else {
+                        OutsideBackups::Failed
+                    };
+                    (settled, kept)
                 };
                 log_event(
                     LogLevel::Info,
@@ -155,7 +163,7 @@ pub fn delete_vault(
                 );
                 VaultDeleteOutcome {
                     outside: settled,
-                    folder: Some(zips.folder().to_path_buf()),
+                    folders,
                 }
             }
         })
@@ -259,5 +267,44 @@ mode = "encrypted_dir"
         let err = delete_vault(&root, "busy", false).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
         assert!(dir.host_is_dir());
+    }
+
+    #[test]
+    fn delete_refuses_while_another_device_has_plain_text_of_the_vault() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("away", "Away"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let laptop = crate::device::DeviceId::from_machine_id(b"laptop")
+            .as_str()
+            .to_string();
+        let elsewhere = crate::runtime_state::PlainRecord {
+            device: laptop.clone(),
+            ..crate::runtime_state::PlainRecord::written_here(
+                "/media/usb/upriv-unlocked/Away".into(),
+                false,
+                "token".into(),
+                "0123456789abcdef0123456789abcdef".into(),
+            )
+        };
+        crate::runtime_state::adopt_plain_record(&root, "away", elsewhere).unwrap();
+
+        let err = delete_vault(&root, "away", false).unwrap_err();
+        assert!(matches!(
+            err,
+            UprivError::VaultPlainElsewhere { ref device, ref path, .. }
+                if *device == laptop && path == "/media/usb/upriv-unlocked/Away"
+        ));
+        assert!(root.vault_dir("away").unwrap().host_is_dir());
+        assert_eq!(
+            crate::runtime_state::plain_records(&root, "away")
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

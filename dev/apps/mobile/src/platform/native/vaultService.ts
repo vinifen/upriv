@@ -34,7 +34,8 @@ import {
   type ContentTreeImportIo,
 } from "./contentTreeImport";
 import { releaseImportCache } from "./importCache";
-import { nativeSafExportMount } from "./safExportMount";
+import { mountDeviceTrees } from "./deviceTrees";
+import { nativeExportTrees } from "./exportTrees";
 
 const contentIo: ContentTreeImportIo = {
   createVault(input, job) {
@@ -88,8 +89,11 @@ export const nativeVaultService = createLiveVaultService({
   async diskUsage(vaultId) {
     return rpcVaultDiskUsage(vaultId);
   },
-  async saveSettings(vaultId, config) {
-    await rpcVaultConfigSave(vaultId, config);
+  async saveSettings(vaultId, config, lists) {
+    const saved = await rpcVaultConfigSave(vaultId, config, lists);
+    // A row picked on this phone is reached at its tree's root.
+    await mountDeviceTrees();
+    return saved;
   },
   async rename(vaultId, displayName) {
     return rpcVaultRename(vaultId, displayName);
@@ -97,9 +101,9 @@ export const nativeVaultService = createLiveVaultService({
   async deleteVault(vaultId, outsideBackups) {
     return rpcVaultDelete(vaultId, outsideBackups);
   },
-  // A picked folder is mounted for the export, so Rust writes the file straight into it.
+  // A picked folder is reached at its tree's root, so Rust writes the file straight into it.
   async exportVaultToFolder(vaultId, request, destDir, job) {
-    return nativeSafExportMount.withExportFolder(destDir, job, (dir) =>
+    return nativeExportTrees.withExportFolder(destDir, job, (dir) =>
       rpcVaultExportToFolder(vaultId, request, dir, job),
     );
   },
@@ -113,7 +117,7 @@ export const nativeVaultService = createLiveVaultService({
   async sweepUnfinished() {
     const { folders } = await rpcVaultUnfinishedSweep();
     for (const folder of folders) {
-      await nativeSafExportMount
+      await nativeExportTrees
         .withExportFolder(folder, newJobId(), () => rpcVaultUnfinishedSweep())
         .catch(() => undefined);
     }

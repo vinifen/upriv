@@ -28,7 +28,6 @@ export {
   parseKdfUnlockPreset,
   normalizeSevenZipSection,
   normalizeVaultSettingsConfig,
-  vaultSettingsForDaemon,
   patchStorageMode,
   sevenZipPatchFromCompressionPreset,
   VAULT_SETTINGS_SECTIONS,

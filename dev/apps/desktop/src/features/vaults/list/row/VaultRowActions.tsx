@@ -1,19 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useToast } from "@upriv/shared/react";
+import { useCallback, useMemo } from "react";
+import { useOsFolderReady, useToast } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
 import { DropdownMenu, IconButton, Toast } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
+import { isElectronRenderer } from "@/lib/invoke";
 import { revealFailureKey } from "@/lib/revealInOs";
-import { rpcRevealInFileManager } from "@/lib/rpc";
-import { useVaultService } from "@/platform/services";
+import { rpcRevealOsPath } from "@/lib/rpc";
+import { useVaultFileSystemService, useVaultService } from "@/platform/services";
 import {
-  currentWorkspaceSystem,
-  osFileManagerFolderEnabled,
-  peekVaultSettings,
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
-  storageModeIsPlaintext,
   vaultCloseNowOffered,
   vaultExportMenuShown,
   VAULT_SETTINGS_AREA_ICON,
@@ -21,8 +18,8 @@ import {
   vaultRowControls,
   vaultSettingsMenuAreas,
   type VaultListItem,
+  type OsFolderAnswer,
   type VaultSettingsAreaId,
-  type WorkspaceTable,
 } from "@upriv/shared";
 
 const rowActionProps = {
@@ -67,42 +64,21 @@ export function VaultRowActions({
   const { toast, show, dismiss } = useToast();
   const { settings } = useAppSettingsContext();
   const vaultService = useVaultService();
+  const fileSystem = useVaultFileSystemService();
   const showVaultMore = settings.ui.vault_list_show_vault_more_button !== false;
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
   const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = listStatus === "open";
   const canUnlock = isVaultListRowUnlockTarget(listStatus);
   const canUseOpenWorkspace = listStatus === "open";
-  const plaintext = storageModeIsPlaintext(vault.storageMode);
-  const rememberedMount = peekVaultSettings(vault.id)?.mount;
-  const [fetchedMount, setFetchedMount] = useState<WorkspaceTable | undefined>(rememberedMount);
-  useEffect(() => {
-    if (!canUseOpenWorkspace || plaintext) return;
-    if (rememberedMount) {
-      setFetchedMount(rememberedMount);
-      return;
-    }
-    let cancelled = false;
-    void vaultService.getSettings(vault.id).then(
-      (next) => {
-        if (!cancelled) setFetchedMount(next?.mount);
-      },
-      () => {
-        if (!cancelled) setFetchedMount(undefined);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseOpenWorkspace, plaintext, rememberedMount, vault.id, vaultService]);
-  const showOsFileManager =
-    canUseOpenWorkspace &&
-    osFileManagerFolderEnabled(
-      plaintext,
-      settings.workspace,
-      rememberedMount ?? fetchedMount,
-      currentWorkspaceSystem(),
-    );
+  // Open unlocked folder shows only while core says the vault's folder is in
+  // the OS; asked again each time the menu opens.
+  const osFolder = useOsFolderReady(
+    (vaultId, path) => fileSystem.osPath(vaultId, path),
+    vault.id,
+    canUseOpenWorkspace && isElectronRenderer(),
+  );
+  const showOsFileManager = canUseOpenWorkspace && osFolder.ready;
   const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
   const closeNowOffered = vaultCloseNowOffered(listStatus, vault.id, pipelineListStatus);
@@ -113,10 +89,24 @@ export function VaultRowActions({
     : rowActionProps;
   const actionIconSize = stacked ? 18 : 20;
 
+  /** Reveal the vault's folder in the OS. A folder gone meanwhile only hides the item. */
+  const { recheck: recheckOsFolder } = osFolder;
   const openOsMount = useCallback(async () => {
-    const failure = await revealFailureKey(() => rpcRevealInFileManager(vault.id, "/"));
+    let answer: OsFolderAnswer;
+    try {
+      answer = await fileSystem.osPath(vault.id, "/");
+    } catch {
+      show(t("modal.file_manager.toast.open_system_failed"));
+      return;
+    }
+    if (answer.state !== "ready") {
+      recheckOsFolder();
+      return;
+    }
+    const osPath = answer.osPath;
+    const failure = await revealFailureKey(() => rpcRevealOsPath(osPath));
     if (failure) show(t(failure));
-  }, [show, t, vault.id]);
+  }, [fileSystem, recheckOsFolder, show, t, vault.id]);
 
   const settingsItems = useMemo(
     () =>
@@ -166,7 +156,7 @@ export function VaultRowActions({
               ? [
                   {
                     id: "open_os",
-                    label: t("action.open_file_manager"),
+                    label: t("action.open_unlocked_folder"),
                     icon: <Icon name="folder" size={18} />,
                     disabled: controls.moreMenuBlocked,
                     onSelect: () => {
@@ -274,6 +264,7 @@ export function VaultRowActions({
         <DropdownMenu
           label={t("app.menu.more")}
           align="right"
+          onOpen={recheckOsFolder}
           trigger={
             <IconButton
               label={t("app.menu.more")}

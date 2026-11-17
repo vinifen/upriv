@@ -4,7 +4,7 @@ import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { APP_VERSION, getAppVersion, getSessionAppVersion } from "@/lib";
-import { useVaultRootService } from "@/platform/services";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { buildSystemInfoSections, type VaultGroup, type VaultListItem } from "@upriv/shared";
 import { useSystemInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { InfoFieldList } from "./InfoFieldList";
@@ -22,6 +22,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const vaultRootService = useVaultRootService();
+  const deviceService = useDeviceService();
 
   const getVersion = useCallback(async () => {
     const versionInfo = await getAppVersion();
@@ -38,6 +39,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     groups,
     settings,
     vaultRootService,
+    deviceService,
     getVersion,
     showHiddenVaults,
   });

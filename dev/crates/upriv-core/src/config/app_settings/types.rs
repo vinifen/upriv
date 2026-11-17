@@ -4,9 +4,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::paths::{BackupFolderTable, VaultRootMode};
-
-pub use crate::paths::WorkspaceSettings;
+use crate::folder_list::backup::AppBackupFolders;
+use crate::folder_list::unlocked::AppUnlockedFolders;
 
 use super::toml::{
     default_entries, default_keep, default_locale, default_log_level, default_sort,
@@ -27,12 +26,12 @@ pub struct AppSettings {
     pub ui: UiSettings,
     pub logging: LoggingSettings,
     pub app: AppSectionSettings,
-    /// Per-system mount parents (`[workspace.<os>]` in settings.toml).
+    /// `[unlocked_folders]`: the app's unlocked folder list, per device.
     #[serde(default)]
-    pub workspace: WorkspaceSettings,
-    /// Where backups go by default on each desktop system (`[backups.<os>]`).
+    pub unlocked_folders: AppUnlockedFolders,
+    /// `[backups]`: the app's backup folder list, per device.
     #[serde(default)]
-    pub backups: BackupFolderTable,
+    pub backups: AppBackupFolders,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,11 +113,6 @@ pub struct LoggingSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSectionSettings {
-    /// Derived from `.upriv-data-folder` (`status=active` → [`VaultRootMode::CustomRoot`]). Not written to TOML.
-    pub vault_root_mode: VaultRootMode,
-    /// Derived from `.upriv-data-folder` when custom; empty when default_root. Not written to TOML.
-    #[serde(default)]
-    pub upriv_root_path: String,
     /// `[app].last_opened_vault` — always written (empty = none).
     #[serde(default)]
     pub last_opened_vault: String,
@@ -169,12 +163,10 @@ impl Default for AppSettings {
                 keep_last_entries: default_keep(),
             },
             app: AppSectionSettings {
-                vault_root_mode: VaultRootMode::DefaultRoot,
-                upriv_root_path: String::new(),
                 last_opened_vault: String::new(),
             },
-            workspace: WorkspaceSettings::default(),
-            backups: BackupFolderTable::default(),
+            unlocked_folders: AppUnlockedFolders::default(),
+            backups: AppBackupFolders::default(),
         }
     }
 }

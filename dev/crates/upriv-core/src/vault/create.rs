@@ -92,14 +92,15 @@ pub(super) fn create_vault_with_welcome(
             with_unlock_lock(|| create_seeded_store(&store, password, preset, &initial_files))?;
             crate::host_fs::create_dir_all(dest.join("backups"))?;
             let hash = content_hash_hex(&store)?;
-            save_vault_persistence(
-                &dest,
-                &VaultPersistence::closed(
-                    id.clone(),
-                    config.vault.display_name.clone(),
-                    Some(hash),
-                ),
-            )?;
+            let mut persistence =
+                VaultPersistence::closed(id.clone(), config.vault.display_name.clone(), Some(hash));
+            persistence.files_bytes = Some(
+                initial_files
+                    .iter()
+                    .map(|(_, bytes)| bytes.len() as u64)
+                    .fold(0, u64::saturating_add),
+            );
+            save_vault_persistence(&dest, &persistence)?;
             Ok(())
         })();
         let folder_gone = created.is_ok() || crate::host_fs::remove_dir_all(&dest).is_ok();

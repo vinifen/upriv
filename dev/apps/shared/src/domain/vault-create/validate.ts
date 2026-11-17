@@ -4,11 +4,18 @@ import {
   type DisplayNameValidationCode,
 } from "../vault/displayName";
 import {
+  VAULT_BACKUP_LIST,
+  VAULT_UNLOCKED_LIST,
+  encryptedFolderUnchosen,
   isAbsoluteOsFilesystemPath,
   isContentUri,
-  validateWorkspaceGlobalPath,
-} from "../workspace";
-import { BACKUP_FOLDER_SYSTEMS, backupFolderIssue } from "../backups/folders";
+  rowProblems,
+  type AppUnlockedFolders,
+  type DeviceGroups,
+  type FolderListPolicy,
+  type HereDevice,
+} from "../folder-lists";
+import { storageModeIsPlaintext } from "../vault/types";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
 import {
   createVaultImportNeedsArchivePassword,
@@ -32,14 +39,51 @@ export type CreateVaultValidationCode =
   | "group_name_empty"
   | "group_name_too_long"
   | "group_name_invalid"
-  | "mount_path_empty"
-  | "mount_path_not_absolute"
-  | "mount_path_saf_tree"
-  | "mount_path_reserved"
-  | "mount_path_root_unknown"
-  | "backup_folder_empty"
-  | "backup_folder_not_absolute"
-  | "backup_folder_reserved";
+  /** A folder a row of the unlocked folder list holds, on any device, cannot be used. */
+  | "unlocked_folder_row_invalid"
+  /** The draft turns this vault's unlocked folder on, and this device has no folder chosen for it. */
+  | "unlocked_folder_unchosen"
+  /** A folder a row of the backup list holds, on any device, cannot be used. */
+  | "backup_folder_row_invalid";
+
+/** The folder lists a new vault joins, as this device sees them. */
+export interface CreateVaultLists {
+  /** This device; `null` while unknown. */
+  here: HereDevice | null;
+  /** The app's unlocked folders: what Use the app's gives the new vault on this device. */
+  appUnlocked: AppUnlockedFolders;
+}
+
+/** No device known yet: no folder is missing. */
+export const NO_CREATE_VAULT_LISTS: CreateVaultLists = {
+  here: null,
+  appUnlocked: { encrypted_vaults: false, devices: {} },
+};
+
+/**
+ * True when a row of any device's group has a path the rules refuse. Core
+ * writes a new vault's lists as they are, so every row is checked here, the
+ * ones a carried settings file brought too.
+ */
+function rowsInvalid<F extends string>(
+  groups: DeviceGroups<F>,
+  policy: FolderListPolicy<F>,
+): boolean {
+  return Object.values(groups).some((group) => rowProblems(undefined, group, policy).size > 0);
+}
+
+/**
+ * The draft gives the new vault an unlocked folder this device has no folder
+ * for. A vault that follows the app is not one: the app's own switch and list
+ * leave every such vault the same.
+ */
+function unlockedFolderUnchosen(draft: CreateVaultDraft, lists: CreateVaultLists): boolean {
+  if (storageModeIsPlaintext(draft.storage.mode)) return false;
+  return (
+    encryptedFolderUnchosen(lists.appUnlocked, draft.unlocked_folder, lists.here) &&
+    !encryptedFolderUnchosen(lists.appUnlocked, null, lists.here)
+  );
+}
 
 /** Mock lifecycle unlock (`trim().length >= 4`). Live create and open refuse only an empty one. */
 const MOCK_LIFECYCLE_PASSWORD_MIN_LENGTH = 4;
@@ -77,7 +121,7 @@ export function validateCreateVaultStep(
   existingIds: readonly string[],
   /** When set, `existing` group assignment must reference a live group id. */
   knownGroupIds: readonly string[] = [],
-  vaultRootPath?: string | null,
+  lists: CreateVaultLists = NO_CREATE_VAULT_LISTS,
 ): CreateVaultValidationCode[] {
   switch (stepId) {
     case "source": {
@@ -149,33 +193,17 @@ export function validateCreateVaultStep(
         else if (nameError === "too_long") errors.push("group_name_too_long");
         else if (nameError) errors.push("group_name_invalid");
       }
-      for (const system of BACKUP_FOLDER_SYSTEMS) {
-        const { place, path } = draft.backup[system];
-        const issue = backupFolderIssue(place, path, vaultRootPath);
-        if (issue === "empty") errors.push("backup_folder_empty");
-        else if (issue === "reserved") errors.push("backup_folder_reserved");
-        else if (issue) errors.push("backup_folder_not_absolute");
+      if (rowsInvalid(draft.backup.devices, VAULT_BACKUP_LIST)) {
+        errors.push("backup_folder_row_invalid");
       }
       return errors;
     }
     case "advanced": {
       const errors: CreateVaultValidationCode[] = [];
-      const root = typeof vaultRootPath === "string" ? vaultRootPath.trim() : "";
-      for (const system of ["linux", "windows", "macos", "android", "ios"] as const) {
-        const raw = draft.mount[system].path.trim();
-        // Another folder chosen and its path still to enter.
-        if (!raw && draft.mount[system].place === "custom") {
-          errors.push("mount_path_empty");
-          return errors;
-        }
-        if (!raw) continue;
-        const issue = validateWorkspaceGlobalPath(raw, root || null);
-        if (issue === "not_absolute") errors.push("mount_path_not_absolute");
-        else if (issue === "saf_tree_child") errors.push("mount_path_saf_tree");
-        else if (issue === "reserved") errors.push("mount_path_reserved");
-        else if (!root) errors.push("mount_path_root_unknown");
-        if (errors.length > 0) return errors;
+      if (rowsInvalid(draft.unlocked_folder.devices, VAULT_UNLOCKED_LIST)) {
+        errors.push("unlocked_folder_row_invalid");
       }
+      if (unlockedFolderUnchosen(draft, lists)) errors.push("unlocked_folder_unchosen");
       return errors;
     }
     default:
@@ -187,17 +215,11 @@ export function validateAllCreateVaultSteps(
   draft: CreateVaultDraft,
   existingIds: readonly string[],
   knownGroupIds: readonly string[] = [],
-  vaultRootPath?: string | null,
+  lists: CreateVaultLists = NO_CREATE_VAULT_LISTS,
 ): Partial<Record<CreateVaultStepId, CreateVaultValidationCode[]>> {
   const result: Partial<Record<CreateVaultStepId, CreateVaultValidationCode[]>> = {};
   for (const stepId of ["source", "identity", "password", "general", "advanced"] as const) {
-    const errors = validateCreateVaultStep(
-      stepId,
-      draft,
-      existingIds,
-      knownGroupIds,
-      vaultRootPath,
-    );
+    const errors = validateCreateVaultStep(stepId, draft, existingIds, knownGroupIds, lists);
     if (errors.length > 0) result[stepId] = errors;
   }
   return result;
@@ -210,9 +232,9 @@ export function getCreateVaultStepStatus(
   attemptedSteps: ReadonlySet<CreateVaultStepId>,
   submitAttempted: boolean,
   knownGroupIds: readonly string[] = [],
-  vaultRootPath?: string | null,
+  lists: CreateVaultLists = NO_CREATE_VAULT_LISTS,
 ): CreateVaultStepStatus {
-  const errors = validateCreateVaultStep(stepId, draft, existingIds, knownGroupIds, vaultRootPath);
+  const errors = validateCreateVaultStep(stepId, draft, existingIds, knownGroupIds, lists);
   if (errors.length === 0) {
     const locks = stepId === "identity" || stepId === "general" || stepId === "advanced";
     return locks && createVaultSettingsLocked(draft) ? "waiting" : "ready";
@@ -225,10 +247,9 @@ export function canSubmitCreateVault(
   draft: CreateVaultDraft,
   existingIds: readonly string[],
   knownGroupIds: readonly string[] = [],
-  vaultRootPath?: string | null,
+  lists: CreateVaultLists = NO_CREATE_VAULT_LISTS,
 ): boolean {
   return (
-    Object.keys(validateAllCreateVaultSteps(draft, existingIds, knownGroupIds, vaultRootPath))
-      .length === 0
+    Object.keys(validateAllCreateVaultSteps(draft, existingIds, knownGroupIds, lists)).length === 0
   );
 }

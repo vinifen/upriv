@@ -475,32 +475,7 @@ fn stdio_app_settings_save_rejects_flattened_shape() {
     // Flattened ui/logging/app at the top level must fail — envelope is required.
     writeln!(
         stdin,
-        r#"{{"type":"request","id":9,"method":"app_settings_save","params":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}},"syncAlias":true}}}}"#
-    )
-    .expect("write request");
-    stdin.flush().expect("flush stdin");
-
-    let response: serde_json::Value =
-        serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
-    assert_eq!(response["ok"], false);
-    assert_eq!(response["error"]["code"], "invalid_request");
-
-    child.kill().expect("kill daemon");
-    child.wait().expect("wait on daemon");
-}
-
-#[test]
-fn stdio_app_settings_save_rejects_snake_sync_alias() {
-    let mut child = spawn_daemon();
-    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
-    let mut stdin = child.stdin.take().expect("stdin");
-
-    let _ready = read_line(&mut stdout);
-    let _event = read_line(&mut stdout);
-
-    writeln!(
-        stdin,
-        r#"{{"type":"request","id":10,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"sync_alias":true}}}}"#
+        r#"{{"type":"request","id":9,"method":"app_settings_save","params":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"last_opened_vault":""}}}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -532,7 +507,7 @@ fn stdio_app_settings_save_wrote_true_roundtrip() {
 
     writeln!(
         stdin,
-        r#"{{"type":"request","id":11,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":11,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"last_opened_vault":""}}}}}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -565,7 +540,7 @@ fn stdio_log_list_get_delete_roundtrip() {
     // Persist settings + open logging session (emits settings_save / app_start).
     writeln!(
         stdin,
-        r#"{{"type":"request","id":20,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":20,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"last_opened_vault":""}}}}}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -652,7 +627,7 @@ fn stdio_log_list_mid_session_missing_root_is_not_found() {
 
     writeln!(
         stdin,
-        r#"{{"type":"request","id":30,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":30,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"last_opened_vault":""}}}}}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -705,7 +680,7 @@ fn stdio_log_list_mid_session_incomplete_root_is_incomplete() {
 
     writeln!(
         stdin,
-        r#"{{"type":"request","id":40,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":40,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false,"lifecycle_close_modal_on_submit":false,"lifecycle_open_file_manager_on_open":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"last_opened_vault":""}}}}}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");

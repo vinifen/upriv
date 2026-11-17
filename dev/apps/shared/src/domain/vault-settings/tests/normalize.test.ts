@@ -28,7 +28,7 @@ describe("vaultSettingsSectionsForStorage", () => {
       expect(vaultSettingsSectionsForStorage(mode)).toEqual([
         "vault",
         "storage",
-        "mount",
+        "unlocked_folder",
         "backup",
         "auto_close",
       ]);

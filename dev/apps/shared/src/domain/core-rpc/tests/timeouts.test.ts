@@ -4,15 +4,14 @@ import { CORE_RPC_COMMANDS, MOBILE_ONLY_RPC_COMMANDS } from "../commands";
 import {
   CORE_RPC_TIMEOUT_MS,
   MOBILE_ONLY_RPC_TIMEOUT_MS,
+  dataFolderApplyTimeoutMs,
   vaultImportProbeTimeoutMs,
-  vaultRootSetupPathTimeoutMs,
 } from "../timeouts";
 
 /** Requests that carry a `job` id the person can stop, and the close. */
 const NO_DEADLINE = new Set<string>([
   CORE_RPC_COMMANDS.VAULT_CREATE,
   CORE_RPC_COMMANDS.VAULT_OPEN,
-  CORE_RPC_COMMANDS.VAULT_PLAIN_CONFIRM,
   CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE,
   CORE_RPC_COMMANDS.VAULT_CLOSE,
   CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD,
@@ -24,9 +23,11 @@ const NO_DEADLINE = new Set<string>([
   CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP,
   CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH,
   CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE,
+  CORE_RPC_COMMANDS.VAULT_UNLOCKED_FOLDER_ATTACH,
   CORE_RPC_COMMANDS.BACKUP_SAVE,
   CORE_RPC_COMMANDS.BACKUP_EXPORT,
   CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT,
+  CORE_RPC_COMMANDS.DATA_FOLDER_SEARCH,
 ]);
 
 describe("CORE_RPC_TIMEOUT_MS", () => {
@@ -50,7 +51,7 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
   });
 
   it("runs a phone's copy of its data folder as a job", () => {
-    expect(vaultRootSetupPathTimeoutMs({ adoptPrivateRoot: true })).toBe(NO_DEADLINE_MS);
-    expect(vaultRootSetupPathTimeoutMs({})).toBe(OPERATION_LIMIT_MS);
+    expect(dataFolderApplyTimeoutMs({ adoptPrivateRoot: true })).toBe(NO_DEADLINE_MS);
+    expect(dataFolderApplyTimeoutMs({})).toBe(OPERATION_LIMIT_MS);
   });
 });

@@ -1,11 +1,13 @@
 import { errorDisplayI18nKey, isRpcError } from "@upriv/shared";
 import type { I18nKey } from "@/i18n";
 
-/** Android SAF vault-root codes from Kotlin `SafVaultRoot` / `toSafRpcError`. */
+/** Android storage-access codes from Kotlin `SafVaultRoot` / `toSafRpcError`, and the Documents step. */
 const SAF_ERROR_I18N: Record<string, I18nKey> = {
   saf_not_ready: "modal.vault_root_setup.error_saf_not_ready",
   saf_unauthorized: "modal.vault_root_setup.error_saf_unauthorized",
   saf_invalid_tree: "modal.vault_root_setup.error_saf_unauthorized",
+  saf_unreachable: "folder_list.status.missing",
+  documents_grant_rejected: "modal.vault_root_setup.documents_grant_rejected",
   unsupported_platform: "error.unsupported_platform",
 };
 

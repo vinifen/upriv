@@ -100,6 +100,13 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
             label={t("modal.data_folder_export.include_backups")}
             hint={t("modal.data_folder_export.include_backups_help")}
           />
+          {controls.outsideBackups > 0 ? (
+            <Text style={typography.caption}>
+              {t("modal.data_folder_export.outside_backups", {
+                count: String(controls.outsideBackups),
+              })}
+            </Text>
+          ) : null}
           {written ? (
             <Text
               accessibilityRole="text"

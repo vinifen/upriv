@@ -306,6 +306,7 @@ export function VaultListScreen() {
     lifecycle,
     reload,
     refresh,
+    forgetPlainRecord,
     openCreate,
     closeCreate,
     pipelineStatus,
@@ -663,6 +664,8 @@ export function VaultListScreen() {
         onOpenBackups={(rowVault) => setBackupsVault(rowVault)}
         onOpenNote={(rowVault) => setNoteVaultId(rowVault.id)}
         onOpenVaultInfo={(rowVault) => setVaultInfoVaultId(rowVault.id)}
+        onPlainRecordRetry={() => void refresh()}
+        onPlainRecordForget={forgetPlainRecord}
       />
     );
     return row;
@@ -1403,7 +1406,9 @@ export function VaultListScreen() {
       <PlainPlaceModal
         open={lifecycle.placeOpen}
         vaultName={lifecycle.placeVaultName}
-        workspaceChoices={lifecycle.placeWorkspaceChoices}
+        appChoices={lifecycle.placeAppChoices}
+        appUnlocked={lifecycle.placeAppUnlocked}
+        vaultUnlocked={lifecycle.placeVaultUnlocked}
         submitting={lifecycle.placeSubmitting}
         warningClass={lifecycle.placeWarningClass}
         onClose={lifecycle.onPlaceClose}
@@ -1435,8 +1440,8 @@ export function VaultListScreen() {
         onStopRewrap={stopRewrap}
         groups={groups}
         onCommitGroupAssignment={handleCommitGroupAssignment}
-        onVaultDelete={(vaultId) => {
-          void handleVaultDelete(vaultId);
+        onVaultDelete={(vaultId, outsideBackups) => {
+          void handleVaultDelete(vaultId, outsideBackups);
         }}
         onPersistBusyChange={handlePersistBusyChange}
         onSaved={handleVaultSettingsSaved}
@@ -1668,20 +1673,18 @@ export function VaultListScreen() {
         onStopSave={backupSaveStop}
         listRefreshToken={backupListRefresh}
         onClose={() => setBackupsVault(null)}
-        onCreateVaultFromBackup={(stamp, fileName, saved = false) => {
+        onCreateVaultFromBackup={(backup) => {
           if (!backupsVault) return;
           const sourceId = backupsVault.id;
           setBackupsVault(null);
           openCreate(
             createDraftFromBackup(
-              stamp,
+              backup,
               sourceId,
               backupsVault.displayName,
               existingOrders,
               existingDisplayNames,
               groupIdContainingVault(groups, sourceId),
-              fileName,
-              saved,
             ),
             "source",
           );
@@ -1699,8 +1702,11 @@ export function VaultListScreen() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onDirtyChange={setSettingsDirty}
-        hasOpenVault={!appConfigEditAllowed("workspace.path", vaults, pipelineStatus)}
+        hasOpenVault={!appConfigEditAllowed("unlocked_folders", vaults, pipelineStatus)}
         onNotice={show}
+        vaultName={(vaultId) =>
+          vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId
+        }
       />
       <VaultGroupsModal
         open={groupsOpen}

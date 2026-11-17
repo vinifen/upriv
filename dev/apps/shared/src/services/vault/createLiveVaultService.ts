@@ -1,5 +1,6 @@
 import { RpcError } from "../../domain/core-rpc/errors";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
+import type { ListsSaved, VaultListChanges } from "../../domain/folder-lists";
 import { forgetVaultSettings, rememberVaultSettings } from "./vaultSettingsMemory";
 import type { CreateVaultInput, VaultRenameResult, VaultService } from "./VaultService";
 import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../../domain/vault-list";
@@ -17,7 +18,11 @@ export interface LiveVaultRpc {
   /** Regular-file bytes under `store/` and `held/`. Omitted adapters leave Info on an em dash. */
   diskUsage?: (vaultId: string) => Promise<VaultDiskUsage>;
   /** Persist full `config.toml` via `vault_config_save` (enforces edit-policy). */
-  saveSettings?: (vaultId: string, config: VaultSettingsConfig) => Promise<void>;
+  saveSettings?: (
+    vaultId: string,
+    config: VaultSettingsConfig,
+    lists?: VaultListChanges,
+  ) => Promise<ListsSaved>;
   /** Deep rename via `vault_rename` (display name + optional folder migration). */
   rename?: (vaultId: string, displayName: string) => Promise<VaultRenameResult>;
   deleteVault?: (vaultId: string, outsideBackups: boolean) => Promise<VaultDeleteOutcome>;
@@ -72,12 +77,15 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
     },
     diskUsage: (vaultId) => (rpc.diskUsage ? rpc.diskUsage(vaultId) : Promise.resolve(null)),
 
-    async registerSettings(vaultId, config) {
+    async registerSettings(vaultId, config, lists) {
       if (!rpc.saveSettings) {
         notImplemented("Vault settings save");
       }
-      await rpc.saveSettings(vaultId, config);
+      const saved = await rpc.saveSettings(vaultId, config, lists);
+      // Preferences open on this at once; the window reads the file again for
+      // a switch core made meanwhile.
       rememberVaultSettings(vaultId, config);
+      return saved;
     },
 
     async rename(vaultId, displayName) {

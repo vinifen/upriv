@@ -1,7 +1,7 @@
 import type { JobProgressCopy } from "../jobs/progress";
 import { listHasVaultBlockingDataFolderChange } from "../vault/types";
 import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
-import { exportFolderIssue, type ExportFolderIssue } from "../workspace";
+import { exportFolderIssue, type ExportFolderIssue } from "../export-folder";
 import { dataFolderZipNameFromInput, dataFolderZipNameIssue } from "./zipName";
 
 /** Export a copy while its zip is written: bytes of the data folder done of the total. */

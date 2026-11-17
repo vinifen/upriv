@@ -4,17 +4,7 @@ import {
   createDefaultAppSettings,
   normalizeAppSettings,
   normalizeVaultListSearch,
-  normalizeVaultRootMode,
 } from "..";
-
-describe("normalizeVaultRootMode", () => {
-  it("fails closed to default_root", () => {
-    expect(normalizeVaultRootMode("custom_root")).toBe("custom_root");
-    expect(normalizeVaultRootMode("default_root")).toBe("default_root");
-    expect(normalizeVaultRootMode("portable")).toBe("default_root");
-    expect(normalizeVaultRootMode(null)).toBe("default_root");
-  });
-});
 
 describe("normalizeVaultListSearch", () => {
   it("strips controls, keeps spaces, and caps length", () => {
@@ -26,18 +16,27 @@ describe("normalizeVaultListSearch", () => {
 });
 
 describe("normalizeAppSettings", () => {
-  it("clears a custom path when mode is default_root", () => {
-    const settings = createDefaultAppSettings();
-    settings.app.vault_root_mode = "default_root";
-    settings.app.upriv_root_path = "/old/custom";
-    expect(normalizeAppSettings(settings).app.upriv_root_path).toBe("");
-  });
-
-  it("keeps a custom path in custom_root mode", () => {
-    const settings = createDefaultAppSettings();
-    settings.app.vault_root_mode = "custom_root";
-    settings.app.upriv_root_path = "/data/upriv";
-    expect(normalizeAppSettings(settings).app.upriv_root_path).toBe("/data/upriv");
+  it("reads the lists of every device and fills what the wire leaves out", () => {
+    const id = "a".repeat(32);
+    const wire = {
+      ...createDefaultAppSettings(),
+      unlocked_folders: {
+        encrypted_vaults: true,
+        devices: {
+          [id]: {
+            system: "linux",
+            next_number: 2,
+            rows: [{ number: 1, name: "", path: "/mnt/ssd" }],
+          },
+        },
+      },
+      backups: undefined,
+    } as unknown as Parameters<typeof normalizeAppSettings>[0];
+    const settings = normalizeAppSettings(wire);
+    expect(settings.unlocked_folders.encrypted_vaults).toBe(true);
+    // The app's unlocked folders select nothing unless the group says so.
+    expect(settings.unlocked_folders.devices[id].selected).toBe("none");
+    expect(settings.backups).toEqual({ devices: {} });
   });
 
   it("defaults lifecycle_close_modal_on_submit to false", () => {

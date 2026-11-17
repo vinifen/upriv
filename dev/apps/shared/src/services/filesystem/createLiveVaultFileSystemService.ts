@@ -6,6 +6,7 @@ import {
   parseHeldItems,
   vaultFileLanguageFromPath,
   VAULT_ERROR_CODES,
+  type OsFolderAnswer,
   type VaultFileContent,
   type VaultFileLanguage,
 } from "../../domain";
@@ -68,8 +69,8 @@ export interface LiveVaultFileSystemRpc {
     fromPath: string,
     toFolderPath: string,
   ): Promise<{ path: string; revision: number }>;
-  /** Absolute OS path on the live mount. `osPath` is null when there is no OS folder. */
-  osPath(id: string, path: string): Promise<{ osPath: string | null }>;
+  /** Where `path` is in the OS (`vault_fs_os_path`). */
+  osPath(id: string, path: string): Promise<OsFolderAnswer>;
   plainSend(id: string, paths: string[]): Promise<{ files: number }>;
   plainUnsend(id: string, paths: string[]): Promise<FolderRemoval>;
   /** The raw `vault_fs_held` answer. */
@@ -374,9 +375,8 @@ export function createLiveVaultFileSystemService(
       }
     },
 
-    async osPath(vaultId, path) {
-      const resolved = await rpc.osPath(vaultId, path);
-      return resolved.osPath;
+    osPath(vaultId, path) {
+      return rpc.osPath(vaultId, path);
     },
 
     async sendToFolder(vaultId, paths) {

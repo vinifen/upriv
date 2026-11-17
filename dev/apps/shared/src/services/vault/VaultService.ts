@@ -1,6 +1,7 @@
 import type { KdfUnlockPreset } from "../../domain/vault-settings/kdf";
 import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
+import type { ListsSaved, VaultListChanges } from "../../domain/folder-lists";
 import type { VaultDeleteOutcome, VaultRow } from "../../domain/vault";
 import type { VaultWelcomeFiles } from "../../domain/vault-create/welcomeReadme";
 import type { VaultDiskUsage } from "../../domain/vault-info";
@@ -71,8 +72,15 @@ export interface VaultService {
    */
   diskUsage(vaultId: string): Promise<VaultDiskUsage | null>;
 
-  /** Persist settings (`vault_config_save` — enforces edit-policy on quiet targets). */
-  registerSettings(vaultId: string, config: VaultSettingsConfig): Promise<void>;
+  /**
+   * Persist settings (`vault_config_save` — enforces edit-policy on quiet
+   * targets). Its lists are not read: `lists` carries what changed in them.
+   */
+  registerSettings(
+    vaultId: string,
+    config: VaultSettingsConfig,
+    lists?: VaultListChanges,
+  ): Promise<ListsSaved>;
 
   /**
    * Deep rename via `vault_rename` — updates display name; migrates folder/`[vault].id`

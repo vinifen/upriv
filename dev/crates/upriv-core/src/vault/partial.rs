@@ -37,7 +37,7 @@ pub(super) fn wipe_partial_behind(
     work: PartialWork,
     opts: WipeOptions,
 ) {
-    if crate::host_fs::export_tree_uri(path).is_some() {
+    if crate::host_fs::tree_uri_of(path).is_some() {
         return wipe_and_forget(root, path, work, &opts);
     }
     let Some(mark) = WipingMark::enter(path) else {
