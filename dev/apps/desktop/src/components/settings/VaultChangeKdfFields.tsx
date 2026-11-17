@@ -19,7 +19,8 @@ import {
 interface VaultChangeKdfFieldsProps {
   /** Current unlock cost from `store/header/vault.header`. */
   currentPreset: KdfUnlockPreset;
-  rewrapBlocked: boolean;
+  /** Blocked when the vault is not strictly closed (`vault_closed` gate). */
+  blocked: boolean;
   fields: ChangeKdfFieldsState;
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
   /** Wrong current password — ring and message on that field. */
@@ -31,7 +32,7 @@ interface VaultChangeKdfFieldsProps {
 
 export function VaultChangeKdfFields({
   currentPreset,
-  rewrapBlocked,
+  blocked,
   fields,
   onChange,
   passwordFieldError,
@@ -44,11 +45,11 @@ export function VaultChangeKdfFields({
 
   const presetChanged = fields.nextPreset !== currentPreset;
   const downgrade = changeKdfFormIsDowngrade(currentPreset, fields.nextPreset);
-  const locked = rewrapBlocked || busy;
+  const locked = blocked || busy;
 
   return (
     <div className="space-y-3">
-      {rewrapBlocked ? (
+      {blocked ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
           {t(requireVaultConfigEditLockedI18nKey("action.change_kdf"))}
         </p>
@@ -58,7 +59,7 @@ export function VaultChangeKdfFields({
         {t("modal.settings.change_kdf_intro")}
       </p>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("warning.kdf_change_backups")}
+        {t("vault.change_kdf.backups_note")}
       </p>
 
       <SettingsField label={t("vault.change_kdf.current")} htmlFor={passwordId} disabled={locked}>

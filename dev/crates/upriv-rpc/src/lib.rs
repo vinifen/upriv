@@ -22,11 +22,12 @@ use upriv_core::logging::{
 use upriv_core::{
     change_vault_kdf, change_vault_password, close_state, close_vault, close_vault_auto,
     close_vault_now, create_vault_as_job, create_vault_group_with_sort, data_folder_lost,
-    delete_vault_group, discover_bootstrap_root, finish_import_session, hurry_close,
-    known_vault_ids, list_vaults, load_app_settings, load_vault_config, load_vault_groups,
-    open_import_session, rebuild_vault, rename_vault, reorder_vault_group_grouped_vaults,
-    reorder_vault_groups, repair_vault_groups, resolve_vault_root, save_app_settings_session,
-    suggested_vault_root, update_vault_group, vault_disk_usage, vault_list_item, AppSettings,
+    delete_vault_group, discover_bootstrap_root, finish_import_session, finish_password_change,
+    hurry_close, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
+    load_vault_groups, open_import_session, rebuild_vault, rename_vault,
+    reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
+    resolve_vault_root, save_app_settings_session, suggested_vault_root, update_key_copies,
+    update_vault_group, vault_disk_usage, vault_key_status, vault_list_item, AppSettings,
     CloseState, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
     ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup, VaultListItem,
     VaultRootBootstrapPrefs, VaultRootDirStatus, VaultStorageMode, VaultWelcome,
@@ -137,16 +138,20 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_unlocked_folder_info" => folder_ops::vault_unlocked_folder_info(req.params),
         "vault_close" => vault_close(req.params),
         "vault_change_password" => vault_change_password(req.params),
+        "vault_password_change_finish" => vault_password_change_finish(req.params),
         "vault_change_kdf" => vault_change_kdf(req.params),
+        "vault_key_copies_update" => vault_key_copies_update(req.params),
         "vault_rebuild" => vault_rebuild(req.params),
         "vault_close_phase" => vault_close_phase(req.params),
         "vault_close_hurry" => vault_close_hurry(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
         "vault_disk_usage" => vault_disk_usage_rpc(req.params),
+        "vault_key_status" => vault_key_status_rpc(req.params),
         "vault_config_save" => vault_config_save(req.params),
         "vault_rename" => vault_rename(req.params),
         "vault_delete" => vault_ops::vault_delete(req.params),
+        "vault_delete_hurry" => vault_ops::vault_delete_hurry(req.params),
         "vault_export" => vault_ops::vault_export(req.params),
         "vault_unfinished_sweep" => vault_ops::vault_unfinished_sweep(req.params),
         "vault_import_zip" => vault_ops::vault_import_zip(req.params),
@@ -945,6 +950,9 @@ fn vault_list_item_json(item: &VaultListItem) -> Value {
         "note": item.note,
         "lastAccessedAt": item.last_accessed_at,
         "unlockPreset": unlock_preset,
+        "keyCount": item.key_count,
+        "passwordChange": item.password_change,
+        "deleteUnfinished": item.delete_unfinished,
         "plainLeftover": item.plain_leftover,
         "plainRecords": item.plain_records,
         "outsideBackups": item.outside_backups,
@@ -1066,9 +1074,12 @@ struct VaultChangePasswordParams {
     id: String,
     current_password: SecretString,
     new_password: SecretString,
+    /// The **Back up first** switch.
+    back_up_first: bool,
     job: String,
 }
 
+/// A new key for a closed vault, every file rewritten with it.
 fn vault_change_password(params: Value) -> RpcResponse {
     let parsed: VaultChangePasswordParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1083,9 +1094,63 @@ fn vault_change_password(params: Value) -> RpcResponse {
         parsed.id.trim(),
         parsed.current_password.as_bytes(),
         parsed.new_password.as_bytes(),
+        parsed.back_up_first,
         &parsed.job,
     ) {
-        Ok(()) => ok(json!(null)),
+        Ok(changed) => ok(json!(changed)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultPasswordChangeFinishParams {
+    id: String,
+    password: SecretString,
+    job: String,
+}
+
+/// Rewrite the files an unfinished password change left on earlier keys.
+fn vault_password_change_finish(params: Value) -> RpcResponse {
+    let parsed: VaultPasswordChangeFinishParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match finish_password_change(
+        &root,
+        parsed.id.trim(),
+        parsed.password.as_bytes(),
+        &parsed.job,
+    ) {
+        Ok(finished) => ok(json!(finished)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultJobParams {
+    id: String,
+    job: String,
+}
+
+/// The pass after an open: every blob's key copy made the header's, when
+/// one is behind. Answers `done` at once when nothing is due.
+fn vault_key_copies_update(params: Value) -> RpcResponse {
+    let parsed: VaultJobParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match update_key_copies(&root, parsed.id.trim(), &parsed.job) {
+        Ok(state) => ok(json!({ "keyCopies": state })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1115,7 +1180,7 @@ fn vault_change_kdf(params: Value) -> RpcResponse {
         parsed.unlock_preset,
         &parsed.job,
     ) {
-        Ok(()) => ok(json!(null)),
+        Ok(changed) => ok(json!(changed)),
         Err(error) => map_core_err(error),
     }
 }
@@ -1128,7 +1193,8 @@ struct VaultRebuildParams {
     job: String,
 }
 
-/// Rebuild the lost index of a closed vault from its blobs' records.
+/// Rebuild a closed vault from its blobs: the header from their key copies,
+/// the tree from their records and the backups.
 fn vault_rebuild(params: Value) -> RpcResponse {
     let parsed: VaultRebuildParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1253,6 +1319,29 @@ fn vault_disk_usage_rpc(params: Value) -> RpcResponse {
             "heldBytes": usage.held_bytes,
             "filesBytes": usage.files_bytes,
         })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Where an open vault's keys stand, for Info: `{ open: false }` while it
+/// has no open session.
+fn vault_key_status_rpc(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match vault_key_status(&root, parsed.id.trim()) {
+        Ok(Some(status)) => ok(json!({
+            "open": true,
+            "filesWaiting": status.files_waiting,
+            "keyCopiesDue": status.key_copies_due,
+            "keyCopiesUpdating": status.key_copies_updating,
+        })),
+        Ok(None) => ok(json!({ "open": false })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1560,9 +1649,13 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultFileUnreadable { .. } => ("vault_file_unreadable", None),
         upriv_core::UprivError::VaultIndexUnreadable { .. } => ("vault_index_unreadable", None),
         upriv_core::UprivError::VaultIndexReadable => ("vault_index_readable", None),
-        upriv_core::UprivError::VaultRebuildSpaceShort { .. } => {
-            ("vault_rebuild_space_short", None)
+        upriv_core::UprivError::VaultHeaderUnreadable => ("vault_header_unreadable", None),
+        upriv_core::UprivError::PasswordOutdated => ("password_outdated", None),
+        upriv_core::UprivError::PasswordChangeInterrupted => ("password_change_interrupted", None),
+        upriv_core::UprivError::PasswordChangeSpaceShort { .. } => {
+            ("password_change_space_short", None)
         }
+        upriv_core::UprivError::VaultDeleting => ("vault_deleting", None),
         upriv_core::UprivError::VaultLocked(p) => ("vault_locked", Some(p.as_path())),
         upriv_core::UprivError::VaultMountFailed(_) => ("vault_mount_failed", None),
         upriv_core::UprivError::ImportArchiveNotFound(p) => {
@@ -1573,13 +1666,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         }
         upriv_core::UprivError::VaultMustBeClosed => ("vault_must_be_closed", None),
         upriv_core::UprivError::VaultBusy => ("vault_busy", None),
-        upriv_core::UprivError::VaultBackupFailed => ("vault_backup_failed", None),
-        upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::Password) => {
-            ("rewrap_password_unchanged", None)
-        }
-        upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::UnlockRam) => {
-            ("rewrap_kdf_unchanged", None)
-        }
+        upriv_core::UprivError::PasswordUnchanged => ("password_unchanged", None),
+        upriv_core::UprivError::UnlockRamUnchanged => ("unlock_ram_unchanged", None),
         upriv_core::UprivError::JobCancelled => ("job_cancelled", None),
         upriv_core::UprivError::JobIdInvalid => ("invalid_request", None),
         upriv_core::UprivError::JobNotStoppable => ("job_not_stoppable", None),
@@ -1611,9 +1699,11 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             "vault_root_incomplete"
             | "vault_root_busy"
             | "wrong_password"
+            | "password_outdated"
+            | "password_change_interrupted"
             | "vault_unlock_blocked"
-            | "rewrap_password_unchanged"
-            | "rewrap_kdf_unchanged"
+            | "password_unchanged"
+            | "unlock_ram_unchanged"
             | "job_cancelled"
             | "job_not_stoppable" => LogLevel::Warn,
             _ => LogLevel::Error,
@@ -1644,7 +1734,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         }
         upriv_core::UprivError::PlainSpaceShort { needed, available }
         | upriv_core::UprivError::DataFolderExportSpaceShort { needed, available }
-        | upriv_core::UprivError::VaultRebuildSpaceShort { needed, available } => {
+        | upriv_core::UprivError::PasswordChangeSpaceShort { needed, available } => {
             Some(json!({ "needed": needed, "available": available }))
         }
         upriv_core::UprivError::PlainFolderUnwritable { count } => Some(json!({ "count": count })),
@@ -1837,16 +1927,20 @@ mod contract_tests {
         "vault_unlocked_folder_info",
         "vault_close",
         "vault_change_password",
+        "vault_password_change_finish",
         "vault_change_kdf",
+        "vault_key_copies_update",
         "vault_rebuild",
         "vault_close_phase",
         "vault_close_hurry",
         "vault_export_capabilities",
         "vault_config_get",
         "vault_disk_usage",
+        "vault_key_status",
         "vault_config_save",
         "vault_rename",
         "vault_delete",
+        "vault_delete_hurry",
         "vault_export",
         "vault_unfinished_sweep",
         "vault_import_zip",
@@ -1920,7 +2014,13 @@ mod contract_tests {
         let status = call("job_status", json!({ "job": "rpc-never-started" }));
         assert_eq!(
             status.result,
-            Some(json!({ "running": false, "bytesDone": 0, "bytesTotal": 0, "stoppable": true }))
+            Some(json!({
+                "running": false,
+                "bytesDone": 0,
+                "bytesTotal": 0,
+                "stoppable": true,
+                "step": null,
+            }))
         );
         let cancel = call(
             "job_cancel",
@@ -2228,6 +2328,7 @@ mod contract_tests {
             auto_close: Default::default(),
             file_manager: Default::default(),
             seven_zip: Default::default(),
+            deleting: None,
         };
         upriv_core::create_vault(
             &root,

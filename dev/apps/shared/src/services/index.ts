@@ -29,6 +29,7 @@ export {
 export type { LogService } from "./logs/LogService";
 export type {
   CreateVaultInput,
+  VaultDeleteInput,
   VaultImportPackage,
   VaultRenameResult,
   VaultService,
@@ -55,6 +56,7 @@ export type { DataFolderApplyRequest, VaultRootService } from "./vault-root/Vaul
 export type {
   ChangeVaultKdfInput,
   ChangeVaultPasswordInput,
+  FinishPasswordChangeInput,
   RebuildVaultInput,
   VaultSecurityService,
 } from "./vault-security/VaultSecurityService";

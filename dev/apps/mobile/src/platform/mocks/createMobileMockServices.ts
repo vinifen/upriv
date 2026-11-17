@@ -125,6 +125,7 @@ function mockBackup(
     sizeBytes,
     saved,
     path: `${MOCK_VAULT_ROOT_URI}/.upriv/vaults/${vaultId}/backups/${place}`,
+    lowerUnlockRam: false,
   };
 }
 
@@ -362,7 +363,8 @@ export function createMobileMockServices(): AppServices {
         return NO_LISTS_SAVED;
       },
       rename: mockRename,
-      async unregisterSettings(vaultId) {
+      // A mock vault has no files to overwrite: the delete removes it at once.
+      async deleteVault(vaultId: string) {
         unregisterMockVaultSettings(vaultId);
         clearMockVaultUnlockPreset(vaultId);
         const index = extraCreatedVaults.findIndex((row) => row.id === vaultId);
@@ -371,6 +373,9 @@ export function createMobileMockServices(): AppServices {
         suppressMockSeedVaultId(vaultId);
         removeRemappedMockSeedVault(vaultId);
         return { outside: "none" as const, folder: null };
+      },
+      async hurryDelete() {
+        return false;
       },
       // A mock pick is not a real folder: report the file core would write there.
       async exportToFolder(vault, request, destDir) {

@@ -44,15 +44,15 @@ export {
 } from "./listPatch";
 export { rebaseQuietLockedVaultSettings } from "./rebaseQuiet";
 export {
-  VAULT_SETTINGS_AREA_ICON,
-  VAULT_SETTINGS_AREA_I18N,
-  VAULT_SETTINGS_AREAS,
+  VAULT_SETTINGS_MENU_ICON,
+  VAULT_SETTINGS_MENU_I18N,
   vaultSettingsAreaTitleKey,
   vaultRowControls,
-  vaultSettingsMenuAreas,
+  vaultSettingsMenuEntries,
   type VaultRowControls,
   vaultSettingsPreferenceSections,
   type VaultSettingsAreaId,
+  type VaultSettingsMenuEntry,
 } from "./areas";
 export { KDF_UNLOCK_OPTION_META, type KdfUnlockOptionMeta } from "./kdf";
 export {

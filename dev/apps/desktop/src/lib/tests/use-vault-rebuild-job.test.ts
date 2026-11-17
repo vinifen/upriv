@@ -5,7 +5,6 @@ import {
   JOB_ERROR_CODES,
   RpcError,
   VAULT_ERROR_CODES,
-  vaultRebuildSpaceShort,
   type JobService,
   type VaultRebuildResult,
   type VaultSecurityService,
@@ -26,9 +25,26 @@ function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
   return { status: async () => null, cancel: vi.fn(async () => undefined) };
 }
 
+/** A security service whose other calls are never asked for here. */
 function security(rebuildIndex: VaultSecurityService["rebuildIndex"]): VaultSecurityService {
-  return { changePassword: vi.fn(), changeKdfPreset: vi.fn(), rebuildIndex };
+  return {
+    changePassword: vi.fn(),
+    finishPasswordChange: vi.fn(),
+    changeKdfPreset: vi.fn(),
+    updateKeyCopies: vi.fn(),
+    keyStatus: vi.fn(),
+    rebuildIndex,
+  };
 }
+
+const REBUILT: VaultRebuildResult = {
+  headerRestored: true,
+  treeRebuilt: true,
+  files: 12,
+  setAside: 1,
+  copy: null,
+  copySkipped: "no_room",
+};
 
 function events() {
   return {
@@ -56,14 +72,10 @@ describe("useVaultRebuildJob", () => {
       job: job?.id,
     });
 
-    await act(async () => run.resolve({ files: 12, setAside: 1 }));
+    await act(async () => run.resolve(REBUILT));
     await waitFor(() => expect(result.current.job).toBeNull());
     // The password comes back once, to open the vault, and is not kept.
-    expect(on.onRebuilt).toHaveBeenCalledWith(
-      { files: 12, setAside: 1 },
-      { vaultId: "notes" },
-      "pass-word-ok",
-    );
+    expect(on.onRebuilt).toHaveBeenCalledWith(REBUILT, { vaultId: "notes" }, "pass-word-ok");
     const second = deferred();
     vi.mocked(service.rebuildIndex).mockImplementationOnce(() => second.promise);
     act(() => {
@@ -106,28 +118,5 @@ describe("useVaultRebuildJob", () => {
     await waitFor(() => expect(result.current.job).toBeNull());
     expect(on.onCancelled).toHaveBeenCalledWith({ vaultId: "notes" });
     expect(on.onFailed).not.toHaveBeenCalled();
-  });
-
-  it("hands a refusal for want of room to the failure, with its sizes", async () => {
-    const run = deferred();
-    const on = events();
-    const { result } = renderHook(() =>
-      useVaultRebuildJob(security(vi.fn(() => run.promise)), jobs(), on),
-    );
-
-    act(() => {
-      result.current.rebuild("notes", "pw");
-    });
-    const short = new RpcError(VAULT_ERROR_CODES.REBUILD_SPACE_SHORT, "no room", {
-      needed: 4096,
-      available: 1024,
-    });
-    await act(async () => run.reject(short));
-    await waitFor(() => expect(on.onFailed).toHaveBeenCalled());
-    expect(vaultRebuildSpaceShort(on.onFailed.mock.calls[0]?.[0])).toEqual({
-      needed: 4096,
-      available: 1024,
-    });
-    expect(vaultRebuildSpaceShort(new RpcError(VAULT_ERROR_CODES.WRONG_PASSWORD, "no"))).toBeNull();
   });
 });

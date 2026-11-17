@@ -26,7 +26,9 @@
     "storage.plain_files": "vault_closed_or_recovery",
     "vault.id": "vault_closed_or_recovery",
     "action.change_password": "vault_closed",
-    "action.change_kdf": "vault_closed"
+    "action.finish_password_change": "vault_closed",
+    "action.change_kdf": "vault_closed",
+    "action.delete": "vault_closed_or_recovery"
   },
   "app": {
     "ui": "anytime",
@@ -44,7 +46,9 @@
     "storage.mode": "modal.settings.field.storage.mode_locked",
     "storage.plain_files": "modal.settings.field.storage.plain_files_locked",
     "action.change_password": "vault.change_password.vault_open",
-    "action.change_kdf": "vault.change_kdf.vault_open"
+    "action.finish_password_change": "vault.change_password.vault_open",
+    "action.change_kdf": "vault.change_kdf.vault_open",
+    "action.delete": "modal.delete_vault.hold.busy"
   },
   "rustConfigSaveQuietTargets": ["unlocked_folder", "storage.mode"],
   "plainLeftoverLocked": ["unlocked_folder", "storage.mode", "vault.display_name", "vault.id"],

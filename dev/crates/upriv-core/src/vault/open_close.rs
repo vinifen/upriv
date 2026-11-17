@@ -18,20 +18,22 @@ use crate::runtime_state::{
 };
 use crate::session::{
     any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
-    is_vault_closing_at, is_vault_open_at, open_session_ids_under, record_unlock_failure,
-    record_unlock_success, take_session, vault_close_phase_at, with_unlock_lock,
-    with_vault_dir_lock, ClosePhase, ClosingGuard, Job, JobKind, OpenSession, PreparingGuard,
+    is_vault_closing_at, is_vault_open_at, open_session_ids_under, take_session,
+    vault_close_phase_at, with_unlock_lock, with_vault_dir_lock, ClosePhase, ClosingGuard, Job,
+    JobKind, OpenSession, PreparingGuard,
 };
 use crate::store::{
-    content_hash_hex, content_hash_with_index, flush_index_parts, index_logical_hash, open_store,
-    pack_blob_waste, settle_held, BlobPackMode, ChunkBlobMutation, HeldSources, OpenedStore,
-    RecordsDue, Sealed,
+    content_hash_hex, content_hash_with_index, flush_index_parts, index_logical_hash,
+    pack_blob_waste, BlobPackMode, ChunkBlobMutation, OpenedStore, RecordsDue, Sealed, Unlock,
 };
 
 use super::backup::{
-    backup_on_close, backup_zips_newest_first, close_backup_is_kept, discard_unfinished_backups,
-    list_backups, promote_backup_save, LastBackup,
+    backup_on_close, close_backup_is_kept, discard_unfinished_backups, list_backups,
+    promote_backup_save, LastBackup,
 };
+use super::closed_store::{steady, unlock_counted, ClosedStore};
+use super::header_commit::{next_generation, CommitRecord};
+use super::password_change::{settle_pending, SettledPending};
 use super::persistence::{
     load_vault_persistence, save_vault_persistence, update_vault_persistence, VaultPersistence,
 };
@@ -54,32 +56,48 @@ fn discard_mount(mount: Option<crate::mount::MountedVault>) -> Option<PathBuf> {
     path
 }
 
-/// Match `data/` and `held/` of the vault at `vault_dir` with the tree just
-/// unlocked: blobs no file names are set aside in `held/`, and each is matched
-/// with the other index file and the vault's backups. When the held records
-/// changed, or the index copy held another tree, the index is sealed at once:
-/// the records survive a crash, and both index files match again, as a backup
-/// zip requires. An error is that seal's, and leaves the previous index.
-pub(crate) fn settle_opened(vault_dir: &Path, opened: &mut OpenedStore) -> Result<()> {
-    let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-    let backup_zips = || backup_zips_newest_first(vault_dir);
-    let changed = settle_held(
-        &store,
-        &opened.header,
-        &opened.content_key,
-        &opened.index_key,
-        &mut opened.index,
-        HeldSources {
-            other_copy: opened.other_copy.as_ref(),
-            record_key: &opened.record_key,
-            backup_zips: &backup_zips,
+/// What the password opened at an open, as a closed store the session takes
+/// over: a steady header and its index, or a pending password change settled
+/// first ([`settle_pending`]). A lost index is its error.
+fn opened_store(vault_dir: &Path, vault_id: &str, unlocked: Result<Unlock>) -> Result<ClosedStore> {
+    match unlocked? {
+        Unlock::Pending(pending) => match settle_pending(vault_dir, vault_id, pending)? {
+            SettledPending::Settled(store) => Ok(*store),
+            SettledPending::IndexLost(_) => Err(UprivError::VaultIndexUnreadable {
+                detail: "the index does not open under the settled header".into(),
+            }),
         },
-    );
-    if changed || opened.other_copy.is_some() {
-        flush_index_parts(&store, &opened.header, &opened.index_key, &mut opened.index)?;
-        opened.other_copy = None;
+        unlocked => steady(vault_dir, vault_id, Ok(unlocked)),
     }
-    Ok(())
+}
+
+/// Remove the header keys no chunk and no held blob's file use: a header
+/// write in a new generation with the pass due, so no key copy keeps them
+/// once the pass after the open ends. The write key always stays. Only an
+/// open does this: it holds the KEK, and the pass runs after it. A failure is
+/// logged and leaves the keys.
+fn drop_unused_keys(store: &mut ClosedStore) {
+    let in_use = store.index.keys_in_use();
+    let write = store.keys.write_id();
+    let keep = |id: crate::store::KeyId| id == write || in_use.contains(&id);
+    if store.keys.ids().all(keep) {
+        return;
+    }
+    let dropped = next_generation(&store.store_dir(), &store.header).and_then(|generation| {
+        let keys = store.keys.draft().retain(keep).seal(
+            generation,
+            store.keys.block().kdf.clone(),
+            &store.kek,
+        )?;
+        let kek = store.kek.clone();
+        store.commit(keys, kek, CommitRecord::Hash)
+    });
+    let outcome = if dropped.is_ok() { "removed" } else { "kept" };
+    log_event(
+        LogLevel::Info,
+        "vault_unused_keys",
+        &[("id", store.vault_id.as_str()), ("outcome", outcome)],
+    );
 }
 
 fn vault_dir_or_not_found(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> {
@@ -189,6 +207,9 @@ fn open_unlocked_session(
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
         let config = load_vault_config(&vault_dir)?;
+        if config.deleting.is_some() {
+            return Err(UprivError::VaultDeleting);
+        }
         let user = kind == OpenKind::User;
         let plain = user && config.storage_mode() == VaultStorageMode::UprivPlain;
         // A vault another process holds is not a leftover: the lock below
@@ -211,16 +232,9 @@ fn open_unlocked_session(
             // and a backup zip still marked unfinished will never finish.
             release_recorded_mount(root, vault_id);
             discard_unfinished_backups(&vault_dir);
-            let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-            let mut opened = match open_store(&store, password) {
-                Ok(opened) => opened,
-                Err(UprivError::WrongPassword) => {
-                    let _ = record_unlock_failure(&vault_dir);
-                    return Err(UprivError::WrongPassword);
-                }
-                Err(other) => return Err(other),
-            };
-            record_unlock_success(&vault_dir);
+            let mut store = unlock_counted(&vault_dir, password, |unlocked| {
+                opened_store(&vault_dir, vault_id, unlocked)
+            })?;
             // Argon2id cannot be cut short; a stop that came meanwhile drops
             // the keys here, before any session exists. An encrypted vault has
             // nothing left to stop once its session is in.
@@ -231,13 +245,20 @@ fn open_unlocked_session(
             }
             // Reading needs no seal: a vault on a disk that refuses writes
             // still opens, and the session's next seal carries the records.
-            if settle_opened(&vault_dir, &mut opened).is_err() {
+            if store.settle().is_err() {
                 log_event(
                     LogLevel::Warn,
                     "vault_held_seal_failed",
                     &[("id", vault_id)],
                 );
             }
+            drop_unused_keys(&mut store);
+            let opened = OpenedStore {
+                header: store.header,
+                keys: store.keys,
+                index: store.index,
+                repaired: false,
+            };
             let mut session = OpenSession::from_opened(
                 vault_id.to_string(),
                 config.vault.display_name.clone(),
@@ -478,6 +499,7 @@ fn close_vault_inner(
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     let closing = ClosingGuard::enter(&vault_dir);
     super::unlocked_folder::stop_attach(&vault_dir);
+    super::key_pass::stop_key_copies(&vault_dir);
     let hurry = Arc::clone(closing.hurry());
     if kind.immediate() {
         hurry.store(true, Ordering::Relaxed);
@@ -514,8 +536,7 @@ fn close_vault_inner(
         } else {
             match pack_blob_waste(
                 &store,
-                &session.header,
-                &session.content_key,
+                &session.keys,
                 &mut session.index,
                 BlobPackMode::Close,
                 Some(&rewritten),
@@ -566,29 +587,34 @@ fn close_vault_inner(
         };
         // Before the seal, so the digests of files written in order are stored.
         session.index.settle_digest_streams();
-        let (sealed_index, sealed) = match flush_index_parts(
-            &store,
-            &session.header,
-            &session.index_key,
-            &mut session.index,
-        ) {
-            Ok(sealed) => sealed,
-            Err(error) => {
-                super::fs::undo_copy(&mut session, copied);
-                super::fs::settle_staged_layout(&mut session, layout, None);
-                undo_pack(&mut session);
-                return Err(error);
-            }
-        };
-        super::fs::settle_staged_layout(&mut session, layout, Some(sealed));
-        super::fs::release_copied(&mut session, sealed, copied);
-        session.staged_blobs.clear();
-        if packed_ok {
-            super::fs::release_blobs(&mut session, sealed, packed.superseded_ids());
+        // What this seal drops is listed in the index it writes.
+        let mut dropped = copied
+            .as_ref()
+            .map(ChunkBlobMutation::superseded_ids)
+            .unwrap_or_default();
+        if let Some(layout) = &layout {
+            dropped.extend(layout.dropped_ids());
         }
-        // Not flushed: what the previous index names stays on disk with the
-        // session's other kept blobs, since a power cut may bring it back.
-        // The index then lists them, written again after this seal.
+        if packed_ok {
+            dropped.extend(packed.superseded_ids());
+        }
+        let listed = session.index.list_released(dropped);
+        let (sealed_index, sealed) =
+            match flush_index_parts(&store, &session.keys, &mut session.index) {
+                Ok(sealed) => sealed,
+                Err(error) => {
+                    session.index.unlist_released(&listed);
+                    super::fs::undo_copy(&mut session, copied);
+                    super::fs::settle_staged_layout(&mut session, layout, None);
+                    undo_pack(&mut session);
+                    return Err(error);
+                }
+            };
+        super::fs::settle_staged_layout(&mut session, layout, Some(sealed));
+        session.staged_blobs.clear();
+        // Not flushed: what the previous index names stays on disk, since a
+        // power cut may bring it back; the index lists it as released for
+        // the next session's first seal that flushes.
         let hash = if sealed == Sealed::Flushed {
             session.index.clear_unsealed_holes();
             super::fs::delete_released(&mut session);
@@ -822,7 +848,7 @@ pub(crate) fn delete_failed_import(root: &VaultRoot, vault_id: &str) -> Result<(
         drop(take_session(&dir)?);
     }
     if dir.host_is_dir() {
-        super::delete::delete_vault(root, vault_id, false)?;
+        super::delete::delete_unfinished_import(root, vault_id)?;
     }
     super::unfinished::forget_import(root, vault_id);
     Ok(())
@@ -860,7 +886,7 @@ mod tests {
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::session::Job;
-    use crate::store::KdfUnlockPreset;
+    use crate::store::{open_store, KdfUnlockPreset};
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;
 
@@ -966,6 +992,7 @@ mode = "encrypted_dir"
             "notes",
             b"pass-word-ok",
             b"pass-word-new",
+            true,
             &job()
         )));
         assert!(locked(crate::vault::rename_vault(
@@ -982,7 +1009,13 @@ mode = "encrypted_dir"
             "notes",
             &job()
         )));
-        assert!(locked(crate::vault::delete_vault(&root, "notes", false)));
+        assert!(locked(crate::vault::delete_vault(
+            &root,
+            "notes",
+            false,
+            false,
+            &job()
+        )));
         assert!(matches!(
             crate::vault::export_data_folder(&root, out.path(), "copy", true, &job()),
             Err(UprivError::DataFolderBusy)
@@ -1963,8 +1996,8 @@ mode = "encrypted_dir"
                     continue;
                 }
                 let mut bytes = std::fs::read(&path).unwrap();
-                // Past the nonce, inside the blob's first chunk.
-                bytes[30] ^= 0xff;
+                // Past the key copy and the nonce, inside the blob's first chunk.
+                bytes[crate::store::KEY_COPY_LEN as usize + 30] ^= 0xff;
                 std::fs::write(&path, bytes).unwrap();
                 flipped = true;
                 break;

@@ -12,11 +12,14 @@ use zeroize::Zeroizing;
 
 use crate::error::{Result, UprivError};
 
-pub const MASTER_KEY_LEN: usize = 32;
+/// Bytes of one key of a keyring ([`super::keys`]).
+pub const KEY_LEN: usize = 32;
 pub const CONTENT_KEY_LEN: usize = 32;
 pub const INDEX_KEY_LEN: usize = 64;
 pub const RECORD_KEY_LEN: usize = 32;
 pub const XCHACHA_NONCE_LEN: usize = 24;
+/// Poly1305 tag appended by XChaCha20-Poly1305.
+pub const XCHACHA_TAG_LEN: usize = 16;
 pub const AES_SIV_NONCE_LEN: usize = 16;
 
 const HKDF_CONTENT_INFO: &[u8] = b"upriv-content-key-v1";
@@ -29,7 +32,7 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
     bytes
 }
 
-pub fn random_master_key() -> Zeroizing<[u8; MASTER_KEY_LEN]> {
+pub fn random_key() -> Zeroizing<[u8; KEY_LEN]> {
     Zeroizing::new(random_bytes())
 }
 
@@ -37,8 +40,9 @@ pub type ContentKey = Zeroizing<[u8; CONTENT_KEY_LEN]>;
 pub type IndexKey = Zeroizing<[u8; INDEX_KEY_LEN]>;
 pub type RecordKey = Zeroizing<[u8; RECORD_KEY_LEN]>;
 
-/// One key per layer of the store, each its own HKDF label of the master key,
-/// so no layer shares a key with another.
+/// One key per layer of the store, each its own HKDF label of one key of the
+/// keyring, so no layer shares a key with another.
+#[derive(Clone)]
 pub struct LayerKeys {
     /// File chunks.
     pub content: ContentKey,
@@ -49,11 +53,9 @@ pub struct LayerKeys {
 }
 
 /// HKDF-SHA256, `salt=None` (RFC 5869 zeros). Intentional: IKM is a 32-byte
-/// CSPRNG master. Do not add a public salt without a `format_version` bump.
-/// A password or unlock-RAM change keeps the master key, so it keeps every
-/// layer key, and the blobs and their records stay as they are.
-pub fn derive_layer_keys(master: &[u8; MASTER_KEY_LEN]) -> Result<LayerKeys> {
-    let hk = Hkdf::<Sha256>::new(None, master);
+/// CSPRNG key. Do not add a public salt without a `format_version` bump.
+pub fn derive_layer_keys(key: &[u8; KEY_LEN]) -> Result<LayerKeys> {
+    let hk = Hkdf::<Sha256>::new(None, key);
     let mut content = Zeroizing::new([0u8; CONTENT_KEY_LEN]);
     hk.expand(HKDF_CONTENT_INFO, content.as_mut())
         .map_err(|_| store_err("HKDF content key expand failed"))?;
@@ -70,38 +72,27 @@ pub fn derive_layer_keys(master: &[u8; MASTER_KEY_LEN]) -> Result<LayerKeys> {
     })
 }
 
-pub fn wrap_master_key(
-    kek: &[u8; 32],
-    master: &[u8; MASTER_KEY_LEN],
+/// `nonce || XChaCha20-Poly1305(plaintext) || tag` under a fresh random nonce.
+pub fn encrypt_xchacha(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+    encrypt_xchacha_with_nonce(key, &random_bytes(), plaintext, aad)
+}
+
+/// [`encrypt_xchacha`] under `nonce`, for a seal whose AAD binds a value
+/// derived from the nonce (a chunk's version). The caller draws the nonce
+/// fresh from the CSPRNG for each seal: one never seals twice under it.
+pub fn encrypt_xchacha_with_nonce(
+    key: &[u8; 32],
+    nonce: &[u8; XCHACHA_NONCE_LEN],
+    plaintext: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>> {
-    encrypt_xchacha(kek, master, aad)
-}
-
-pub fn unwrap_master_key(
-    kek: &[u8; 32],
-    blob: &[u8],
-    aad: &[u8],
-) -> Result<Zeroizing<[u8; MASTER_KEY_LEN]>> {
-    let plain = decrypt_xchacha(kek, blob, aad)?;
-    if plain.len() != MASTER_KEY_LEN {
-        return Err(UprivError::WrongPassword);
-    }
-    let mut key = Zeroizing::new([0u8; MASTER_KEY_LEN]);
-    key.copy_from_slice(&plain);
-    Ok(key)
-}
-
-pub fn encrypt_xchacha(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
     if aad.is_empty() {
         return Err(store_err("AAD required for XChaCha encrypt"));
     }
     let cipher = XChaCha20Poly1305::new(key.into());
-    let nonce_bytes = random_bytes::<XCHACHA_NONCE_LEN>();
-    let nonce = XNonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(
-            nonce,
+            XNonce::from_slice(nonce),
             Payload {
                 msg: plaintext,
                 aad,
@@ -109,7 +100,7 @@ pub fn encrypt_xchacha(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<V
         )
         .map_err(|_| store_err("XChaCha20-Poly1305 encrypt failed"))?;
     let mut out = Vec::with_capacity(XCHACHA_NONCE_LEN + ciphertext.len());
-    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(nonce);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
@@ -183,7 +174,7 @@ mod tests {
 
     #[test]
     fn each_layer_has_its_own_key() {
-        let master = [9u8; MASTER_KEY_LEN];
+        let master = [9u8; KEY_LEN];
         let keys = derive_layer_keys(&master).unwrap();
         let record = keys.record.as_slice();
         assert_ne!(record, keys.content.as_slice());

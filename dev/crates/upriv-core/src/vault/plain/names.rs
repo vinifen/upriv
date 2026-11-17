@@ -153,7 +153,7 @@ mod tests {
     fn index(paths: &[&str]) -> VaultIndex {
         let mut index = VaultIndex::empty();
         for path in paths {
-            index.push(VaultNode::file(path, "f".into(), 1, vec![], vec![]));
+            index.push(VaultNode::file(path, "f".into(), 1, Default::default()));
         }
         index
     }

@@ -1,6 +1,5 @@
 import { useCallback, useId, type ReactNode } from "react";
-import { Button, Select, SwitchRow } from "@/components/ui";
-import { useRevealWhen } from "@/hooks/useRevealWhen";
+import { Select, SwitchRow } from "@/components/ui";
 import {
   AUTO_CLOSE_WHEN_BUSY,
   COMPRESSION_PRESETS,
@@ -36,7 +35,6 @@ import {
   type PolicyRadioBadge,
   type VaultBackupChoice,
   type VaultConfigEditHold,
-  type VaultDeleteHold,
   type VaultGroup,
   type VaultSettingsConfig,
   groupsForAssignmentPicker,
@@ -44,7 +42,6 @@ import {
   requireVaultConfigEditLockedI18nKey,
   liveDisplayNameError,
   displayNameErrorI18nKey,
-  VAULT_DELETE_HOLD_I18N_KEY,
 } from "@upriv/shared";
 import { useFolderStatuses } from "@upriv/shared/react";
 import { FolderList, StatusLine } from "@/components/folder-list";
@@ -1062,105 +1059,5 @@ export function PolicyRadioOption({
         </fieldset>
       ) : null}
     </label>
-  );
-}
-
-interface VaultSettingsDangerZoneSectionProps {
-  vaultId: string;
-  deleteOpen: boolean;
-  deleteConfirm: string;
-  confirmInputId: string;
-  canConfirmDelete: boolean;
-  busy?: boolean;
-  enabled?: boolean;
-  /** Why Delete waits (`vaultDeleteHold`). While set the button stays off and the reason shows. */
-  hold?: VaultDeleteHold | null;
-  /** This vault has backups outside the data folder, so the switch shows. */
-  outsideBackups?: boolean;
-  removeOutsideBackups?: boolean;
-  onRemoveOutsideBackupsChange?: (remove: boolean) => void;
-  onRequestDelete: () => void;
-  onCancelDelete: () => void;
-  onConfirmDelete: () => void;
-  onConfirmChange: (value: string) => void;
-}
-
-export function VaultSettingsDangerZoneSection({
-  vaultId,
-  deleteOpen,
-  deleteConfirm,
-  confirmInputId,
-  canConfirmDelete,
-  busy = false,
-  enabled = true,
-  hold = null,
-  outsideBackups = false,
-  removeOutsideBackups = false,
-  onRemoveOutsideBackupsChange,
-  onRequestDelete,
-  onCancelDelete,
-  onConfirmDelete,
-  onConfirmChange,
-}: VaultSettingsDangerZoneSectionProps) {
-  const { t } = useTranslation();
-  const confirmRef = useRevealWhen<HTMLDivElement>(deleteOpen);
-  const allowed = hold === null;
-
-  if (!deleteOpen) {
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-on-surface-variant">{t("modal.settings.danger_zone_help")}</p>
-        {hold ? (
-          <p className="text-sm text-on-surface-variant">{t(VAULT_DELETE_HOLD_I18N_KEY[hold])}</p>
-        ) : null}
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={onRequestDelete}
-          disabled={busy || !enabled || !allowed}
-        >
-          {t("modal.settings.delete_vault")}
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <div ref={confirmRef} className="space-y-3">
-      <p className="text-sm text-on-surface-variant">{t("modal.settings.delete_confirm")}</p>
-      <p className="font-mono text-xs text-on-surface-variant/80">{vaultId}</p>
-      <input
-        id={confirmInputId}
-        type="text"
-        value={deleteConfirm}
-        onChange={(event) => onConfirmChange(event.target.value)}
-        autoComplete="off"
-        spellCheck={false}
-        disabled={busy}
-        className={settingsControlClass}
-      />
-      {outsideBackups ? (
-        <SwitchRow
-          checked={removeOutsideBackups}
-          disabled={busy}
-          onChange={(remove) => onRemoveOutsideBackupsChange?.(remove)}
-          label={t("modal.settings.delete_outside_backups")}
-          hint={t("modal.settings.delete_outside_backups_help")}
-        />
-      ) : null}
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={onCancelDelete} disabled={busy}>
-          {t("action.cancel")}
-        </Button>
-        <Button
-          variant="danger"
-          size="sm"
-          disabled={!canConfirmDelete || busy || !allowed}
-          onClick={onConfirmDelete}
-        >
-          {t("action.delete")}
-        </Button>
-      </div>
-    </div>
   );
 }

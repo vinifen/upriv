@@ -234,6 +234,6 @@ export interface VaultSettingsListPatch {
   hidden: boolean;
   passwordHint?: string;
   storageMode: StorageMode;
-  /** Set after an unlock-RAM rewrap. Omitted saves leave the list row's preset. */
+  /** Set after an unlock-RAM change. Omitted saves leave the list row's preset. */
   unlockPreset?: KdfUnlockPreset;
 }

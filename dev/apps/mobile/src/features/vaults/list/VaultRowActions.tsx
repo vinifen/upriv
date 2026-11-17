@@ -6,11 +6,12 @@ import {
   resolveVaultListStatus,
   storageModeIsPlaintext,
   vaultCloseNowOffered,
+  vaultDeleteNowOffered,
   vaultExportMenuShown,
-  VAULT_SETTINGS_AREA_ICON,
-  VAULT_SETTINGS_AREA_I18N,
+  VAULT_SETTINGS_MENU_ICON,
+  VAULT_SETTINGS_MENU_I18N,
   vaultRowControls,
-  vaultSettingsMenuAreas,
+  vaultSettingsMenuEntries,
   type VaultListItem,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
@@ -48,11 +49,15 @@ interface VaultRowActionsProps {
   onOpenNote: (vault: VaultListItem) => void;
   onOpenVaultInfo: (vault: VaultListItem) => void;
   onOpenSettings: (vault: VaultListItem, area: VaultSettingsAreaId) => void;
+  /** The Delete vault window, the last entry of the Settings menu. */
+  onOpenDelete: (vault: VaultListItem) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
+  /** Continue (`now` false) or Delete now (`now` true) for a vault being deleted. */
+  onDeleteWork: (vault: VaultListItem, now: boolean) => void;
   /** Block cards: stack ⋯ / settings to the right of the title. */
   layout?: "row" | "column";
   /** A touch on these buttons, before the row sees it. */
@@ -67,11 +72,13 @@ export function VaultRowActions({
   onOpenNote,
   onOpenVaultInfo,
   onOpenSettings,
+  onOpenDelete,
   onExportVault,
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
   onCloseNow,
+  onDeleteWork,
   layout = "row",
   onTouchStart,
 }: VaultRowActionsProps) {
@@ -110,6 +117,7 @@ export function VaultRowActions({
   const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
   const closeNowOffered = vaultCloseNowOffered(listStatus, vault.id, pipelineListStatus);
+  const deleteNowOffered = vaultDeleteNowOffered(listStatus, vault.id, pipelineListStatus);
 
   const stacked = layout === "column";
   const iconStyle = stacked ? columnIconStyle : rowIconStyle;
@@ -139,7 +147,7 @@ export function VaultRowActions({
               label={t("app.menu.more")}
               icon="more-horizontal"
               size={iconSize}
-              disabled={controls.moreMenuBlocked && !closeNowOffered}
+              disabled={controls.moreMenuBlocked && !closeNowOffered && !deleteNowOffered}
               style={iconStyle}
             />
           }
@@ -199,6 +207,13 @@ export function VaultRowActions({
               onPress={() => onCloseNow(vault)}
             />
           ) : null}
+          {deleteNowOffered ? (
+            <MenuActionItem
+              icon="trash"
+              label={t("action.delete_now")}
+              onPress={() => onDeleteWork(vault, true)}
+            />
+          ) : null}
           <MenuActionItem
             icon="info"
             label={t("action.vault_info")}
@@ -223,13 +238,16 @@ export function VaultRowActions({
             />
           }
         >
-          {vaultSettingsMenuAreas(vault, pipelineListStatus).map((area) => (
+          {vaultSettingsMenuEntries(vault, pipelineListStatus).map((entry) => (
             <MenuActionItem
-              key={area}
-              icon={VAULT_SETTINGS_AREA_ICON[area]}
-              label={t(VAULT_SETTINGS_AREA_I18N[area])}
+              key={entry}
+              icon={VAULT_SETTINGS_MENU_ICON[entry]}
+              label={t(VAULT_SETTINGS_MENU_I18N[entry])}
+              danger={entry === "delete"}
               disabled={controls.settingsGearBlocked}
-              onPress={() => onOpenSettings(vault, area)}
+              onPress={() =>
+                entry === "delete" ? onOpenDelete(vault) : onOpenSettings(vault, entry)
+              }
             />
           ))}
         </DropdownPanel>

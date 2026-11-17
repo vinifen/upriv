@@ -75,8 +75,7 @@ pub(crate) fn config_folder_files(
     if include.workspace && index.find(INTERNAL_WORKSPACE_FILE).is_some() {
         let read = read_logical_file(
             source.store_dir,
-            source.header,
-            source.content_key,
+            source.keys,
             index,
             INTERNAL_WORKSPACE_FILE,
         );

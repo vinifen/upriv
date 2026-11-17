@@ -10,9 +10,9 @@ use crate::error::{Result, UprivError};
 
 pub use types::{
     AutoCloseWhenBusy, VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode,
-    VaultBackupSection, VaultConfig, VaultFileManagerSection, VaultIdentitySection,
-    VaultPlainFiles, VaultSecuritySection, VaultSevenZipSection, VaultStorageMode,
-    VaultStorageSection, VaultWipePattern,
+    VaultBackupSection, VaultConfig, VaultDeletingSection, VaultFileManagerSection,
+    VaultIdentitySection, VaultPlainFiles, VaultSecuritySection, VaultSevenZipSection,
+    VaultStorageMode, VaultStorageSection, VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -592,6 +592,9 @@ path = "relative/backups"
                 compression_level: 5,
                 solid: true,
             },
+            deleting: Some(VaultDeletingSection {
+                outside_backups: true,
+            }),
         };
         let tmp = tempfile::tempdir().unwrap();
         let vaults = tmp.path().join(".upriv").join("vaults");

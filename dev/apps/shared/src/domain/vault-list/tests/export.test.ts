@@ -211,6 +211,13 @@ describe("vaultCanExport", () => {
     expect(vaultCanExport(vaultListItemFixture({ session: "recovery" }))).toBe(false);
   });
 
+  it("blocks a vault whose delete runs or did not finish", () => {
+    expect(vaultCanExport(vaultListItemFixture({ session: "deleting" }))).toBe(false);
+    const vault = vaultListItemFixture({ id: "a", session: null });
+    expect(vaultCanExport(vault, { deletingVaultIds: ["a"] })).toBe(false);
+    expect(vaultCanExport(vault, { deletingVaultIds: ["other"] })).toBe(true);
+  });
+
   it("blocks in-flight opening, closing, creating, and queued pipelines", () => {
     const vault = vaultListItemFixture({ id: "a", session: null });
     expect(vaultCanExport(vault, { openingVaultIds: ["a"] })).toBe(false);

@@ -1208,9 +1208,9 @@ mod tests {
             })
             .unwrap();
         crate::close_vault(&root, "notes").unwrap();
-        // Past the 24-byte nonce: the first chunk fails its tag.
+        // Past the key copy and the 24-byte nonce: the first chunk fails its tag.
         let mut bytes = std::fs::read(&blob).unwrap();
-        bytes[24] ^= 0x01;
+        bytes[crate::store::KEY_COPY_LEN as usize + 24] ^= 0x01;
         std::fs::write(&blob, &bytes).unwrap();
 
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();

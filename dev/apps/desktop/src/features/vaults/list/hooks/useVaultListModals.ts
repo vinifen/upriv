@@ -24,6 +24,7 @@ export function useVaultListModals(
   const [helpOpen, setHelpOpen] = useState(false);
   const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [vaultInfoVaultId, setVaultInfoVaultId] = useState<string | null>(null);
+  const [deleteVaultId, setDeleteVaultId] = useState<string | null>(null);
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
   const [createVaultInitialDraft, setCreateVaultInitialDraft] = useState<CreateVaultDraft | null>(
     null,
@@ -79,6 +80,11 @@ export function useVaultListModals(
   const vaultInfoVault = useMemo(
     () => vaults.find((vault) => vault.id === vaultInfoVaultId) ?? null,
     [vaults, vaultInfoVaultId],
+  );
+
+  const deleteVault = useMemo(
+    () => vaults.find((vault) => vault.id === deleteVaultId) ?? null,
+    [vaults, deleteVaultId],
   );
 
   const closeCreateVault = () => {
@@ -156,6 +162,9 @@ export function useVaultListModals(
     vaultInfoVaultId,
     setVaultInfoVaultId,
     vaultInfoVault,
+    deleteVaultId,
+    setDeleteVaultId,
+    deleteVault,
     createVaultOpen,
     setCreateVaultOpen,
     createVaultInitialDraft,

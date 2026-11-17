@@ -18,6 +18,8 @@ import { VaultGroupSettingsModal } from "./modals/VaultGroupSettingsModal";
 import { VaultGroupsModal } from "./modals/VaultGroupsModal";
 import { VaultNoteModal } from "./modals/VaultNoteModal";
 import { ExportVaultModal } from "./modals/ExportVaultModal";
+import { DeleteNowModal } from "./modals/DeleteNowModal";
+import { VaultDeleteModal } from "./modals/VaultDeleteModal";
 import { VaultGroupsInvalidBanner } from "./VaultGroupsInvalidBanner";
 import { VaultList } from "./row/VaultList";
 import { useVaultListScreen } from "./hooks/useVaultListScreen";
@@ -53,6 +55,7 @@ export function VaultListPage() {
     help,
     systemInfo,
     vaultInfo,
+    deleteVault,
     createVault,
     importDrop,
     exportVault,
@@ -117,6 +120,7 @@ export function VaultListPage() {
           onOpenNote={list.onOpenNote}
           onOpenVaultInfo={list.onOpenVaultInfo}
           onOpenSettings={list.onOpenSettings}
+          onOpenDelete={list.onOpenDelete}
           onOpenGroupSettings={list.onOpenGroupSettings}
           onToggleGroupCollapsed={list.onToggleGroupCollapsed}
           onExportVault={list.onExportVault}
@@ -125,6 +129,7 @@ export function VaultListPage() {
           onUnlockVault={list.onUnlockVault}
           onCloseNow={list.onCloseNow}
           onStopWork={list.onStopWork}
+          onDeleteWork={list.onDeleteWork}
           onPlainRecordRetry={list.onPlainRecordRetry}
           onPlainRecordForget={list.onPlainRecordForget}
         />
@@ -164,6 +169,18 @@ export function VaultListPage() {
         onExportBusy={backups.onExportBusy}
         onStopExport={backups.onStopExport}
       />
+      <VaultDeleteModal
+        vault={deleteVault.vault}
+        pipelineListStatus={list.pipelineListStatus}
+        job={deleteVault.job}
+        onClose={deleteVault.onClose}
+        onDelete={deleteVault.onDelete}
+      />
+      <DeleteNowModal
+        vault={list.deleteNowVault}
+        onCancel={list.onCancelDeleteNow}
+        onConfirm={list.onConfirmDeleteNow}
+      />
       <ExportVaultModal
         vault={exportVault.vault}
         open={exportVault.open}
@@ -183,13 +200,16 @@ export function VaultListPage() {
         pipelineListStatus={list.pipelineListStatus}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
         onPersistBusyChange={settings.onPersistBusyChange}
-        onVaultDelete={settings.onVaultDelete}
         onNotice={settings.onNotice}
-        rewrapJob={settings.rewrapJob}
-        rewrapOutcome={settings.rewrapOutcome}
+        passwordJob={settings.passwordJob}
+        passwordOutcome={settings.passwordOutcome}
         onChangePassword={settings.onChangePassword}
+        onFinishPasswordChange={settings.onFinishPasswordChange}
+        onStopPasswordChange={settings.onStopPasswordChange}
+        unlockRamJob={settings.unlockRamJob}
+        unlockRamOutcome={settings.unlockRamOutcome}
         onChangeKdf={settings.onChangeKdf}
-        onStopRewrap={settings.onStopRewrap}
+        onStopUnlockRamChange={settings.onStopUnlockRamChange}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}
       />

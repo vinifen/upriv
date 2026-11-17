@@ -35,6 +35,16 @@ export interface CreateVaultInput {
   welcome?: VaultWelcomeFiles;
 }
 
+/** A delete of a vault (`vault_delete`). */
+export interface VaultDeleteInput {
+  /** The backups this vault wrote outside the data folder go too. */
+  outsideBackups: boolean;
+  /** Delete now from the start: the files are removed with no overwrite. */
+  now: boolean;
+  /** The job the delete runs as (`newJobId`). */
+  job: string;
+}
+
 /** Result of `vault_rename` (display name + optional folder id migration). */
 export interface VaultRenameResult {
   id: string;
@@ -89,10 +99,21 @@ export interface VaultService {
   rename(vaultId: string, displayName: string): Promise<VaultRenameResult>;
 
   /**
-   * Remove the vault folder (wipe) via `vault_delete`. With `outsideBackups`,
-   * what it wrote to its folder outside the data folder goes too.
+   * Delete the vault as the job `input.job` (`vault_delete`): each file's
+   * key copy overwritten, then its folder, `config.toml` last. With
+   * `outsideBackups`, what it wrote to its folders outside the data folder
+   * goes too. `now` removes the files with no overwrite. A delete that did
+   * not finish goes on with the choice it began with. A quit stops it where it
+   * is (`job_cancelled`), and the row stays `deleting`.
    */
-  unregisterSettings(vaultId: string, outsideBackups?: boolean): Promise<VaultDeleteOutcome>;
+  deleteVault(vaultId: string, input: VaultDeleteInput): Promise<VaultDeleteOutcome>;
+
+  /**
+   * Delete now for the delete running on `vaultId` (`vault_delete_hurry`):
+   * the files it has not reached are removed with no overwrite. False when
+   * none runs.
+   */
+  hurryDelete(vaultId: string): Promise<boolean>;
 
   /**
    * Write `{display_name}-upriv.zip`, `{display_name}-sevenzip.7z`, or

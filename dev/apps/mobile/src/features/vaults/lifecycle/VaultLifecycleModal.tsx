@@ -31,16 +31,17 @@ interface VaultLifecycleModalProps {
   onConfirm: (password: string) => void;
   onStop: () => void;
   /**
-   * The unlock found the vault's index lost: rebuild it with the password
-   * typed. The vault list runs the rebuild, so the window closes.
+   * The unlock found the vault's index or header lost: rebuild it with the
+   * password typed. The vault list runs the rebuild, so the window closes.
    */
   onRebuild: (password: string) => void;
 }
 
 /**
  * Unlock password dialog. Lock starts the close without a dialog. When the
- * password opens the vault but its index is lost, the dialog offers the
- * rebuild from the vault's own data.
+ * vault's index or header is lost, the dialog offers the rebuild from the
+ * vault's own data. A password change that did not finish asks for the new
+ * password.
  */
 export function VaultLifecycleModal({
   vault,
@@ -98,8 +99,10 @@ export function VaultLifecycleModal({
 
   const canSubmit = !submitting && lifecycleService.validateLifecyclePassword(password);
   const passwordHint = resolveVaultPasswordHint(vault);
-  // Shown for the password that found the index lost; editing it hides the offer.
+  // Shown for the password that found the index or header lost; editing it hides the offer.
   const rebuildOffered = !submitting && error !== null && offersVaultRebuild(verifyErrorKey);
+  const headerLost =
+    verifyErrorKey === requireVaultErrorI18nKey(VAULT_ERROR_CODES.HEADER_UNREADABLE);
 
   return (
     <Modal
@@ -141,6 +144,11 @@ export function VaultLifecycleModal({
         </ModalFooterActions>
       }
     >
+      {vault.passwordChange === "pending" && error === null ? (
+        <Text style={[typography.body, { color: colors.onSurface }]}>
+          {t("unlock.password_change_pending")}
+        </Text>
+      ) : null}
       <View style={styles.passwordBlock}>
         <View style={styles.passwordField}>
           <FieldLabel>{t("unlock.password")}</FieldLabel>
@@ -169,7 +177,7 @@ export function VaultLifecycleModal({
       ) : null}
       {rebuildOffered ? (
         <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
-          {t("unlock.rebuild_help")}
+          {t(headerLost ? "unlock.rebuild_header_help" : "unlock.rebuild_help")}
         </Text>
       ) : null}
 

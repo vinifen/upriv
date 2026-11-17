@@ -9,10 +9,31 @@ export interface JobBytes {
   bytesTotal: number;
 }
 
+/** What a job made of steps does now (`job_status` `step`). */
+export const JOB_STEPS = [
+  "unlocking",
+  "backing_up",
+  "rewriting_files",
+  "finishing",
+  "updating_key_copies",
+  "overwriting",
+  "removing",
+] as const;
+
+export type JobStep = (typeof JOB_STEPS)[number];
+
 /** How far a running job got (`job_status`). */
 export interface JobProgress extends JobBytes {
   /** False once the job is in its last step: a stop is refused from then on. */
   stoppable: boolean;
+  /** The step a job made of steps is in; `null` or absent for one that has none. */
+  step?: JobStep | null;
+}
+
+function parseJobStep(raw: unknown): JobStep | null {
+  return typeof raw === "string" && (JOB_STEPS as readonly string[]).includes(raw)
+    ? (raw as JobStep)
+    : null;
 }
 
 /**
@@ -26,11 +47,17 @@ export function parseJobStatus(raw: unknown): JobProgress | null {
     bytesDone?: unknown;
     bytesTotal?: unknown;
     stoppable?: unknown;
+    step?: unknown;
   };
   if (record.running !== true) return null;
   const bytesDone = typeof record.bytesDone === "number" ? record.bytesDone : 0;
   const bytesTotal = typeof record.bytesTotal === "number" ? record.bytesTotal : 0;
-  return { bytesDone, bytesTotal, stoppable: record.stoppable !== false };
+  return {
+    bytesDone,
+    bytesTotal,
+    stoppable: record.stoppable !== false,
+    step: parseJobStep(record.step),
+  };
 }
 
 /** Whole percent done, or `null` while the work is still being measured. */
@@ -53,6 +80,15 @@ export interface JobProgressCopy {
   measuring: I18nKey;
   copying: I18nKey;
   finishing: I18nKey;
+}
+
+/**
+ * The lines of a job made of steps: whatever its bar measures, the line
+ * names the step it is in (`job.step.*`), and `before` until core says one.
+ */
+export function jobStepCopy(progress: JobProgress | null, before: I18nKey): JobProgressCopy {
+  const key: I18nKey = progress?.step ? `job.step.${progress.step}` : before;
+  return { measuring: key, copying: key, finishing: key };
 }
 
 /** What a running job shows now: still measuring, the bytes done of the total, or finishing. */

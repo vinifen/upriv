@@ -27,11 +27,11 @@ use crate::store::{
     is_export_config, is_plain_internal, is_reserved_logical, mkdir_logical, move_logical_path,
     mutation_blob_ids, pack_blob_waste, read_logical_file, read_logical_range,
     read_logical_range_keeping, record_imported_file, relocate_logical_path, relocate_replacing,
-    remove_file_chunks, rename_logical_path, require_parent_dir, restore_held, seal_import_chunk,
-    to_ui_path, truncate_logical_file, unique_file_name, unique_folder_name, write_logical_file,
-    write_logical_range, BlobPackMode, ChunkBlobMutation, ChunkVersion, FileProblem, FileTreeNode,
-    ImportBlob, RecordsDue, RetiredFileChunks, Sealed, VaultIndex, INTERNAL_WORKSPACE_FILE,
-    VAULT_FS_MAX_INLINE_BYTES,
+    rename_logical_path, require_parent_dir, restore_held, seal_import_chunk, to_ui_path,
+    truncate_logical_file, unique_file_name, unique_folder_name, write_logical_file,
+    write_logical_range, BlobPackMode, ChunkBlobMutation, ChunkList, FileProblem, FileTreeNode,
+    ImportBlob, RecordsDue, RetiredFileChunks, Sealed, VaultIndex, CHUNK_SIZE,
+    INTERNAL_WORKSPACE_FILE, VAULT_FS_MAX_INLINE_BYTES,
 };
 
 fn store_dir(session: &OpenSession) -> std::path::PathBuf {
@@ -43,9 +43,10 @@ fn store_dir(session: &OpenSession) -> std::path::PathBuf {
 ///
 /// An error means the previous index is still the one on disk, so the caller
 /// may undo its change and delete the blobs it made. Any `Ok` means the new
-/// index is in place: keep the change, and let old blobs go only through
-/// [`release_blobs`], which holds them while the seal is not flushed.
-fn commit(session: &mut OpenSession) -> Result<Sealed> {
+/// index is in place: keep the change. A blob the change dropped goes only
+/// through the released list ([`list_released`]), listed before the seal and
+/// deleted once a seal flushes.
+pub(crate) fn commit(session: &mut OpenSession) -> Result<Sealed> {
     let sealed = seal_index(session)?;
     if session.plain.is_some() {
         super::plain::store_changed(&session.vault_dir);
@@ -62,21 +63,26 @@ fn seal_index(session: &mut OpenSession) -> Result<Sealed> {
             return Err(error);
         }
     };
-    let sealed = match flush_index_parts(
-        store_dir(session),
-        &session.header,
-        &session.index_key,
-        &mut session.index,
-    ) {
+    // What this seal drops is listed in the index it writes, so a crash
+    // between its two index writes leaves those blobs named or released.
+    let mut dropped = copied
+        .as_ref()
+        .map(ChunkBlobMutation::superseded_ids)
+        .unwrap_or_default();
+    if let Some(layout) = &layout {
+        dropped.extend(layout.dropped_ids());
+    }
+    let listed = session.index.list_released(dropped);
+    let sealed = match flush_index_parts(store_dir(session), &session.keys, &mut session.index) {
         Ok((_, sealed)) => sealed,
         Err(error) => {
+            session.index.unlist_released(&listed);
             undo_copy(session, copied);
             settle_staged_layout(session, layout, None);
             return Err(error);
         }
     };
     settle_staged_layout(session, layout, Some(sealed));
-    release_copied(session, sealed, copied);
     session.staged_blobs.clear();
     session.unsealed_imports = 0;
     session.deferred = None;
@@ -95,7 +101,7 @@ fn seal_index(session: &mut OpenSession) -> Result<Sealed> {
 /// a blob whose flush failed are first copied to a new blob, so the seal
 /// names bytes a flush of their own covers; a file the copy finds unreadable
 /// is marked instead. Returns that copy: undo it when the seal fails
-/// ([`undo_copy`]), let the old blobs go when it lands ([`release_copied`]).
+/// ([`undo_copy`]); the seal lists the old blobs it drops in `released`.
 ///
 /// [`StagedBlobs`]: crate::store::StagedBlobs
 pub(crate) fn sync_staged(
@@ -108,8 +114,7 @@ pub(crate) fn sync_staged(
     } else {
         let packed = pack_blob_waste(
             &store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &mut session.index,
             BlobPackMode::Rewrite,
             Some(&failed),
@@ -144,96 +149,13 @@ pub(crate) fn undo_copy(session: &mut OpenSession, copied: Option<ChunkBlobMutat
     }
 }
 
-/// The seal after [`sync_staged`] landed: the blobs whose flush failed are no
-/// longer named.
-pub(crate) fn release_copied(
-    session: &mut OpenSession,
-    sealed: Sealed,
-    copied: Option<ChunkBlobMutation>,
-) {
-    if let Some(copied) = copied {
-        release_blobs(session, sealed, copied.superseded_ids());
-    }
-}
-
-/// Let go of blobs the index sealed as `sealed` no longer names. A flushed
-/// seal deletes them now. An unflushed one lists them in the index
-/// ([`VaultIndex::released`]) and keeps them for a seal that flushes: a power
-/// cut may still bring back the previous index, which names them. The index
-/// is written once more with that list, so a session that ends first, its
-/// close included, hands them to the next session instead of leaving blobs no
-/// index names; when that write flushes, they go at once. A blob that cannot
-/// be deleted is logged and left as ciphertext no index names.
-///
-/// [`VaultIndex::released`]: crate::store::VaultIndex::released
-pub(crate) fn release_blobs(session: &mut OpenSession, sealed: Sealed, file_ids: Vec<String>) {
-    if sealed == Sealed::Unflushed {
-        let released = &mut session.index.released;
-        let before = released.len();
-        for file_id in file_ids {
-            if !released.contains(&file_id) {
-                released.push(file_id);
-            }
-        }
-        if released.len() == before {
-            return;
-        }
-        match crate::store::reflush_index_parts(
-            &store_dir(session),
-            &session.header,
-            &session.index_key,
-            &mut session.index,
-        ) {
-            Ok(Sealed::Flushed) => delete_released(session),
-            Ok(Sealed::Unflushed) => {}
-            Err(_) => log_event(
-                LogLevel::Warn,
-                "vault_released_unrecorded",
-                &[("id", session.vault_id.as_str())],
-            ),
-        }
-        return;
-    }
-    delete_blobs(session, file_ids);
-}
-
-fn delete_blobs(session: &OpenSession, file_ids: Vec<String>) {
-    let store = store_dir(session);
-    for file_id in file_ids {
-        if remove_file_chunks(&store, &file_id).is_err() {
-            log_event(
-                LogLevel::Warn,
-                "vault_fs_leftover_blobs",
-                &[
-                    ("vault_id", session.vault_id.as_str()),
-                    ("file_id", file_id.as_str()),
-                ],
-            );
-        }
-    }
-}
-
 /// After a seal that flushed: delete the blobs the index lists as released,
-/// by this session or by one that ended before a seal flushed. One a file
-/// names again (a file emptied, then written, keeps its id) stays.
+/// by this session or by one that ended before a seal flushed
+/// ([`crate::store::delete_released`]). A seal that does not flush keeps them
+/// listed, so a session that ends first hands them to the next one.
 pub(crate) fn delete_released(session: &mut OpenSession) {
-    let released = std::mem::take(&mut session.index.released);
-    if released.is_empty() {
-        return;
-    }
-    let named: HashSet<&str> = session
-        .index
-        .nodes()
-        .iter()
-        .filter_map(|node| node.as_file())
-        .filter(|(_, size, _)| *size > 0)
-        .map(|(file_id, _, _)| file_id)
-        .collect();
-    let unnamed: Vec<String> = released
-        .into_iter()
-        .filter(|file_id| !named.contains(file_id.as_str()))
-        .collect();
-    delete_blobs(session, unnamed);
+    let store = store_dir(session);
+    crate::store::delete_released(&store, &mut session.index);
 }
 
 fn retired_ids(retired: impl IntoIterator<Item = RetiredFileChunks>) -> Vec<String> {
@@ -253,6 +175,15 @@ pub(crate) struct StagedLayout {
     superseded: ChunkBlobMutation,
 }
 
+impl StagedLayout {
+    /// The blobs the seal of this layout drops: the layout's previous blob.
+    pub(crate) fn dropped_ids(&self) -> Vec<String> {
+        let mut ids = self.superseded.superseded_ids();
+        ids.extend(self.retired.iter().map(|retired| retired.file_id.clone()));
+        ids
+    }
+}
+
 /// Write the held layout into the index and stage its blob with the others,
 /// so the seal syncs it. A layout that cannot be written stays held, and the
 /// seal goes on without it: layout must not fail a save.
@@ -260,8 +191,7 @@ pub(crate) fn stage_pending_layout(session: &mut OpenSession) -> Option<StagedLa
     let bytes = session.pending_layout.take()?;
     match write_logical_file(
         store_dir(session),
-        &session.header,
-        &session.content_key,
+        &session.keys,
         &mut session.index,
         INTERNAL_WORKSPACE_FILE,
         &bytes,
@@ -286,8 +216,9 @@ pub(crate) fn stage_pending_layout(session: &mut OpenSession) -> Option<StagedLa
     }
 }
 
-/// After a seal (`Some`), let go of the layout blob it replaced. After a
-/// failed seal (`None`) the layout is held again for the next one; its new
+/// After a seal (`Some`), the layout is in place, and its previous blob was
+/// listed as released before that seal ([`StagedLayout::dropped_ids`]). After
+/// a failed seal (`None`) the layout is held again for the next one; its new
 /// blob is set aside by the next open if no index ever names it.
 pub(crate) fn settle_staged_layout(
     session: &mut OpenSession,
@@ -297,13 +228,9 @@ pub(crate) fn settle_staged_layout(
     let Some(staged) = staged else {
         return;
     };
-    let Some(sealed) = sealed else {
+    if sealed.is_none() {
         session.pending_layout = Some(staged.bytes);
-        return;
-    };
-    let mut released = staged.superseded.superseded_ids();
-    released.extend(retired_ids(staged.retired));
-    release_blobs(session, sealed, released);
+    }
 }
 
 fn commit_or_restore(session: &mut OpenSession, before: VaultIndex) -> Result<()> {
@@ -316,20 +243,18 @@ fn commit_or_restore(session: &mut OpenSession, before: VaultIndex) -> Result<()
     }
 }
 
-/// Seal `session.index`, then let `retired` blobs go. A failed seal restores
-/// the previous index and leaves blobs in place. After a seal the logical
-/// delete has landed and counts as done; a failed unlink leaves orphan
-/// ciphertext and is logged.
+/// Seal `session.index` with the `retired` blobs listed as released. A failed
+/// seal restores the previous index, list included, and leaves blobs in
+/// place. After a seal the logical delete has landed and counts as done; the
+/// first seal that flushes deletes the blobs.
 fn commit_then_unlink(
     session: &mut OpenSession,
     before: VaultIndex,
     retired: Vec<RetiredFileChunks>,
 ) -> Result<()> {
+    session.index.list_released(retired_ids(retired));
     match commit(session) {
-        Ok(sealed) => {
-            release_blobs(session, sealed, retired_ids(retired));
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(error) => {
             session.index = before;
             Err(error)
@@ -337,9 +262,10 @@ fn commit_then_unlink(
     }
 }
 
-/// Seal a mutation that wrote blobs. A failed seal leaves the previous index
-/// on disk, so the change is undone and its new blobs deleted. Once the new
-/// index is in place nothing it names is ever deleted, flushed or not.
+/// Seal a mutation that wrote blobs, with the blobs it drops listed as
+/// released. A failed seal leaves the previous index on disk, so the change
+/// is undone and its new blobs deleted. Once the new index is in place
+/// nothing it names is ever deleted, flushed or not.
 ///
 /// Its blobs are flushed with the session's staged ones, so a blob that is
 /// also staged and fails to flush here is copied before the next seal, not
@@ -351,11 +277,11 @@ fn commit_mutation(
     retired: Option<RetiredFileChunks>,
 ) -> Result<()> {
     session.staged_blobs.add(&mutation);
+    let mut dropped = mutation.superseded_ids();
+    dropped.extend(retired_ids(retired));
+    session.index.list_released(dropped);
     match commit(session) {
         Ok(sealed) => {
-            let mut released = mutation.superseded_ids();
-            released.extend(retired_ids(retired));
-            release_blobs(session, sealed, released);
             if sealed == Sealed::Flushed {
                 pack_sealed_waste(session, &mutation_blob_ids(&mutation));
             }
@@ -391,7 +317,6 @@ fn pack_sealed_waste(session: &mut OpenSession, ids: &[String]) {
     let store = store_dir(session);
     if !blobs_need_pack(
         &store,
-        &session.header,
         &session.index,
         BlobPackMode::SessionWaste,
         Some(ids),
@@ -400,8 +325,7 @@ fn pack_sealed_waste(session: &mut OpenSession, ids: &[String]) {
     }
     let packed = pack_blob_waste(
         &store,
-        &session.header,
-        &session.content_key,
+        &session.keys,
         &mut session.index,
         BlobPackMode::SessionWaste,
         Some(ids),
@@ -411,9 +335,10 @@ fn pack_sealed_waste(session: &mut OpenSession, ids: &[String]) {
     }
     match packed.map(|packed| packed.mutation) {
         Ok(packed) if packed.created.is_empty() => {}
-        Ok(packed) => match seal_packed(session, &packed) {
-            Ok(sealed) => release_blobs(session, sealed, packed.superseded_ids()),
-            Err(_error) => {
+        Ok(packed) => {
+            let listed = session.index.list_released(packed.superseded_ids());
+            if seal_packed(session, &packed).is_err() {
+                session.index.unlist_released(&listed);
                 packed.restore_packed_nodes(&mut session.index);
                 packed.discard_created();
                 log_event(
@@ -422,7 +347,7 @@ fn pack_sealed_waste(session: &mut OpenSession, ids: &[String]) {
                     &[("id", session.vault_id.as_str())],
                 );
             }
-        },
+        }
         Err(_error) => {
             log_event(
                 LogLevel::Warn,
@@ -545,13 +470,7 @@ pub fn fs_read_file(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<V
             }
             marked = node.problem.is_some();
         }
-        let read = read_logical_file(
-            store_dir(session),
-            &session.header,
-            &session.content_key,
-            &session.index,
-            &path,
-        );
+        let read = read_logical_file(store_dir(session), &session.keys, &session.index, &path);
         let bytes = match noting_unreadable(session, read) {
             Ok(bytes) => bytes,
             Err(err) if is_missing_internal_workspace(&err, &path) => return Ok(Vec::new()),
@@ -617,8 +536,7 @@ pub fn fs_read_range(
         }
         let read = read_logical_range(
             store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &session.index,
             &path,
             offset,
@@ -658,8 +576,7 @@ pub fn fs_write_file(root: &VaultRoot, vault_id: &str, ui_path: &str, data: &[u8
         let before = session.index.clone();
         let (retired, mutation) = write_logical_file(
             store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &mut session.index,
             &path,
             data,
@@ -708,8 +625,7 @@ pub fn fs_write_range(
             let before = session.index.clone();
             let mutation = write_logical_range(
                 store_dir(session),
-                &session.header,
-                &session.content_key,
+                &session.keys,
                 &mut session.index,
                 &path,
                 offset,
@@ -721,8 +637,7 @@ pub fn fs_write_range(
         // A failed range write leaves the index as it was, so no copy is kept.
         let written = write_logical_range(
             store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &mut session.index,
             &path,
             offset,
@@ -978,8 +893,7 @@ fn read_full_chunk(reader: &mut (impl Read + ?Sized), buf: &mut [u8]) -> std::io
 /// Dropping it deletes the blob unless the commit has taken the mutation.
 struct PreparedImport {
     mutation: ChunkBlobMutation,
-    versions: Vec<ChunkVersion>,
-    offsets: Vec<u64>,
+    chunks: ChunkList,
     size: u64,
     /// Digest of the plaintext read, when the session tracks digests.
     sha256: Option<String>,
@@ -1015,19 +929,9 @@ fn seal_into_new_blob(
     ahead: Ahead<'_>,
 ) -> Result<Option<PreparedImport>> {
     use sha2::Digest;
-    let header = &keys.header;
-    let content_key = &keys.content_key;
-    let chunk_size = header.chunk_size as usize;
-    if chunk_size == 0 {
-        return Err(UprivError::VaultStoreInvalid {
-            path: store.to_path_buf(),
-            detail: "chunk size is zero".into(),
-        });
-    }
-    let mut buf = vec![0u8; chunk_size];
+    let mut buf = vec![0u8; CHUNK_SIZE as usize];
     let mut blob: Option<ImportBlob> = None;
-    let mut versions = Vec::new();
-    let mut offsets = Vec::new();
+    let mut chunks = ChunkList::default();
     let mut size = 0u64;
     let mut index = 0u32;
     let mut hasher = keys.hash.then(sha2::Sha256::new);
@@ -1040,7 +944,7 @@ fn seal_into_new_blob(
         if let Some(hasher) = hasher.as_mut() {
             hasher.update(&buf[..n]);
         }
-        let piece = match seal_import_chunk(header, content_key, file_id, index, &buf[..n]) {
+        let piece = match seal_import_chunk(&keys.keys, file_id, index, &buf[..n]) {
             Ok(piece) => piece,
             Err(error) => {
                 buf.as_mut_slice().zeroize();
@@ -1050,7 +954,7 @@ fn seal_into_new_blob(
         // `Vec::zeroize` also clears the length. The next read needs the buffer.
         buf.as_mut_slice().zeroize();
         if blob.is_none() {
-            match ImportBlob::create(store, file_id) {
+            match ImportBlob::create(store, file_id, &keys.keys) {
                 Ok(created) => blob = Some(created),
                 Err(error) => break Err(error),
             }
@@ -1063,8 +967,7 @@ fn seal_into_new_blob(
         };
         match open.append(&piece.bytes) {
             Ok(offset) => {
-                versions.push(piece.version);
-                offsets.push(offset);
+                chunks.push(piece.version, piece.key, offset);
                 size += u64::from(piece.plaintext_len);
             }
             Err(error) => break Err(error),
@@ -1089,12 +992,10 @@ fn seal_into_new_blob(
             path,
             file_id.to_string(),
             size,
-            versions.clone(),
-            offsets.clone(),
+            chunks.clone(),
             sha256.clone(),
         );
-        let recorded =
-            crate::store::record_made_blob(store, header, &keys.record_key, &node, keys.next_save);
+        let recorded = crate::store::record_made_blob(store, &keys.keys, &node, keys.next_save);
         if recorded {
             mutation.mark_recorded();
         }
@@ -1105,19 +1006,16 @@ fn seal_into_new_blob(
     }
     Ok(Some(PreparedImport {
         mutation,
-        versions,
-        offsets,
+        chunks,
         size,
         sha256,
     }))
 }
 
 /// What an import takes from its session to seal a file without holding the
-/// session lock.
+/// session lock: a copy of its keyring, wiped when the import ends.
 struct ImportKeys {
-    header: crate::store::VaultHeader,
-    content_key: zeroize::Zeroizing<[u8; 32]>,
-    record_key: zeroize::Zeroizing<[u8; 32]>,
+    keys: crate::store::Keyring,
     /// The number of the session's next seal, for a blob's first record.
     next_save: u64,
     /// The session keeps plaintext digests.
@@ -1127,9 +1025,7 @@ struct ImportKeys {
 fn session_secrets(dir: &Path) -> Result<ImportKeys> {
     with_open_session(dir, |session| {
         Ok(ImportKeys {
-            header: session.header.clone(),
-            content_key: zeroize::Zeroizing::new(session.content_key),
-            record_key: zeroize::Zeroizing::new(session.record_key),
+            keys: session.keys.clone(),
             next_save: session.index.saves.saturating_add(1),
             hash: session.index.writes.track_digests,
         })
@@ -1154,16 +1050,14 @@ fn commit_prepared(
     session.dirty = true;
     let before = session.index.clone();
     let size = prepared.size;
-    let versions = std::mem::take(&mut prepared.versions);
-    let offsets = std::mem::take(&mut prepared.offsets);
+    let chunks = std::mem::take(&mut prepared.chunks);
     let mutation = std::mem::take(&mut prepared.mutation);
     match record_imported_file(
         &mut session.index,
         path,
         file_id.to_string(),
         size,
-        versions,
-        offsets,
+        chunks,
         prepared.sha256.take(),
     ) {
         Ok(retired) => {
@@ -1188,8 +1082,7 @@ fn commit_empty_file(session: &mut OpenSession, path: &str) -> Result<()> {
     let before = session.index.clone();
     match write_logical_file(
         store_dir(session),
-        &session.header,
-        &session.content_key,
+        &session.keys,
         &mut session.index,
         path,
         b"",
@@ -1227,8 +1120,7 @@ fn publish_prepared(
             path,
             file_id.to_string(),
             prepared.size,
-            std::mem::take(&mut prepared.versions),
-            std::mem::take(&mut prepared.offsets),
+            std::mem::take(&mut prepared.chunks),
             prepared.sha256.take(),
         ) {
             mutation.discard_created();
@@ -1410,8 +1302,7 @@ fn import_os_file_ahead(
             &path,
             file_id.clone(),
             prepared.size,
-            std::mem::take(&mut prepared.versions),
-            std::mem::take(&mut prepared.offsets),
+            std::mem::take(&mut prepared.chunks),
             prepared.sha256.take(),
         ) {
             mutation.discard_created();
@@ -1465,8 +1356,7 @@ pub fn fs_write_from_reader(
                 let piece = if first {
                     let (retired, piece) = write_logical_file(
                         store_dir(session),
-                        &session.header,
-                        &session.content_key,
+                        &session.keys,
                         &mut session.index,
                         &path,
                         &buf[..n],
@@ -1477,8 +1367,7 @@ pub fn fs_write_from_reader(
                 } else {
                     write_logical_range(
                         store_dir(session),
-                        &session.header,
-                        &session.content_key,
+                        &session.keys,
                         &mut session.index,
                         &path,
                         offset,
@@ -1491,8 +1380,7 @@ pub fn fs_write_from_reader(
             if first {
                 let (retired, piece) = write_logical_file(
                     store_dir(session),
-                    &session.header,
-                    &session.content_key,
+                    &session.keys,
                     &mut session.index,
                     &path,
                     b"",
@@ -1591,8 +1479,7 @@ pub fn fs_truncate(root: &VaultRoot, vault_id: &str, ui_path: &str, size: u64) -
         let before = session.index.clone();
         let truncated = truncate_logical_file(
             store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &mut session.index,
             &path,
             size,
@@ -1638,8 +1525,7 @@ pub fn fs_create_file(
         let before = session.index.clone();
         let (_retired, mutation) = write_logical_file(
             store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &mut session.index,
             &path,
             b"",
@@ -1669,8 +1555,7 @@ pub fn fs_create_named_file(
         let before = session.index.clone();
         let (_retired, mutation) = write_logical_file(
             store_dir(session),
-            &session.header,
-            &session.content_key,
+            &session.keys,
             &mut session.index,
             &path,
             b"",
@@ -1871,11 +1756,10 @@ pub(super) fn stage_sealed(
     path: &str,
     mut sealed: SealedFile,
 ) -> Result<Option<RetiredFileChunks>> {
-    let (size, versions, offsets, mutation, sha256) = match sealed.prepared.as_mut() {
+    let (size, chunks, mutation, sha256) = match sealed.prepared.as_mut() {
         Some(prepared) => (
             prepared.size,
-            std::mem::take(&mut prepared.versions),
-            std::mem::take(&mut prepared.offsets),
+            std::mem::take(&mut prepared.chunks),
             std::mem::take(&mut prepared.mutation),
             prepared.sha256.take(),
         ),
@@ -1885,13 +1769,7 @@ pub(super) fn stage_sealed(
                 .writes
                 .track_digests
                 .then(|| crate::store::sha256_hex(<sha2::Sha256 as sha2::Digest>::new()));
-            (
-                0,
-                Vec::new(),
-                Vec::new(),
-                ChunkBlobMutation::default(),
-                empty,
-            )
+            (0, ChunkList::default(), ChunkBlobMutation::default(), empty)
         }
     };
     match record_imported_file(
@@ -1899,8 +1777,7 @@ pub(super) fn stage_sealed(
         path,
         std::mem::take(&mut sealed.file_id),
         size,
-        versions,
-        offsets,
+        chunks,
         sha256,
     ) {
         Ok(retired) => {
@@ -1948,14 +1825,19 @@ pub(super) fn stage_move(session: &mut OpenSession, from: &str, to: &str) -> Res
     Ok(())
 }
 
-/// Seal every staged change, then let go of the blobs no index names any more.
-/// The folder is not poked: these changes came from it.
+/// Seal every staged change, with the blobs no index names any more listed as
+/// released. The folder is not poked: these changes came from it.
 pub(super) fn seal_staged_sync(
     session: &mut OpenSession,
     retired: &[RetiredFileChunks],
 ) -> Result<()> {
-    let sealed = seal_index(session)?;
-    release_blobs(session, sealed, retired_ids(retired.iter().cloned()));
+    let listed = session
+        .index
+        .list_released(retired_ids(retired.iter().cloned()));
+    if let Err(error) = seal_index(session) {
+        session.index.unlist_released(&listed);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -1968,8 +1850,7 @@ pub(super) fn read_store_range(
 ) -> Result<Vec<u8>> {
     read_logical_range(
         store_dir(session),
-        &session.header,
-        &session.content_key,
+        &session.keys,
         &session.index,
         path,
         offset,
@@ -1988,8 +1869,7 @@ pub(super) fn read_store_range_keeping(
 ) -> Result<Vec<u8>> {
     let (bytes, problem) = read_logical_range_keeping(
         &store_dir(session),
-        &session.header,
-        &session.content_key,
+        &session.keys,
         &session.index,
         path,
         offset,
@@ -2362,14 +2242,8 @@ mode = "encrypted_dir"
         }
         close_vault(&root, "notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
-        let got = crate::store::read_logical_file(
-            &store,
-            &opened.header,
-            &opened.content_key,
-            &opened.index,
-            "hello.txt",
-        )
-        .unwrap();
+        let got = crate::store::read_logical_file(&store, &opened.keys, &opened.index, "hello.txt")
+            .unwrap();
         assert_eq!(got, b"hello-from-session");
     }
 
@@ -2433,14 +2307,9 @@ mode = "encrypted_dir"
         assert!(matches!(inline, UprivError::VaultFileTooLarge { .. }));
         let store = root.vault_store_dir("notes").unwrap();
         crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
-            let got = crate::store::read_logical_file(
-                &store,
-                &session.header,
-                &session.content_key,
-                &session.index,
-                "big.bin",
-            )
-            .unwrap();
+            let got =
+                crate::store::read_logical_file(&store, &session.keys, &session.index, "big.bin")
+                    .unwrap();
             assert_eq!(got, data);
             Ok(())
         })
@@ -2493,14 +2362,9 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
         let store = root.vault_store_dir("notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
-        let durable = crate::store::read_logical_file(
-            &store,
-            &opened.header,
-            &opened.content_key,
-            &opened.index,
-            "notes.txt",
-        )
-        .unwrap();
+        let durable =
+            crate::store::read_logical_file(&store, &opened.keys, &opened.index, "notes.txt")
+                .unwrap();
         assert_eq!(durable, b"generation-one");
     }
 
@@ -2522,15 +2386,8 @@ mode = "encrypted_dir"
     fn sealed_bytes(root: &VaultRoot, path: &str) -> Vec<u8> {
         with_open_session(&root.vault_dir("notes").unwrap(), |session| {
             let store = store_dir(session);
-            let sealed =
-                crate::store::load_index_files(&store, &session.header, &session.index_key)?;
-            read_logical_file(
-                &store,
-                &session.header,
-                &session.content_key,
-                &sealed.index,
-                path,
-            )
+            let sealed = crate::store::open_index_under(&store, &session.keys)?;
+            read_logical_file(&store, &session.keys, &sealed, path)
         })
         .unwrap()
     }
@@ -2637,14 +2494,7 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
         let store = root.vault_store_dir("notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
-        let durable = read_logical_file(
-            &store,
-            &opened.header,
-            &opened.content_key,
-            &opened.index,
-            "notes.txt",
-        )
-        .unwrap();
+        let durable = read_logical_file(&store, &opened.keys, &opened.index, "notes.txt").unwrap();
         assert_eq!(durable, b"generation-two");
     }
 
@@ -2654,14 +2504,8 @@ mode = "encrypted_dir"
         with_open_session(&root.vault_dir("notes").unwrap(), |session| {
             let (file_id, _, _) = session.index.find(path).unwrap().as_file().unwrap();
             let blob = crate::store::blob_path(store_dir(session), file_id)?;
-            let record = crate::store::read_record(
-                &blob,
-                file_id,
-                &session.header,
-                &session.record_key,
-                true,
-            )
-            .expect("a record");
+            let record =
+                crate::store::read_record(&blob, file_id, &session.keys, true).expect("a record");
             Ok(record.node.as_file().unwrap().1)
         })
         .unwrap()
@@ -2706,14 +2550,8 @@ mode = "encrypted_dir"
             }
             files += 1;
             let blob = crate::store::blob_path(&store, file_id).unwrap();
-            let record = crate::store::read_record(
-                &blob,
-                file_id,
-                &opened.header,
-                &opened.record_key,
-                false,
-            )
-            .unwrap_or_else(|| panic!("{} ends with its record", node.path));
+            let record = crate::store::read_record(&blob, file_id, &opened.keys, false)
+                .unwrap_or_else(|| panic!("{} ends with its record", node.path));
             assert_eq!(record.node.kind, node.kind, "{}", node.path);
             assert_eq!(record.node.path, node.path);
             assert!(record.save <= opened.index.saves);
@@ -3019,8 +2857,7 @@ mode = "encrypted_dir"
         crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
             let got = crate::store::read_logical_file(
                 &store,
-                &session.header,
-                &session.content_key,
+                &session.keys,
                 &session.index,
                 "payload.bin",
             )
@@ -3099,14 +2936,9 @@ mode = "encrypted_dir"
                 (session.header.chunk_size, node.1, node.2.len()),
                 (crate::store::CHUNK_SIZE, data.len() as u64, 2)
             );
-            let got = crate::store::read_logical_file(
-                &store,
-                &session.header,
-                &session.content_key,
-                &session.index,
-                "short.bin",
-            )
-            .unwrap();
+            let got =
+                crate::store::read_logical_file(&store, &session.keys, &session.index, "short.bin")
+                    .unwrap();
             assert_eq!(got, data);
             Ok(())
         })
@@ -3276,12 +3108,7 @@ mode = "encrypted_dir"
 
     fn sealed_index_names(root: &VaultRoot, path: &str) -> bool {
         with_open_session(&root.vault_dir("notes").unwrap(), |session| {
-            crate::store::sealed_index_contains(
-                &store_dir(session),
-                &session.header,
-                &session.index_key,
-                path,
-            )
+            crate::store::sealed_index_contains(&store_dir(session), &session.keys, path)
         })
         .unwrap()
     }
@@ -3456,13 +3283,9 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("notes").unwrap();
         crate::session::with_open_session(&dir, |session| {
             let store = store_dir(session);
-            assert!(!crate::store::sealed_index_contains(
-                &store,
-                &session.header,
-                &session.index_key,
-                "d0.txt",
-            )
-            .unwrap());
+            assert!(
+                !crate::store::sealed_index_contains(&store, &session.keys, "d0.txt",).unwrap()
+            );
             assert!(session.unsealed_imports >= 3);
             Ok(())
         })
@@ -3470,13 +3293,7 @@ mode = "encrypted_dir"
         fs_seal_staged_imports(&root, "notes").unwrap();
         crate::session::with_open_session(&dir, |session| {
             let store = store_dir(session);
-            assert!(crate::store::sealed_index_contains(
-                &store,
-                &session.header,
-                &session.index_key,
-                "d2.txt",
-            )
-            .unwrap());
+            assert!(crate::store::sealed_index_contains(&store, &session.keys, "d2.txt",).unwrap());
             assert_eq!(session.unsealed_imports, 0);
             Ok(())
         })
@@ -3510,13 +3327,7 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("notes").unwrap();
         crate::session::with_open_session(&dir, |session| {
             let store = store_dir(session);
-            assert!(crate::store::sealed_index_contains(
-                &store,
-                &session.header,
-                &session.index_key,
-                "w0.txt",
-            )
-            .unwrap());
+            assert!(crate::store::sealed_index_contains(&store, &session.keys, "w0.txt",).unwrap());
             assert_eq!(session.unsealed_imports, 0);
             Ok(())
         })
@@ -3525,13 +3336,9 @@ mode = "encrypted_dir"
         fs_write_staged(&root, "notes", "/tail.txt", &mut tail).unwrap();
         crate::session::with_open_session(&dir, |session| {
             let store = store_dir(session);
-            assert!(!crate::store::sealed_index_contains(
-                &store,
-                &session.header,
-                &session.index_key,
-                "tail.txt",
-            )
-            .unwrap());
+            assert!(
+                !crate::store::sealed_index_contains(&store, &session.keys, "tail.txt",).unwrap()
+            );
             assert_eq!(session.unsealed_imports, 1);
             Ok(())
         })
@@ -3628,10 +3435,10 @@ mode = "encrypted_dir"
         crate::paths::fail_folder_flushes(0);
         assert!(old.host_exists());
         let on_disk = with_open_session(&root.vault_dir("notes").unwrap(), |session| {
-            crate::store::load_index_files(store_dir(session), &session.header, &session.index_key)
+            crate::store::open_index_under(&store_dir(session), &session.keys)
         })
         .unwrap();
-        assert_eq!(on_disk.index.released, [old_id]);
+        assert_eq!(on_disk.released, [old_id]);
 
         fs_write_file(&root, "notes", "/b.txt", b"flushed").unwrap();
         assert!(!old.host_exists());
@@ -3776,7 +3583,7 @@ mode = "encrypted_dir"
     fn damage(blob: &Path) {
         const NONCE_LEN: usize = 24;
         let mut bytes = crate::host_fs::read(blob).unwrap();
-        bytes[NONCE_LEN] ^= 0x01;
+        bytes[crate::store::KEY_COPY_LEN as usize + NONCE_LEN] ^= 0x01;
         crate::host_fs::write(blob, &bytes).unwrap();
     }
 
@@ -3863,21 +3670,29 @@ mode = "encrypted_dir"
     /// The index written again after an unflushed save flushes: no index that
     /// names the previous generation can come back, so it goes at once.
     #[test]
-    fn a_save_whose_index_flushes_when_written_again_lets_the_previous_generation_go() {
+    fn a_seal_that_does_not_flush_keeps_what_it_dropped_until_one_does() {
         let (_tmp, root) = open_notes();
         fs_write_file(&root, "notes", "/a.txt", b"first").unwrap();
         let old_blob = blob_of(&root, "a.txt");
+        let old_id = old_blob.file_stem().unwrap().to_str().unwrap().to_string();
+        let released = |root: &VaultRoot| {
+            with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+                Ok(session.index.released.clone())
+            })
+            .unwrap()
+        };
 
         crate::paths::fail_folder_flushes(2);
         fs_write_file(&root, "notes", "/a.txt", b"second").unwrap();
         crate::paths::fail_folder_flushes(0);
-        assert!(!old_blob.host_exists());
         assert_eq!(sealed_bytes(&root, "a.txt"), b"second");
-        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
-            assert!(session.index.released.is_empty());
-            Ok(())
-        })
-        .unwrap();
+        // A power cut may still bring the previous index back.
+        assert!(old_blob.host_exists());
+        assert_eq!(released(&root), [old_id]);
+
+        fs_write_file(&root, "notes", "/b.txt", b"flushed").unwrap();
+        assert!(!old_blob.host_exists());
+        assert!(released(&root).is_empty());
         close_vault(&root, "notes").unwrap();
     }
 
@@ -3966,29 +3781,37 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
     }
 
-    /// `a.txt` sealed, then `b.txt` saved by a close whose primary index never
-    /// landed: the index copy and the backup of that close still name it.
-    /// Leaves the vault closed.
-    fn lose_the_last_primary_index(root: &VaultRoot) {
+    /// `a.txt` sealed, then `b.txt` saved by a close whose index never landed
+    /// in either file: the record its blob carries and the backup of that
+    /// close still name it. Leaves the vault closed.
+    fn lose_the_last_index(root: &VaultRoot) {
         fs_write_file(root, "notes", "/a.txt", b"first").unwrap();
         close_vault(root, "notes").unwrap();
-        let index = root
+        let index_dir = root
             .vault_dir("notes")
             .unwrap()
             .join(crate::paths::STORE_DIR_NAME)
-            .join(crate::store::INDEX_DIR_NAME)
-            .join(crate::store::INDEX_FILE_NAME);
-        let previous = crate::host_fs::read(&index).unwrap();
+            .join(crate::store::INDEX_DIR_NAME);
+        let files = [
+            crate::store::INDEX_FILE_NAME,
+            crate::store::INDEX_COPY_FILE_NAME,
+        ];
+        let previous: Vec<Vec<u8>> = files
+            .iter()
+            .map(|name| crate::host_fs::read(index_dir.join(name)).unwrap())
+            .collect();
         open_vault(root, "notes", b"pass-word-ok").unwrap();
         fs_write_file(root, "notes", "/b.txt", b"second").unwrap();
         close_vault(root, "notes").unwrap();
-        crate::host_fs::write(&index, previous).unwrap();
+        for (name, bytes) in files.iter().zip(previous) {
+            crate::host_fs::write(index_dir.join(name), bytes).unwrap();
+        }
     }
 
     #[test]
     fn a_file_only_an_unfinished_save_named_is_listed_and_put_back() {
         let (_tmp, root) = open_notes();
-        lose_the_last_primary_index(&root);
+        lose_the_last_index(&root);
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         assert!(fs_read_file(&root, "notes", "/b.txt").is_err());
@@ -4025,7 +3848,7 @@ mode = "encrypted_dir"
     #[test]
     fn a_held_file_deleted_for_good_stays_gone() {
         let (_tmp, root) = open_notes();
-        lose_the_last_primary_index(&root);
+        lose_the_last_index(&root);
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         let name = fs_held_list(&root, "notes").unwrap()[0].name.clone();
         let held = root

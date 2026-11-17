@@ -1,5 +1,22 @@
-//! `store/header/vault.header` — JSON, versioned. Ciphertext is the wrapped master key only.
-//! `vault.header.copy` is the same bytes. `warning` is human-only and is not part of the wrap AAD.
+//! `store/header/vault.header` — JSON, versioned — and its twin
+//! `vault.header.copy`. A header holds the vault's keys in one block (the top
+//! block), or two while a password change is pending (`change`). `warning` is
+//! human-only and is not part of any AAD.
+//!
+//! ```json
+//! {
+//!   "warning": "…", "format_version": 1, "content_identity": "…",
+//!   "aead": "xchacha20poly1305", "name_cipher": "aes256-siv", "chunk_size": 262144,
+//!   "generation": 7, "kdf": { … }, "key_ids": [3], "since": 3, "wrapped_keys_b64": "…",
+//!   "change": { "generation": 8, "kdf": { … }, "key_ids": [3, 8], "since": 8, "wrapped_keys_b64": "…" }
+//! }
+//! ```
+//!
+//! A block is a keyring sealed under the KEK its own `kdf` derives
+//! ([`super::keys`]). `generation` grows with every header write: a write
+//! takes a number above every generation the file held, `change`'s included,
+//! so it tells a newer header from an older one. `since` is a key id: a chunk
+//! on a key below it waits for a password change to convert it.
 
 use std::path::{Path, PathBuf};
 
@@ -8,9 +25,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::aead::{unwrap_master_key, wrap_master_key, MASTER_KEY_LEN, XCHACHA_NONCE_LEN};
 use super::index::ChunkVersion;
-use super::kdf::{derive_kek, KdfUnlockPreset, SALT_LEN};
+use super::kdf::{derive_kek, KdfUnlockPreset, Kek, SALT_LEN};
+use super::keys::{wrapped_len, KeyId, Keyring, MAX_KEYS};
 use crate::error::{Result, UprivError};
 use crate::paths;
 
@@ -20,27 +37,43 @@ pub const HEADER_FILE_NAME: &str = "vault.header";
 pub const HEADER_COPY_FILE_NAME: &str = "vault.header.copy";
 pub const STORE_DANGER_FILE_NAME: &str = "DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md";
 pub const HEADER_WARNING: &str = "DO NOT EDIT. Changing or deleting this file can permanently destroy the vault, even if you know the password.";
-const POLY1305_TAG_LEN: usize = 16;
-const WRAPPED_MASTER_LEN: usize = XCHACHA_NONCE_LEN + MASTER_KEY_LEN + POLY1305_TAG_LEN;
 const DANGER_NOTICE: &str = include_str!("DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md");
 pub const AEAD_ID: &str = "xchacha20poly1305";
 pub const NAME_CIPHER_ID: &str = "aes256-siv";
 pub const KDF_ALG: &str = "argon2id";
 pub const CHUNK_SIZE: u32 = 256 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultHeader {
     pub warning: String,
     pub format_version: u32,
     pub content_identity: Uuid,
-    pub kdf: HeaderKdf,
     pub aead: String,
     pub name_cipher: String,
     pub chunk_size: u32,
-    pub wrapped_master_key_b64: String,
+    /// The top block: the vault's keys under its password.
+    #[serde(flatten)]
+    pub top: HeaderBlock,
+    /// A second block, under the new password, while a password change is
+    /// pending: the current keys, then the change's new key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<HeaderBlock>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One locked keyring of a header ([`super::keys`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeaderBlock {
+    pub generation: u32,
+    pub kdf: HeaderKdf,
+    /// The ids of the keys the wrap holds, in the clear, oldest first.
+    pub key_ids: Vec<KeyId>,
+    pub since: KeyId,
+    /// `nonce(24) || XChaCha20-Poly1305(keys) || tag(16)`.
+    pub wrapped_keys_b64: String,
+}
+
+/// The unlock settings of one block: Argon2id cost and salt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderKdf {
     pub alg: String,
     pub memory_kib: u32,
@@ -50,6 +83,20 @@ pub struct HeaderKdf {
 }
 
 impl VaultHeader {
+    /// A header of `identity` whose only block is `top`.
+    pub(crate) fn new(identity: Uuid, top: HeaderBlock) -> Self {
+        Self {
+            warning: HEADER_WARNING.to_string(),
+            format_version: FORMAT_VERSION,
+            content_identity: identity,
+            aead: AEAD_ID.to_string(),
+            name_cipher: NAME_CIPHER_ID.to_string(),
+            chunk_size: CHUNK_SIZE,
+            top,
+            change: None,
+        }
+    }
+
     pub fn path(store_dir: impl AsRef<Path>) -> PathBuf {
         header_dir(store_dir).join(HEADER_FILE_NAME)
     }
@@ -58,26 +105,98 @@ impl VaultHeader {
         header_dir(store_dir).join(HEADER_COPY_FILE_NAME)
     }
 
+    /// The unlock cost of the vault's password, from the top block.
     pub fn unlock_preset(&self) -> Option<KdfUnlockPreset> {
-        KdfUnlockPreset::from_params(
-            self.kdf.memory_kib,
-            self.kdf.time_cost,
-            self.kdf.parallelism,
-        )
+        self.top.kdf.unlock_preset()
     }
 
-    pub fn wrap_aad(&self) -> Result<Vec<u8>> {
-        wrap_aad_bytes(self)
+    /// The highest generation this header holds, `change`'s included.
+    pub fn newest_generation(&self) -> u32 {
+        self.change.as_ref().map_or(self.top.generation, |change| {
+            change.generation.max(self.top.generation)
+        })
     }
 }
 
-/// Compact serde_json of this struct’s field order. This is NOT RFC 8785 sorted
-/// JSON and NOT the pretty-printed vault.header on disk. Do not reorder fields,
-/// rename keys, or switch to BTreeMap/sorted maps without a format_version bump
-/// (existing wrap/index tags would fail). Golden: `aad_bytes_are_struct_field_order`.
+impl HeaderBlock {
+    /// The sealed keyring, decoded from base64.
+    pub(crate) fn wrapped(&self) -> Result<Vec<u8>> {
+        B64.decode(self.wrapped_keys_b64.as_bytes())
+            .map_err(|_| invalid_header(Path::new(HEADER_FILE_NAME), "invalid wrapped keys"))
+    }
+
+    /// The write key's id: the last key of the block.
+    pub fn write_id(&self) -> KeyId {
+        self.key_ids.last().copied().unwrap_or(KeyId::NONE)
+    }
+}
+
+impl HeaderKdf {
+    /// Settings at `preset` with a fresh random salt.
+    pub(crate) fn fresh(preset: KdfUnlockPreset) -> Self {
+        Self {
+            alg: KDF_ALG.to_string(),
+            memory_kib: preset.memory_kib(),
+            time_cost: preset.time_cost(),
+            parallelism: preset.parallelism(),
+            salt_b64: B64.encode(super::aead::random_bytes::<SALT_LEN>()),
+        }
+    }
+
+    /// The same cost with a fresh random salt.
+    pub(crate) fn with_new_salt(&self) -> Self {
+        Self {
+            salt_b64: B64.encode(super::aead::random_bytes::<SALT_LEN>()),
+            ..self.clone()
+        }
+    }
+
+    pub fn unlock_preset(&self) -> Option<KdfUnlockPreset> {
+        KdfUnlockPreset::from_params(self.memory_kib, self.time_cost, self.parallelism)
+    }
+
+    /// True when one derive serves both: the same salt and cost.
+    pub(crate) fn same_lock(&self, other: &Self) -> bool {
+        self.salt_b64 == other.salt_b64
+            && self.memory_kib == other.memory_kib
+            && self.time_cost == other.time_cost
+            && self.parallelism == other.parallelism
+    }
+
+    pub(crate) fn salt(&self) -> Option<[u8; SALT_LEN]> {
+        B64.decode(self.salt_b64.as_bytes()).ok()?.try_into().ok()
+    }
+
+    /// The KEK `password` derives under these settings. Password bytes are
+    /// used exactly as given.
+    pub(crate) fn derive_kek(&self, password: &[u8]) -> Result<Kek> {
+        let salt = self.salt().ok_or(UprivError::WrongPassword)?;
+        derive_kek(
+            password,
+            &salt,
+            self.memory_kib,
+            self.time_cost,
+            self.parallelism,
+        )
+    }
+
+    fn in_bounds(&self) -> bool {
+        self.alg == KDF_ALG
+            && super::kdf::kdf_params_in_bounds(self.memory_kib, self.time_cost, self.parallelism)
+            && self.salt().is_some()
+    }
+}
+
+/// Compact serde_json of this struct's field order. This is NOT RFC 8785
+/// sorted JSON and NOT the pretty-printed vault.header on disk. Do not
+/// reorder fields, rename keys, or switch to BTreeMap/sorted maps without a
+/// format_version bump (existing wrap/index tags would fail). Golden:
+/// `aad_bytes_are_struct_field_order`.
 ///
-/// Covers `wrap` and `index`. Both bind the KDF parameters on purpose: they are
-/// what a password change rewrites, so authenticating them here is correct.
+/// Covers `wrap` and `index`, each built from one block's unlock settings:
+/// a keyring opens only under the settings it was sealed with, and an index
+/// opens only under the pair of the block it was sealed for (its write key's
+/// index key and this AAD).
 #[derive(Serialize)]
 struct HeaderAad<'a> {
     v: u32,
@@ -98,9 +217,10 @@ struct HeaderAad<'a> {
 ///
 /// Three fields are absent by design, and each omission is load-bearing:
 ///
-/// - **No `salt`/`m`/`t`/`p`.** A password change rotates the salt while keeping
-///   the same master key. Binding KDF material here would invalidate every
-///   chunk in the vault on rewrap.
+/// - **No `salt`/`m`/`t`/`p`.** An unlock-RAM change keeps the keys and seals
+///   them under a new salt and cost; binding those here would rewrite every
+///   chunk for nothing. Which key opens a chunk is the index's to say
+///   (`chunk_keys`), not the unlock settings'.
 /// - **No `file_size`.** Appending to a file changes its size, which would
 ///   change the AAD of every chunk already written and force a full rewrite —
 ///   O(file) per write, and unusable for random-access writes through a mount.
@@ -109,9 +229,9 @@ struct HeaderAad<'a> {
 /// - **No `names`.** The name cipher governs the index, not content blobs.
 ///
 /// `version` replaces the rollback protection that `file_size` incidentally
-/// provided: it is fresh CSPRNG on every chunk write and is recorded in the
-/// index, so a stale blob cannot be replayed at the same
-/// `(file_id, chunk_index)` without the index key.
+/// provided: it is derived from the chunk's fresh random nonce, so each write
+/// has its own, and it is recorded in the index, so a stale chunk cannot be
+/// replayed at the same `(file_id, chunk_index)` without the index key.
 #[derive(Serialize)]
 struct ChunkAad<'a> {
     v: u32,
@@ -125,60 +245,62 @@ struct ChunkAad<'a> {
     version: ChunkVersion,
 }
 
-fn header_aad_bytes(
-    header: &VaultHeader,
-    kind: &'static str,
-    err_path: PathBuf,
-) -> Result<Vec<u8>> {
+fn aad_error(error: serde_json::Error) -> UprivError {
+    UprivError::VaultStoreInvalid {
+        path: PathBuf::from(HEADER_FILE_NAME),
+        detail: format!("AAD serialize: {error}"),
+    }
+}
+
+/// The algorithm ids, the format version, and the chunk size are fixed by the
+/// format, and a header that names others does not parse
+/// ([`parse_header_bytes`]), so every AAD builds them from the constants.
+fn header_aad_bytes(identity: Uuid, kdf: &HeaderKdf, kind: &'static str) -> Result<Vec<u8>> {
     serde_json::to_vec(&HeaderAad {
-        v: header.format_version,
-        cid: header.content_identity.to_string(),
-        kdf: &header.kdf.alg,
-        m: header.kdf.memory_kib,
-        t: header.kdf.time_cost,
-        p: header.kdf.parallelism,
-        salt: &header.kdf.salt_b64,
-        aead: &header.aead,
-        names: &header.name_cipher,
-        chunk: header.chunk_size,
+        v: FORMAT_VERSION,
+        cid: identity.to_string(),
+        kdf: &kdf.alg,
+        m: kdf.memory_kib,
+        t: kdf.time_cost,
+        p: kdf.parallelism,
+        salt: &kdf.salt_b64,
+        aead: AEAD_ID,
+        names: NAME_CIPHER_ID,
+        chunk: CHUNK_SIZE,
         kind,
     })
-    .map_err(|error| UprivError::VaultStoreInvalid {
-        path: err_path,
-        detail: format!("AAD serialize: {error}"),
-    })
+    .map_err(aad_error)
 }
 
-fn wrap_aad_bytes(header: &VaultHeader) -> Result<Vec<u8>> {
-    header_aad_bytes(header, "wrap", PathBuf::from(HEADER_FILE_NAME))
+/// The AAD of a block's sealed keyring.
+pub fn wrap_aad(identity: Uuid, kdf: &HeaderKdf) -> Result<Vec<u8>> {
+    header_aad_bytes(identity, kdf, "wrap")
 }
 
-pub fn index_aad(header: &VaultHeader) -> Result<Vec<u8>> {
-    header_aad_bytes(header, "index", PathBuf::from("index/root.idx.enc"))
+/// The AAD of an index sealed under a block with these unlock settings.
+pub fn index_aad(identity: Uuid, kdf: &HeaderKdf) -> Result<Vec<u8>> {
+    header_aad_bytes(identity, kdf, "index")
 }
 
 pub fn chunk_aad(
-    header: &VaultHeader,
+    identity: Uuid,
     file_id: &str,
     chunk_index: u32,
     chunk_len: u32,
     version: ChunkVersion,
 ) -> Result<Vec<u8>> {
     serde_json::to_vec(&ChunkAad {
-        v: header.format_version,
-        cid: header.content_identity.to_string(),
-        aead: &header.aead,
-        chunk: header.chunk_size,
+        v: FORMAT_VERSION,
+        cid: identity.to_string(),
+        aead: AEAD_ID,
+        chunk: CHUNK_SIZE,
         kind: "chunk",
         file_id,
         chunk_index,
         chunk_len,
         version,
     })
-    .map_err(|error| UprivError::VaultStoreInvalid {
-        path: PathBuf::from("data"),
-        detail: format!("AAD serialize: {error}"),
-    })
+    .map_err(aad_error)
 }
 
 /// Recovery record AAD ([`super::record`]). Same serialization freeze: field
@@ -186,8 +308,7 @@ pub fn chunk_aad(
 ///
 /// `cid` keeps a record in its vault, `file_id` in its blob, and `seq` in its
 /// place in that blob's chain of records, so a record copied anywhere else
-/// does not open. Like [`ChunkAad`] it leaves out the KDF material, so a
-/// password change leaves every record valid.
+/// does not open. Like [`ChunkAad`] it leaves out the unlock settings.
 #[derive(Serialize)]
 struct RecordAad<'a> {
     v: u32,
@@ -198,235 +319,95 @@ struct RecordAad<'a> {
     seq: u32,
 }
 
-pub fn record_aad(header: &VaultHeader, file_id: &str, seq: u32) -> Result<Vec<u8>> {
+pub fn record_aad(identity: Uuid, file_id: &str, seq: u32) -> Result<Vec<u8>> {
     serde_json::to_vec(&RecordAad {
-        v: header.format_version,
-        cid: header.content_identity.to_string(),
-        aead: &header.aead,
+        v: FORMAT_VERSION,
+        cid: identity.to_string(),
+        aead: AEAD_ID,
         kind: "record",
         file_id,
         seq,
     })
-    .map_err(|error| UprivError::VaultStoreInvalid {
-        path: PathBuf::from("data"),
-        detail: format!("AAD serialize: {error}"),
-    })
+    .map_err(aad_error)
 }
 
 fn header_dir(store_dir: impl AsRef<Path>) -> PathBuf {
     store_dir.as_ref().join(HEADER_DIR_NAME)
 }
 
+/// Which of the two header files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeaderSlot {
+    Primary,
+    Copy,
+}
+
+impl HeaderSlot {
+    pub(crate) fn path(self, store_dir: &Path) -> PathBuf {
+        match self {
+            Self::Primary => VaultHeader::path(store_dir),
+            Self::Copy => VaultHeader::copy_path(store_dir),
+        }
+    }
+
+    pub(crate) fn file_name(self) -> &'static str {
+        match self {
+            Self::Primary => HEADER_FILE_NAME,
+            Self::Copy => HEADER_COPY_FILE_NAME,
+        }
+    }
+}
+
+/// One header file as read: its bytes, and the header they parse to.
+#[derive(Debug)]
+pub(crate) struct HeaderFile {
+    pub slot: HeaderSlot,
+    pub raw: Vec<u8>,
+    pub header: Result<VaultHeader>,
+}
+
+/// Both header files of `store_dir`, primary first: `None` for one that is
+/// not there. A read error other than a missing file fails.
+pub(crate) fn read_header_files(store_dir: &Path) -> Result<[Option<HeaderFile>; 2]> {
+    let read = |slot: HeaderSlot| -> Result<Option<HeaderFile>> {
+        let path = slot.path(store_dir);
+        Ok(read_bytes(&path)?.map(|raw| HeaderFile {
+            slot,
+            header: parse_structural(&path, &raw),
+            raw,
+        }))
+    };
+    Ok([read(HeaderSlot::Primary)?, read(HeaderSlot::Copy)?])
+}
+
+/// The header of `store_dir` for code with no password: the newer of the two
+/// files that parse (the primary on a tie). Nothing is unwrapped or written.
 pub fn load_header(store_dir: impl AsRef<Path>) -> Result<VaultHeader> {
     let store_dir = store_dir.as_ref();
-    let primary_path = VaultHeader::path(store_dir);
-    let copy_path = VaultHeader::copy_path(store_dir);
-    let primary_raw = read_bytes(&primary_path)?;
-    let copy_raw = read_bytes(&copy_path)?;
-    if let Some(raw) = primary_raw.as_deref() {
-        if let Ok(header) = parse_structural(&primary_path, raw) {
-            return Ok(header);
-        }
-    }
-    if let Some(raw) = copy_raw.as_deref() {
-        if let Ok(header) = parse_structural(&copy_path, raw) {
-            return Ok(header);
-        }
-    }
-    Err(header_read_error(
-        &primary_path,
-        primary_raw.as_deref(),
-        &copy_path,
-        copy_raw.as_deref(),
-    ))
-}
-
-pub struct UnlockedHeader {
-    pub header: VaultHeader,
-    pub master_key: zeroize::Zeroizing<[u8; MASTER_KEY_LEN]>,
-}
-
-/// Password check for the primary header, then the copy when the primary wrap
-/// does not open and the copy is allowed to replace it.
-pub fn unlock_header(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<UnlockedHeader> {
-    let store_dir = store_dir.as_ref();
-    let primary_path = VaultHeader::path(store_dir);
-    let copy_path = VaultHeader::copy_path(store_dir);
-    let primary_raw = read_bytes(&primary_path)?;
-    let copy_raw = read_bytes(&copy_path)?;
-    let primary = primary_raw
-        .as_ref()
-        .and_then(|raw| parse_structural(&primary_path, raw).ok());
-    let copy = copy_raw
-        .as_ref()
-        .and_then(|raw| parse_structural(&copy_path, raw).ok());
-
-    let unlocked = match primary {
-        Some(primary) => unlock_primary(
-            store_dir,
-            password,
-            &primary,
-            copy.as_ref(),
-            primary_raw.as_deref(),
-            copy_raw.as_deref(),
-        )?,
-        None => {
-            let copy = copy.ok_or_else(|| {
-                header_read_error(
-                    &primary_path,
-                    primary_raw.as_deref(),
-                    &copy_path,
-                    copy_raw.as_deref(),
-                )
-            })?;
-            let master_key = unwrap_header_master(&copy, password)?;
-            write_primary_from_copy(store_dir, copy_raw.as_deref())?;
-            UnlockedHeader {
-                header: copy,
-                master_key,
+    let files = read_header_files(store_dir)?;
+    let mut newest: Option<VaultHeader> = None;
+    let mut first_error = None;
+    for file in files.into_iter().flatten() {
+        match file.header {
+            Ok(header) => {
+                if newest
+                    .as_ref()
+                    .is_none_or(|kept| header.newest_generation() > kept.newest_generation())
+                {
+                    newest = Some(header);
+                }
+            }
+            Err(error) => {
+                first_error.get_or_insert(error);
             }
         }
-    };
-    ensure_danger_notice(store_dir)?;
-    Ok(unlocked)
-}
-
-fn unlock_primary(
-    store_dir: &Path,
-    password: &[u8],
-    primary: &VaultHeader,
-    copy: Option<&VaultHeader>,
-    primary_raw: Option<&[u8]>,
-    copy_raw: Option<&[u8]>,
-) -> Result<UnlockedHeader> {
-    if kdf_matches(primary, copy) {
-        let kek = derive_header_kek(primary, password)?;
-        if let Ok(master_key) = unwrap_with_kek(primary, &kek) {
-            write_copy_from_primary(store_dir, primary_raw, copy_raw)?;
-            return Ok(UnlockedHeader {
-                header: primary.clone(),
-                master_key,
-            });
-        }
-        if same_file_bytes(primary_raw, copy_raw) {
-            return Err(UprivError::WrongPassword);
-        }
-        if let Some(copy) = copy {
-            if let Ok(master_key) = unwrap_with_kek(copy, &kek) {
-                write_primary_from_copy(store_dir, copy_raw)?;
-                return Ok(UnlockedHeader {
-                    header: copy.clone(),
-                    master_key,
-                });
-            }
-        }
-        return Err(UprivError::WrongPassword);
     }
-    if let Ok(master_key) = unwrap_header_master(primary, password) {
-        write_copy_from_primary(store_dir, primary_raw, copy_raw)?;
-        return Ok(UnlockedHeader {
-            header: primary.clone(),
-            master_key,
-        });
-    }
-    if same_file_bytes(primary_raw, copy_raw) {
-        return Err(UprivError::WrongPassword);
-    }
-    if let Some(copy) = copy {
-        if let Ok(master_key) = unwrap_header_master(copy, password) {
-            write_primary_from_copy(store_dir, copy_raw)?;
-            return Ok(UnlockedHeader {
-                header: copy.clone(),
-                master_key,
-            });
-        }
-    }
-    Err(UprivError::WrongPassword)
-}
-
-fn header_read_error(
-    primary_path: &Path,
-    primary_raw: Option<&[u8]>,
-    copy_path: &Path,
-    copy_raw: Option<&[u8]>,
-) -> UprivError {
-    if let Some(raw) = primary_raw {
-        return match parse_structural(primary_path, raw) {
-            Err(error) => error,
-            Ok(_) => UprivError::VaultStoreInvalid {
-                path: primary_path.to_path_buf(),
-                detail: "invalid vault.header".into(),
-            },
-        };
-    }
-    if let Some(raw) = copy_raw {
-        return match parse_structural(copy_path, raw) {
-            Err(error) => error,
-            Ok(_) => UprivError::VaultStoreInvalid {
-                path: copy_path.to_path_buf(),
-                detail: "invalid vault.header.copy".into(),
-            },
-        };
-    }
-    UprivError::VaultStoreInvalid {
-        path: primary_path.to_path_buf(),
-        detail: "missing vault.header".into(),
-    }
-}
-
-fn same_file_bytes(primary_raw: Option<&[u8]>, copy_raw: Option<&[u8]>) -> bool {
-    matches!((primary_raw, copy_raw), (Some(primary), Some(copy)) if primary == copy)
-}
-
-fn kdf_matches(primary: &VaultHeader, copy: Option<&VaultHeader>) -> bool {
-    let Some(copy) = copy else {
-        return false;
-    };
-    primary.kdf.memory_kib == copy.kdf.memory_kib
-        && primary.kdf.time_cost == copy.kdf.time_cost
-        && primary.kdf.parallelism == copy.kdf.parallelism
-        && primary.kdf.salt_b64 == copy.kdf.salt_b64
-}
-
-fn write_copy_from_primary(
-    store_dir: &Path,
-    primary_raw: Option<&[u8]>,
-    copy_raw: Option<&[u8]>,
-) -> Result<()> {
-    let Some(primary_raw) = primary_raw else {
-        return Ok(());
-    };
-    if copy_raw == Some(primary_raw) {
-        return Ok(());
-    }
-    paths::write_bytes_atomic(&VaultHeader::copy_path(store_dir), primary_raw)?;
-    log_header_restored(store_dir, HEADER_COPY_FILE_NAME);
-    Ok(())
-}
-
-fn write_primary_from_copy(store_dir: &Path, copy_raw: Option<&[u8]>) -> Result<()> {
-    let Some(copy_raw) = copy_raw else {
-        return Err(UprivError::VaultStoreInvalid {
-            path: VaultHeader::copy_path(store_dir),
-            detail: "missing vault.header.copy".into(),
-        });
-    };
-    paths::write_bytes_atomic(&VaultHeader::path(store_dir), copy_raw)?;
-    log_header_restored(store_dir, HEADER_FILE_NAME);
-    Ok(())
-}
-
-fn log_header_restored(store_dir: &Path, file_name: &str) {
-    let id = store_dir
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    crate::logging::log_event(
-        crate::logging::LogLevel::Warn,
-        "vault_header_restored",
-        &[("id", id), ("file", file_name)],
-    );
+    newest.ok_or_else(|| {
+        first_error.unwrap_or_else(|| UprivError::VaultStoreInvalid {
+            path: VaultHeader::path(store_dir),
+            detail: "missing vault.header".into(),
+        })
+    })
 }
 
 fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -443,97 +424,62 @@ pub(crate) fn parse_header_bytes(raw: &[u8]) -> Result<VaultHeader> {
     parse_structural(Path::new(HEADER_FILE_NAME), raw)
 }
 
-fn parse_structural(path: &Path, raw: &[u8]) -> Result<VaultHeader> {
-    let text = std::str::from_utf8(raw).map_err(|_| UprivError::VaultStoreInvalid {
+fn invalid_header(path: &Path, detail: &str) -> UprivError {
+    UprivError::VaultStoreInvalid {
         path: path.to_path_buf(),
-        detail: "invalid vault.header".into(),
-    })?;
-    let header: VaultHeader =
-        serde_json::from_str(text).map_err(|error| UprivError::VaultStoreInvalid {
-            path: path.to_path_buf(),
-            detail: format!("invalid vault.header: {error}"),
-        })?;
+        detail: detail.to_string(),
+    }
+}
+
+fn parse_structural(path: &Path, raw: &[u8]) -> Result<VaultHeader> {
+    let text =
+        std::str::from_utf8(raw).map_err(|_| invalid_header(path, "invalid vault.header"))?;
+    let header: VaultHeader = serde_json::from_str(text)
+        .map_err(|error| invalid_header(path, &format!("invalid vault.header: {error}")))?;
     if header.format_version != FORMAT_VERSION {
-        return Err(UprivError::VaultStoreInvalid {
-            path: path.to_path_buf(),
-            detail: format!(
+        return Err(invalid_header(
+            path,
+            &format!(
                 "unsupported format_version {} (this build writes {FORMAT_VERSION})",
                 header.format_version
             ),
-        });
+        ));
     }
-    if header.kdf.alg != KDF_ALG
-        || header.aead != AEAD_ID
+    if header.aead != AEAD_ID
         || header.name_cipher != NAME_CIPHER_ID
         || header.chunk_size != CHUNK_SIZE
     {
-        return Err(UprivError::VaultStoreInvalid {
-            path: path.to_path_buf(),
-            detail: "unsupported algorithms or chunk size".into(),
-        });
+        return Err(invalid_header(path, "unsupported algorithms or chunk size"));
     }
-    if !super::kdf::kdf_params_in_bounds(
-        header.kdf.memory_kib,
-        header.kdf.time_cost,
-        header.kdf.parallelism,
-    ) {
-        return Err(UprivError::VaultStoreInvalid {
-            path: path.to_path_buf(),
-            detail: "KDF parameters out of bounds".into(),
-        });
+    if !block_well_formed(&header.top) {
+        return Err(invalid_header(path, "invalid header block"));
     }
-    if !sealed_fields_well_formed(&header) {
-        return Err(UprivError::VaultStoreInvalid {
-            path: path.to_path_buf(),
-            detail: "invalid sealed master key".into(),
-        });
+    if let Some(change) = &header.change {
+        // A change is written above the top block it starts from.
+        if !block_well_formed(change) || change.generation <= header.top.generation {
+            return Err(invalid_header(path, "invalid change block"));
+        }
     }
     Ok(header)
 }
 
-fn sealed_fields_well_formed(header: &VaultHeader) -> bool {
-    let Ok(salt) = B64.decode(header.kdf.salt_b64.as_bytes()) else {
-        return false;
-    };
-    if salt.len() != SALT_LEN {
-        return false;
-    }
-    let Ok(wrapped) = B64.decode(header.wrapped_master_key_b64.as_bytes()) else {
-        return false;
-    };
-    wrapped.len() == WRAPPED_MASTER_LEN
-}
-
-fn derive_header_kek(
-    header: &VaultHeader,
-    password: &[u8],
-) -> Result<zeroize::Zeroizing<[u8; 32]>> {
-    let salt = B64
-        .decode(header.kdf.salt_b64.as_bytes())
-        .map_err(|_| UprivError::WrongPassword)?;
-    let mut salt_bytes = [0u8; SALT_LEN];
-    if salt.len() != SALT_LEN {
-        return Err(UprivError::WrongPassword);
-    }
-    salt_bytes.copy_from_slice(&salt);
-    derive_kek(
-        password,
-        &salt_bytes,
-        header.kdf.memory_kib,
-        header.kdf.time_cost,
-        header.kdf.parallelism,
-    )
-}
-
-fn unwrap_with_kek(
-    header: &VaultHeader,
-    kek: &[u8; 32],
-) -> Result<zeroize::Zeroizing<[u8; MASTER_KEY_LEN]>> {
-    let wrapped = B64
-        .decode(header.wrapped_master_key_b64.as_bytes())
-        .map_err(|_| UprivError::WrongPassword)?;
-    let aad = header.wrap_aad()?;
-    unwrap_master_key(kek, &wrapped, &aad)
+/// What a block must be before its wrap is tried: unlock settings in bounds,
+/// one to [`MAX_KEYS`] key ids above zero, rising, none above the block's
+/// generation, `since` a key id no higher than the write key, and a wrap of
+/// the length those keys take.
+fn block_well_formed(block: &HeaderBlock) -> bool {
+    let ids = &block.key_ids;
+    let rising = ids.windows(2).all(|pair| pair[0] < pair[1]);
+    block.kdf.in_bounds()
+        && (1..=MAX_KEYS).contains(&ids.len())
+        && rising
+        && ids.first().is_some_and(|first| !first.is_none())
+        && block.write_id().get() <= block.generation
+        && !block.since.is_none()
+        && block.since <= block.write_id()
+        && block
+            .wrapped()
+            .is_ok_and(|wrapped| wrapped.len() == wrapped_len(ids.len()))
 }
 
 pub fn ensure_danger_notice(store_dir: &Path) -> Result<()> {
@@ -545,14 +491,16 @@ pub fn ensure_danger_notice(store_dir: &Path) -> Result<()> {
 }
 
 pub fn header_bytes(header: &VaultHeader) -> Result<Vec<u8>> {
-    let body =
-        serde_json::to_string_pretty(header).map_err(|error| UprivError::VaultStoreInvalid {
-            path: PathBuf::from(HEADER_FILE_NAME),
-            detail: format!("serialize vault.header: {error}"),
-        })?;
+    let body = serde_json::to_string_pretty(header).map_err(|error| {
+        invalid_header(
+            Path::new(HEADER_FILE_NAME),
+            &format!("serialize vault.header: {error}"),
+        )
+    })?;
     Ok(body.into_bytes())
 }
 
+/// Write `header` into both header files of a store being made.
 pub fn save_header(store_dir: impl AsRef<Path>, header: &VaultHeader) -> Result<()> {
     let store_dir = store_dir.as_ref();
     let bytes = header_bytes(header)?;
@@ -561,88 +509,14 @@ pub fn save_header(store_dir: impl AsRef<Path>, header: &VaultHeader) -> Result<
     ensure_danger_notice(store_dir)
 }
 
-/// New salt and a new wrap of the same master key. File chunks stay valid
-/// because chunk AAD does not include the salt or the KDF cost.
-pub fn rewrap_header(
-    header: &VaultHeader,
-    master: &[u8; MASTER_KEY_LEN],
-    password: &[u8],
-    memory_kib: u32,
-    time_cost: u32,
-    parallelism: u32,
-) -> Result<VaultHeader> {
-    let salt = super::aead::random_bytes::<SALT_LEN>();
-    let mut next = header.clone();
-    next.kdf.memory_kib = memory_kib;
-    next.kdf.time_cost = time_cost;
-    next.kdf.parallelism = parallelism;
-    next.kdf.salt_b64 = B64.encode(salt);
-    next.wrapped_master_key_b64.clear();
-    let kek = derive_kek(password, &salt, memory_kib, time_cost, parallelism)?;
-    let aad = next.wrap_aad()?;
-    let wrapped = wrap_master_key(&kek, master, &aad)?;
-    next.wrapped_master_key_b64 = B64.encode(wrapped);
-    Ok(next)
-}
-
-pub fn create_header(
-    password: &[u8],
-    preset: KdfUnlockPreset,
-    master: &[u8; MASTER_KEY_LEN],
-) -> Result<VaultHeader> {
-    let salt = super::aead::random_bytes::<SALT_LEN>();
-    let salt_b64 = B64.encode(salt);
-    let mut header = VaultHeader {
-        warning: HEADER_WARNING.to_string(),
-        format_version: FORMAT_VERSION,
-        content_identity: Uuid::new_v4(),
-        kdf: HeaderKdf {
-            alg: KDF_ALG.to_string(),
-            memory_kib: preset.memory_kib(),
-            time_cost: preset.time_cost(),
-            parallelism: preset.parallelism(),
-            salt_b64,
-        },
-        aead: AEAD_ID.to_string(),
-        name_cipher: NAME_CIPHER_ID.to_string(),
-        chunk_size: CHUNK_SIZE,
-        wrapped_master_key_b64: String::new(),
-    };
-    let kek = derive_kek(
-        password,
-        &salt,
-        header.kdf.memory_kib,
-        header.kdf.time_cost,
-        header.kdf.parallelism,
-    )?;
-    let aad = header.wrap_aad()?;
-    let wrapped = wrap_master_key(&kek, master, &aad)?;
-    header.wrapped_master_key_b64 = B64.encode(wrapped);
-    Ok(header)
-}
-
-pub fn unwrap_header_master(
-    header: &VaultHeader,
-    password: &[u8],
-) -> Result<zeroize::Zeroizing<[u8; MASTER_KEY_LEN]>> {
-    let salt = B64
-        .decode(header.kdf.salt_b64.as_bytes())
-        .map_err(|_| UprivError::WrongPassword)?;
-    if salt.len() != SALT_LEN {
-        return Err(UprivError::WrongPassword);
-    }
-    let wrapped = B64
-        .decode(header.wrapped_master_key_b64.as_bytes())
-        .map_err(|_| UprivError::WrongPassword)?;
-    let kek = derive_kek(
-        password,
-        &salt,
-        header.kdf.memory_kib,
-        header.kdf.time_cost,
-        header.kdf.parallelism,
-    )?;
-    let aad = header.wrap_aad()?;
-    unwrap_master_key(&kek, &wrapped, &aad)
+/// The header of a new vault and its keyring: a new content identity, one
+/// key, generation 1, at `preset` under `password`.
+pub fn create_header(password: &[u8], preset: KdfUnlockPreset) -> Result<(VaultHeader, Keyring)> {
+    let identity = Uuid::new_v4();
+    let kdf = HeaderKdf::fresh(preset);
+    let kek = kdf.derive_kek(password)?;
+    let keys = Keyring::create(identity, kdf, &kek)?;
+    Ok((VaultHeader::new(identity, keys.block().clone()), keys))
 }
 
 #[cfg(test)]
@@ -654,32 +528,26 @@ mod aad_golden_tests {
     const VERSION: ChunkVersion =
         ChunkVersion::from_bytes([0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18]);
 
-    fn fixture_header() -> VaultHeader {
-        VaultHeader {
-            warning: HEADER_WARNING.into(),
-            format_version: FORMAT_VERSION,
-            content_identity: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
-            kdf: HeaderKdf {
-                alg: KDF_ALG.into(),
-                memory_kib: 32 * 1024,
-                time_cost: 3,
-                parallelism: 1,
-                salt_b64: "AAAAAAAAAAAAAAAAAAAAAA==".into(),
-            },
-            aead: AEAD_ID.into(),
-            name_cipher: NAME_CIPHER_ID.into(),
-            chunk_size: CHUNK_SIZE,
-            wrapped_master_key_b64: "not-used-for-aad".into(),
+    fn identity() -> Uuid {
+        Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap()
+    }
+
+    fn fixture_kdf() -> HeaderKdf {
+        HeaderKdf {
+            alg: KDF_ALG.into(),
+            memory_kib: 32 * 1024,
+            time_cost: 3,
+            parallelism: 1,
+            salt_b64: "AAAAAAAAAAAAAAAAAAAAAA==".into(),
         }
     }
 
     #[test]
     fn aad_bytes_are_struct_field_order() {
-        let header = fixture_header();
-        let wrap = header.wrap_aad().unwrap();
-        let index = index_aad(&header).unwrap();
+        let wrap = wrap_aad(identity(), &fixture_kdf()).unwrap();
+        let index = index_aad(identity(), &fixture_kdf()).unwrap();
         let chunk = chunk_aad(
-            &header,
+            identity(),
             "11111111-1111-4111-8111-111111111111",
             2,
             37756,
@@ -698,7 +566,7 @@ mod aad_golden_tests {
             chunk,
             br#"{"v":1,"cid":"00000000-0000-4000-8000-000000000001","aead":"xchacha20poly1305","chunk":262144,"kind":"chunk","file_id":"11111111-1111-4111-8111-111111111111","chunk_index":2,"chunk_len":37756,"version":"a1b2c3d4e5f60718"}"#
         );
-        let record = record_aad(&header, "11111111-1111-4111-8111-111111111111", 3).unwrap();
+        let record = record_aad(identity(), "11111111-1111-4111-8111-111111111111", 3).unwrap();
         assert_eq!(
             record,
             br#"{"v":1,"cid":"00000000-0000-4000-8000-000000000001","aead":"xchacha20poly1305","kind":"record","file_id":"11111111-1111-4111-8111-111111111111","seq":3}"#
@@ -706,13 +574,13 @@ mod aad_golden_tests {
     }
 
     /// The three omissions in [`ChunkAad`] are load-bearing for this format —
-    /// assert them directly so a future "let's bind more context" edit fails here
-    /// instead of silently making writes O(file) or bricking change-password.
+    /// assert them directly so a future "let's bind more context" edit fails
+    /// here instead of silently making writes O(file) or every unlock-RAM
+    /// change a rewrite of the vault.
     #[test]
     fn chunk_aad_omits_kdf_material_and_file_size() {
-        let header = fixture_header();
         let chunk = chunk_aad(
-            &header,
+            identity(),
             "11111111-1111-4111-8111-111111111111",
             2,
             37756,
@@ -731,10 +599,120 @@ mod aad_golden_tests {
 
     #[test]
     fn chunk_version_changes_the_aad() {
-        let header = fixture_header();
         let fid = "11111111-1111-4111-8111-111111111111";
-        let a = chunk_aad(&header, fid, 0, 16, ChunkVersion::from_bytes([0xaa; 8])).unwrap();
-        let b = chunk_aad(&header, fid, 0, 16, ChunkVersion::from_bytes([0xbb; 8])).unwrap();
+        let a = chunk_aad(identity(), fid, 0, 16, ChunkVersion::from_bytes([0xaa; 8])).unwrap();
+        let b = chunk_aad(identity(), fid, 0, 16, ChunkVersion::from_bytes([0xbb; 8])).unwrap();
         assert_ne!(a, b, "a rewritten chunk must not accept the stale blob");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(generation: u32, ids: &[u32], since: u32) -> HeaderBlock {
+        let wrapped = vec![0u8; wrapped_len(ids.len())];
+        HeaderBlock {
+            generation,
+            kdf: HeaderKdf::fresh(KdfUnlockPreset::M32),
+            key_ids: ids.iter().copied().map(KeyId::new).collect(),
+            since: KeyId::new(since),
+            wrapped_keys_b64: B64.encode(wrapped),
+        }
+    }
+
+    fn header(top: HeaderBlock, change: Option<HeaderBlock>) -> VaultHeader {
+        VaultHeader {
+            change,
+            ..VaultHeader::new(Uuid::new_v4(), top)
+        }
+    }
+
+    fn parses(header: &VaultHeader) -> bool {
+        parse_header_bytes(&header_bytes(header).unwrap()).is_ok()
+    }
+
+    #[test]
+    fn a_header_file_lists_its_fields_in_the_documented_order() {
+        let pending = header(block(7, &[3], 3), Some(block(8, &[3, 8], 8)));
+        let text = String::from_utf8(header_bytes(&pending).unwrap()).unwrap();
+        let order = [
+            "\"warning\"",
+            "\"format_version\"",
+            "\"content_identity\"",
+            "\"aead\"",
+            "\"name_cipher\"",
+            "\"chunk_size\"",
+            "\"generation\": 7",
+            "\"kdf\"",
+            "\"key_ids\"",
+            "\"since\": 3",
+            "\"wrapped_keys_b64\"",
+            "\"change\"",
+            "\"generation\": 8",
+        ];
+        let places: Vec<usize> = order
+            .iter()
+            .map(|field| {
+                text.find(field)
+                    .unwrap_or_else(|| panic!("{field} in {text}"))
+            })
+            .collect();
+        assert!(places.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        assert_eq!(parse_header_bytes(text.as_bytes()).unwrap(), pending);
+        // A steady header has no `change` at all.
+        let steady = header(block(7, &[3], 3), None);
+        let text = String::from_utf8(header_bytes(&steady).unwrap()).unwrap();
+        assert!(!text.contains("change"), "{text}");
+    }
+
+    #[test]
+    fn a_block_that_no_keyring_fits_does_not_parse() {
+        assert!(parses(&header(block(3, &[1, 3], 1), None)));
+        let refused = [
+            block(3, &[], 1),
+            block(3, &[3, 1], 1),
+            block(3, &[1, 1], 1),
+            block(3, &[0, 2], 2),
+            block(2, &[1, 3], 1),
+            block(3, &[1, 3], 0),
+            block(3, &[1, 2], 3),
+            block(9, &[1, 2, 3, 4, 5, 6, 7, 8, 9], 1),
+        ];
+        for top in refused {
+            assert!(!parses(&header(top.clone(), None)), "{top:?}");
+        }
+        let mut short = block(3, &[1, 3], 1);
+        short.wrapped_keys_b64 = B64.encode([0u8; 20]);
+        assert!(!parses(&header(short, None)));
+        let mut cost = block(3, &[1], 1);
+        cost.kdf.memory_kib = 4096 * 1024;
+        assert!(!parses(&header(cost, None)));
+    }
+
+    #[test]
+    fn a_change_is_written_above_its_top_block() {
+        assert!(parses(&header(
+            block(7, &[3], 3),
+            Some(block(8, &[3, 8], 8))
+        )));
+        assert!(!parses(&header(
+            block(8, &[3], 3),
+            Some(block(8, &[3, 8], 8))
+        )));
+    }
+
+    #[test]
+    fn the_newest_generation_counts_the_change() {
+        let pending = header(block(7, &[3], 3), Some(block(8, &[3, 8], 8)));
+        assert_eq!(pending.newest_generation(), 8);
+        assert_eq!(header(block(7, &[3], 3), None).newest_generation(), 7);
+    }
+
+    #[test]
+    fn an_unknown_version_does_not_parse() {
+        let mut other = header(block(1, &[1], 1), None);
+        other.format_version = 99;
+        assert!(!parses(&other));
     }
 }

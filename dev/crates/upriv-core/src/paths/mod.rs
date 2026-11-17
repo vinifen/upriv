@@ -320,6 +320,8 @@ fn write_bytes_atomic_staged(
             )));
         }
     }
+    #[cfg(test)]
+    observe_atomic_write();
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -337,6 +339,8 @@ fn write_bytes_atomic_staged(
         let _ = crate::host_fs::remove_file(&tmp);
         return Err(AtomicWriteError::NotWritten(error));
     }
+    #[cfg(test)]
+    observe_atomic_write();
     #[cfg(test)]
     if take_failed_folder_flush() {
         return Err(AtomicWriteError::Unflushed(
@@ -359,6 +363,33 @@ thread_local! {
     static FAILED_FOLDER_FLUSHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// [`sync_file_durable`] calls still to fail on this thread.
     static FAILED_FILE_FLUSHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Called before and after each atomic write on this thread, so a test
+    /// can copy the disk as a crash at that moment would leave it.
+    static ATOMIC_WRITE_OBSERVER: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Call `observer` before and after each atomic write on this thread, until
+/// it is replaced; `None` stops it.
+#[cfg(test)]
+pub(crate) fn observe_atomic_writes(observer: Option<Box<dyn FnMut()>>) {
+    ATOMIC_WRITE_OBSERVER.with(|slot| *slot.borrow_mut() = observer);
+}
+
+/// Run the observer of this thread, taken out of its slot meanwhile, so the
+/// atomic writes it makes itself are not observed.
+#[cfg(test)]
+fn observe_atomic_write() {
+    let taken = ATOMIC_WRITE_OBSERVER.with(|slot| slot.borrow_mut().take());
+    if let Some(mut observer) = taken {
+        observer();
+        ATOMIC_WRITE_OBSERVER.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(observer);
+            }
+        });
+    }
 }
 
 #[cfg(all(test, unix))]

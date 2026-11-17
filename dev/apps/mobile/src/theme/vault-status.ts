@@ -9,7 +9,7 @@ export function vaultStatusIconColors(
   if (status === "open") {
     return { background: colors.vaultOpenIconBg, foreground: colors.vaultStatusOpen };
   }
-  if (status === "recovery") {
+  if (status === "recovery" || status === "deleting") {
     return {
       background: colors.vaultRecoveryIconBg,
       foreground: colors.vaultStatusRecovery,
@@ -25,7 +25,7 @@ export function vaultStatusBadgeColors(
   if (status === "open") {
     return { background: colors.vaultOpenBadgeBg, foreground: colors.vaultStatusOpen };
   }
-  if (status === "recovery") {
+  if (status === "recovery" || status === "deleting") {
     return {
       background: colors.vaultRecoveryBadgeBg,
       foreground: colors.vaultStatusRecovery,
@@ -37,12 +37,19 @@ export function vaultStatusBadgeColors(
 /**
  * Row and block card surface — desktop `vaultStatusRowClass`. Open and
  * recovery mark the left edge in their color; work in flight dims the row and
- * marks the edge in the closed color.
+ * marks the edge in the closed color, a delete in the recovery color.
  */
 export function vaultStatusRowSurface(status: VaultDisplayStatus, colors: ThemeColors): ViewStyle {
   const surface = { backgroundColor: colors.surfaceContainer, borderLeftWidth: 2 };
   if (status === "open") return { ...surface, borderLeftColor: colors.vaultStatusOpen };
   if (status === "recovery") return { ...surface, borderLeftColor: colors.vaultStatusRecovery };
+  if (status === "deleting") {
+    return {
+      ...surface,
+      borderLeftColor: colorAlpha(colors.vaultStatusRecovery, 0.6),
+      opacity: 0.95,
+    };
+  }
   if (isVaultPipelineDisplayBusy(status)) {
     return {
       ...surface,

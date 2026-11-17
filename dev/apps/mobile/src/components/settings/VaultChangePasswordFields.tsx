@@ -8,34 +8,40 @@ import { useTranslation } from "@/i18n";
 import { View } from "react-native";
 import { PasswordWeaknessNotice } from "@/components/ui";
 import { spacing } from "@/theme/tokens";
-import { FieldHint, FieldLabel, PasswordInput, Warning } from "./settingsFields";
+import { FieldHint, FieldLabel, PasswordInput, SwitchRow, Warning } from "./settingsFields";
 
 export function VaultChangePasswordFields({
   fields,
   onChange,
+  backUpFirst,
+  onBackUpFirstChange,
   weakness,
   passwordFieldError,
   error,
-  rewrapBlocked = false,
+  blocked = false,
   busy = false,
 }: {
   fields: ChangePasswordFieldsState;
   onChange: (patch: Partial<ChangePasswordFieldsState>) => void;
+  /** **Back up first**: on each time the window opens. */
+  backUpFirst: boolean;
+  onBackUpFirstChange: (on: boolean) => void;
   /** What is wrong with the new password; `null` when nothing is. */
   weakness: PasswordWeakness | null;
   passwordFieldError?: string | null;
   error?: string | null;
-  rewrapBlocked?: boolean;
+  /** Blocked when the vault is not strictly closed (`vault_closed` gate). */
+  blocked?: boolean;
   busy?: boolean;
 }) {
   const { t } = useTranslation();
   const passwordsMatch =
     fields.newPassword.length > 0 && fields.newPassword === fields.confirmPassword;
-  const locked = rewrapBlocked || busy;
+  const locked = blocked || busy;
 
   return (
     <View style={{ gap: spacing.md }}>
-      {rewrapBlocked ? (
+      {blocked ? (
         <FieldHint>{t(requireVaultConfigEditLockedI18nKey("action.change_password"))}</FieldHint>
       ) : null}
       <FieldLabel disabled={locked}>{t("vault.change_password.current")}</FieldLabel>
@@ -71,6 +77,14 @@ export function VaultChangePasswordFields({
       {fields.newPassword.length > 0 && fields.newPassword === fields.currentPassword ? (
         <Warning>{t("vault.change_password.same_as_current")}</Warning>
       ) : null}
+      <SwitchRow
+        label={t("vault.change_password.backup_switch")}
+        hint={t("vault.change_password.backup_note")}
+        value={backUpFirst}
+        disabled={locked}
+        onValueChange={onBackUpFirstChange}
+      />
+      {!backUpFirst ? <Warning>{t("vault.change_password.backup_off_warn")}</Warning> : null}
       {error ? <Warning>{error}</Warning> : null}
     </View>
   );

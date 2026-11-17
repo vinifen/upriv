@@ -99,6 +99,56 @@ pub fn test_job_id() -> String {
     format!("test-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
+/// Copy the folder `src` into `dst`, files and folders alike.
+pub fn copy_dir(src: &Path, dst: &Path) {
+    crate::host_fs::create_dir_all(dst).unwrap();
+    for entry in crate::host_fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let to = dst.join(entry.file_name());
+        if crate::host_fs::symlink_metadata(entry.path())
+            .unwrap()
+            .is_dir()
+        {
+            copy_dir(&entry.path(), &to);
+        } else {
+            crate::host_fs::write(&to, crate::host_fs::read(entry.path()).unwrap()).unwrap();
+        }
+    }
+}
+
+/// Every file under `dir`, by its path inside it, with its bytes. Empty when
+/// `dir` is not there.
+pub fn dir_bytes(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        let Ok(entries) = crate::host_fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if crate::host_fs::symlink_metadata(&path).unwrap().is_dir() {
+                pending.push(path);
+            } else {
+                let inside = path.strip_prefix(dir).unwrap().to_path_buf();
+                out.insert(inside, crate::host_fs::read(&path).unwrap());
+            }
+        }
+    }
+    out
+}
+
+/// A vault config of `id` named `name`, encrypted, that writes no backup on
+/// close.
+pub fn quiet_config(id: &str, name: &str) -> crate::config::VaultConfig {
+    let mut config: crate::config::VaultConfig = toml::from_str(&format!(
+        "[vault]\nid = \"{id}\"\ndisplay_name = \"{name}\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n"
+    ))
+    .unwrap();
+    config.backup.enabled = false;
+    config
+}
+
 /// This device's unlocked folder rows for `config`, one per parent, the
 /// first selected.
 pub fn unlocked_rows(config: &mut crate::config::VaultConfig, parents: &[&Path]) {

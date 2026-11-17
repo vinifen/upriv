@@ -9,6 +9,7 @@ import {
   type VaultBackupSection,
   type VaultGroup,
   type VaultInfoSnapshot,
+  type VaultKeyStatus,
   type VaultListItem,
   type VaultRuntimeStats,
 } from "../domain";
@@ -17,6 +18,7 @@ import type {
   FolderListService,
   VaultLifecycleService,
   VaultRootService,
+  VaultSecurityService,
   VaultService,
 } from "../services";
 
@@ -30,6 +32,7 @@ export interface UseVaultInfoDataOptions {
   lifecycleService: VaultLifecycleService;
   vaultRootService: VaultRootService;
   folderListService: FolderListService;
+  securityService: VaultSecurityService;
   /**
    * Last-resort prefix when `vault_root_resolve` is not `found`
    * (pre-setup). Do not use this as the happy path.
@@ -43,6 +46,7 @@ interface SlowVaultInfo {
   /** `null` while the list is read. */
   backupSections: VaultBackupSection[] | null;
   unlockedFolder: UnlockedFolderInfo | null;
+  keyStatus: VaultKeyStatus | null | "reading";
   storeBytes: VaultRuntimeStats["storeBytes"];
   heldBytes: VaultRuntimeStats["heldBytes"];
   filesBytes: VaultRuntimeStats["filesBytes"];
@@ -69,6 +73,7 @@ export function useVaultInfoData({
   lifecycleService,
   vaultRootService,
   folderListService,
+  securityService,
   fallbackVaultRootBase,
 }: UseVaultInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<VaultInfoSnapshot | null>(null);
@@ -106,6 +111,7 @@ export function useVaultInfoData({
             vaultId: current.id,
             backupSections: null,
             unlockedFolder: null,
+            keyStatus: "reading",
             storeBytes: "measuring",
             heldBytes: "measuring",
             filesBytes: "measuring",
@@ -130,6 +136,16 @@ export function useVaultInfoData({
     void folderListService
       .unlockedFolderInfo(current.id)
       .then((unlockedFolder) => patchSlow({ unlockedFolder }), fail);
+    // Only an open session knows which files wait; a closed vault shows the
+    // header's state alone.
+    if (current.session === "open") {
+      void securityService
+        .keyStatus(current.id)
+        .catch(() => null)
+        .then((keyStatus) => patchSlow({ keyStatus }));
+    } else {
+      patchSlow({ keyStatus: null });
+    }
     void vaultService
       .diskUsage(current.id)
       .catch(() => null)
@@ -172,6 +188,7 @@ export function useVaultInfoData({
           runtime,
           passwordInSession,
           unlockedFolder: null,
+          keyStatus: "reading",
           storePath: storePaths.storePath,
           backupsPath: storePaths.backupsPath,
           storeOpenPath: vaultRootUprivOpenPath(vaultRootBase, `vaults/${current.id}/store`),
@@ -200,6 +217,8 @@ export function useVaultInfoData({
     vault?.lastAccessedAt,
     vault?.hidden,
     vault?.unlockPreset,
+    vault?.keyCount,
+    vault?.passwordChange,
     groupName,
     groupHidden,
     locale,
@@ -208,6 +227,7 @@ export function useVaultInfoData({
     lifecycleService,
     vaultRootService,
     folderListService,
+    securityService,
     fallbackVaultRootBase,
     loadAttempt,
   ]);
@@ -219,6 +239,7 @@ export function useVaultInfoData({
       ...snapshot,
       backupSections: landed ? landed.backupSections : null,
       unlockedFolder: landed ? landed.unlockedFolder : null,
+      keyStatus: landed ? landed.keyStatus : "reading",
       runtime: {
         ...snapshot.runtime,
         storeBytes: landed ? landed.storeBytes : "measuring",

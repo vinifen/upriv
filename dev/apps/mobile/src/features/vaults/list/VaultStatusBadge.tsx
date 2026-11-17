@@ -13,12 +13,15 @@ interface VaultStatusBadgeProps {
   labelKey?: I18nKey;
 }
 
-/** Uppercase mono chip — desktop `VaultStatusBadge`. Work in flight pulses. */
+/**
+ * Uppercase mono chip — desktop `VaultStatusBadge`. Work in flight pulses; a
+ * delete wears the recovery color instead, as it may not be running.
+ */
 export function VaultStatusBadge({ status, labelKey }: VaultStatusBadgeProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const tone = vaultStatusBadgeColors(status, colors);
-  const pulse = usePulseOpacity(isVaultPipelineDisplayBusy(status));
+  const pulse = usePulseOpacity(isVaultPipelineDisplayBusy(status) && status !== "deleting");
 
   return (
     <Animated.View

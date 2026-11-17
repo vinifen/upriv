@@ -6,7 +6,8 @@
 //!
 //! Vault bodies are already ciphertext, so the zip is Stored and has no
 //! password, like a backup zip. Every vault stays held until the zip is
-//! written: open, rename, delete, rewrap, export, and Back up now refuse with
+//! written: open, rename, delete, the password and unlock-RAM changes, export,
+//! and Back up now refuse with
 //! `vault_busy`. A new vault, an import, and a backup delete or pin refuse with
 //! `data_folder_export_busy`. Settings, groups, and logs keep working: each
 //! write replaces its file whole or appends to it, so the copy holds one

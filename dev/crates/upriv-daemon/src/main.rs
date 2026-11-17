@@ -3,14 +3,17 @@
 //! Speaks newline-delimited JSON over stdin/stdout (no TCP port). The Electron
 //! main process spawns this binary with piped stdio and proxies renderer calls.
 //!
-//! **Concurrency:** Off-stdin lanes, so a long import or rewrap does not sit in
-//! front of a lock.
+//! **Concurrency:** Off-stdin lanes, so a long import or password change does
+//! not sit in front of a lock.
 //! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`). An open
 //!   whose vault the core of an app that went away still holds first waits
 //!   on an `upriv-open-wait` thread of its own, so it holds no lane.
-//! - `upriv-fs-io`: close, delete, and the quit (`app_shutdown`).
-//! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header
-//!   commit), and the rebuild of a lost index (pinned copy plus index seal).
+//! - `upriv-fs-io`: close and the quit (`app_shutdown`).
+//! - `upriv-keys`: the password change and its Finish, the unlock-RAM change,
+//!   and the rebuild: the work that changes a closed vault's keys or header.
+//! - `upriv-delete`: the delete of a vault (each key copy overwritten).
+//! - `upriv-key-copies`: the pass after an open that makes each blob's key
+//!   copy the header's.
 //! - `upriv-pack`: zip and `.7z` import, vault and backup export. One at a time.
 //! - `upriv-data-folder`: the zip of the whole data folder, and a phone's copy
 //!   of its private data folder. Work it refuses on the other lanes answers at
@@ -212,7 +215,10 @@ fn run() -> io::Result<()> {
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let (argon2_tx, argon2_join) = spawn_named_worker("upriv-argon2", Arc::clone(&stdout));
     let (lifecycle_tx, lifecycle_join) = spawn_named_worker("upriv-fs-io", Arc::clone(&stdout));
-    let (rewrap_tx, rewrap_join) = spawn_named_worker("upriv-rewrap", Arc::clone(&stdout));
+    let (keys_tx, keys_join) = spawn_named_worker("upriv-keys", Arc::clone(&stdout));
+    let (delete_tx, delete_join) = spawn_named_worker("upriv-delete", Arc::clone(&stdout));
+    let (key_copies_tx, key_copies_join) =
+        spawn_named_worker("upriv-key-copies", Arc::clone(&stdout));
     let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
     let (data_folder_tx, data_folder_join) =
         spawn_named_worker("upriv-data-folder", Arc::clone(&stdout));
@@ -342,7 +348,9 @@ fn run() -> io::Result<()> {
                     let tx = match lane {
                         HeavyLane::Argon2 => &argon2_tx,
                         HeavyLane::Lifecycle => &lifecycle_tx,
-                        HeavyLane::Rewrap => &rewrap_tx,
+                        HeavyLane::Keys => &keys_tx,
+                        HeavyLane::Delete => &delete_tx,
+                        HeavyLane::KeyCopies => &key_copies_tx,
                         HeavyLane::Pack => &pack_tx,
                         HeavyLane::Import => &import_tx,
                         HeavyLane::DataFolder => &data_folder_tx,
@@ -381,10 +389,16 @@ fn run() -> io::Result<()> {
     if let Err(error) = lifecycle_join.join() {
         log_stderr(format_args!("fs-io worker join panicked: {error:?}"));
     }
-    let _ = rewrap_tx.send(HeavyJob::Shutdown);
-    drop(rewrap_tx);
-    if let Err(error) = rewrap_join.join() {
-        log_stderr(format_args!("rewrap worker join panicked: {error:?}"));
+    for (name, tx, join) in [
+        ("keys", keys_tx, keys_join),
+        ("delete", delete_tx, delete_join),
+        ("key-copies", key_copies_tx, key_copies_join),
+    ] {
+        let _ = tx.send(HeavyJob::Shutdown);
+        drop(tx);
+        if let Err(error) = join.join() {
+            log_stderr(format_args!("{name} worker join panicked: {error:?}"));
+        }
     }
     let _ = pack_tx.send(HeavyJob::Shutdown);
     drop(pack_tx);

@@ -12,6 +12,7 @@ export const STATE_RANK: Record<VaultDisplayStatus, number> = {
   recovering: 1,
   changing_password: 1,
   changing_kdf: 1,
+  deleting: 1,
   closing: 2,
   closed: 3,
   recovery: 4,

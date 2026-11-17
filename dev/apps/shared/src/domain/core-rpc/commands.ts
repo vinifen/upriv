@@ -74,11 +74,15 @@ export const CORE_RPC_COMMANDS = {
   /** Wipe chosen files from the folder. The vault keeps them. */
   VAULT_PLAIN_UNSEND: "vault_plain_unsend",
   VAULT_CLOSE: "vault_close",
-  /** Rewrap the closed vault under a new password. Same master key; files stay. */
+  /** A job: a new key for the closed vault, every file rewritten with it. */
   VAULT_CHANGE_PASSWORD: "vault_change_password",
-  /** Rewrap the closed vault at a new Argon2id unlock cost. The password stays. */
+  /** A job: the files an unfinished password change left on earlier keys, rewritten. */
+  VAULT_PASSWORD_CHANGE_FINISH: "vault_password_change_finish",
+  /** A job: a new Argon2id unlock cost for the closed vault. The password and keys stay. */
   VAULT_CHANGE_KDF: "vault_change_kdf",
-  /** Rebuild the lost index of a closed vault from the records its blobs carry. */
+  /** A job after each open: every blob's key copy made the header's. Core decides whether any is due. */
+  VAULT_KEY_COPIES_UPDATE: "vault_key_copies_update",
+  /** A job: the header from the blobs' key copies, the tree from their records and the backups. */
   VAULT_REBUILD: "vault_rebuild",
   /** Phase of an in-flight `vault_close` (`flush` | `backup` | null). Light; polled while closing. */
   VAULT_CLOSE_PHASE: "vault_close_phase",
@@ -86,10 +90,15 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CONFIG_GET: "vault_config_get",
   /** Regular-file bytes under `store/` and `held/`. Metadata only; not the vault list. */
   VAULT_DISK_USAGE: "vault_disk_usage",
+  /** Where an open vault's keys stand (files waiting, key copies). Light; reads RAM only. */
+  VAULT_KEY_STATUS: "vault_key_status",
   VAULT_CONFIG_SAVE: "vault_config_save",
   /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
   VAULT_RENAME: "vault_rename",
+  /** A job: each key copy overwritten, then the vault's folder removed. */
   VAULT_DELETE: "vault_delete",
+  /** Delete now for a running delete: the blobs not reached go with no overwrite. */
+  VAULT_DELETE_HURRY: "vault_delete_hurry",
   VAULT_EXPORT: "vault_export",
   VAULT_UNFINISHED_SWEEP: "vault_unfinished_sweep",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",

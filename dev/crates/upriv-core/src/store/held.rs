@@ -5,26 +5,32 @@
 //!
 //! - a file whose blob is gone is marked [`FileProblem::Missing`], and loses
 //!   the mark once the blob is back;
-//! - a blob no file names moves to the vault's `held/` folder, beside
-//!   `store/`, and the index records it ([`HeldBlob`]). It may hold the newest
-//!   bytes of a file whose index never reached the disk, so only the person
-//!   deletes it. A blob too short to hold one chunk holds nothing and is
-//!   deleted, and so is a link or anything else named as a blob that is not
-//!   a plain file;
+//! - every regular file `<id>.blob` no file names, and the index did not
+//!   release, moves to the vault's `held/` folder, beside `store/`, whatever
+//!   its length, and the index records it ([`HeldBlob`]). It may hold the
+//!   newest bytes of a file whose index never reached the disk, so only the
+//!   person deletes it. Anything in `data/` that is not a regular file is left
+//!   where it is and logged;
 //! - a blob the index lists as released ([`VaultIndex::released`]) stays in
-//!   `data/`: an old version a seal let go of before its folder flushed, which
-//!   the session's first seal that flushes deletes. When the other index file
-//!   names it, it holds that tree's bytes and is held like any other;
+//!   `data/` or `held/`: one a seal let go of, which the first seal that
+//!   flushes deletes ([`delete_released`]). When the walk marks a file missing for the first time,
+//!   the index may be older than the blobs, so the released blobs are set
+//!   aside like any other unnamed blob, taken off the list, and none is
+//!   deleted. A file already marked missing before does not count;
 //! - a held blob the tree names again goes back to `data/`.
 //!
+//! A blob set aside whose key copy is behind the header turns the pass on
+//! ([`VaultIndex::key_copies_due`]), so it carries the header's key copy once
+//! the pass ends: a blob that came from an older copy of the vault keeps no
+//! earlier key or cost.
+//!
 //! A newly held blob is matched with what this vault still has that names it:
-//! the other index file when it holds another tree, then the recovery record
-//! the blob carries ([`super::record`]), then each backup zip, newest first.
-//! The first file naming its id whose first chunk opens from it is the file
-//! it holds. A blob that holds an internal file of the app is deleted. Chunk
-//! AAD binds a version only an index or a record holds, so a blob none of
-//! them names cannot be read: it stays an unnamed piece until the person
-//! deletes it.
+//! the recovery record the blob carries ([`super::record`]), then each backup
+//! zip, newest first. The first file naming its id whose first chunk opens
+//! from it is the file it holds. A blob that holds an internal file of the
+//! app is deleted. Chunk AAD binds a version only an index or a record holds,
+//! so a blob none of them names cannot be read: it stays an unnamed piece
+//! until the person deletes it.
 //! Backups and store zips copy `store/` only, so they leave `held/` out. The
 //! folder is removed once nothing is in it ([`remove_empty_held`]).
 
@@ -36,13 +42,14 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::aead::{CONTENT_KEY_LEN, INDEX_KEY_LEN, RECORD_KEY_LEN};
-use super::chunk::{blob_path, first_chunk_opens, StagedBlobs, BLOB_FILE_SUFFIX, MIN_BLOB_LEN};
+use super::chunk::{blob_path, first_chunk_opens, StagedBlobs, BLOB_FILE_SUFFIX};
 use super::header::{parse_header_bytes, VaultHeader, HEADER_DIR_NAME, HEADER_FILE_NAME};
 use super::index::{
-    open_sealed_index, FileProblem, HeldBlob, VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_DIR_NAME,
-    INDEX_FILE_NAME,
+    open_sealed_index, FileProblem, HeldBlob, IndexPair, VaultIndex, VaultNode, DATA_DIR_NAME,
+    INDEX_DIR_NAME, INDEX_FILE_NAME,
 };
+use super::key_copy::read_prefix;
+use super::keys::Keyring;
 use super::record::read_record;
 use super::tree::{
     child_logical_path, file_name, is_reserved_logical, mkdir_logical, parent_logical,
@@ -62,75 +69,46 @@ pub(crate) fn held_dir(store_dir: &Path) -> PathBuf {
     store_dir.parent().unwrap_or(store_dir).join(HELD_DIR_NAME)
 }
 
-/// What an unlock can read to tell which file a held blob holds.
-pub(crate) struct HeldSources<'a> {
-    /// The tree in the index copy when that file holds another one.
-    pub other_copy: Option<&'a VaultIndex>,
-    /// The key of the record each blob carries ([`super::record`]).
-    pub record_key: &'a [u8; RECORD_KEY_LEN],
-    /// This vault's backup zips, newest first. Listed and read only while a
-    /// newly held blob is still unknown.
-    pub backup_zips: &'a dyn Fn() -> Vec<PathBuf>,
-}
-
-/// Match `data/` and `held/` with `index`, as the module documentation says.
-/// Every change lands in `index` (marks, held records, the released list).
-/// True when the held records or the released list changed, so the caller
-/// seals them at once. A folder that cannot be listed leaves what it holds as
-/// it is: an absence it did not see proves nothing.
+/// Match `data/` and `held/` with `index`, as the module documentation says,
+/// with `keys` to read records and key copies and `backup_zips` (this vault's,
+/// newest first) to name what no record does. Every change lands in `index`
+/// (marks, held records, the released list, `key_copies_due`). True when the
+/// held records, the released list, or the pass changed, so the caller seals
+/// them at once. A folder that cannot be listed leaves what it holds as it
+/// is: an absence it did not see proves nothing.
 pub(crate) fn settle_held(
     store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-    index_key: &[u8; INDEX_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
-    sources: HeldSources<'_>,
+    backup_zips: &dyn Fn() -> Vec<PathBuf>,
 ) -> bool {
-    // A released id the other index file names holds that tree's bytes (a
-    // file emptied and written again keeps its id): it is set aside and named
-    // like any blob that tree alone names, never deleted as an old version.
-    let released = index.released.len();
-    if let Some(copy) = sources.other_copy {
-        let named: HashSet<&str> = copy
-            .nodes()
-            .iter()
-            .filter_map(VaultNode::as_file)
-            .filter(|(_, size, _)| *size > 0)
-            .map(|(file_id, _, _)| file_id)
-            .collect();
-        index
-            .released
-            .retain(|file_id| !named.contains(file_id.as_str()));
-    }
-    let unreleased = index.released.len() != released;
     let held = held_dir(store_dir);
     let mut held_files = list_held(&held);
-    let opens = |blob: &Path, node: &VaultNode| first_chunk_opens(blob, header, content_key, node);
-    let moved = walk_data(store_dir, &held, index, held_files.as_mut(), &opens);
+    let released = index.released.len();
+    let pass_due = index.key_copies_due;
+    let opens = |blob: &Path, node: &VaultNode| first_chunk_opens(blob, keys, node);
+    let moved = walk_data(store_dir, &held, keys, index, held_files.as_mut(), &opens);
+    let walked = index.released.len() != released || index.key_copies_due != pass_due;
     let Some(held_files) = held_files else {
-        return unreleased;
+        return walked;
     };
     let recorded = index.held.len();
     index.held.retain(|entry| held_files.contains(&entry.name));
-    let dropped = index.held.len() != recorded || unreleased;
+    let dropped = index.held.len() != recorded || walked;
+    // A held file the index released is a copy a password change made before
+    // its seal landed: like a released blob of `data/`, it stays where it is
+    // for the first seal that flushes to delete.
     let mut unknown: Vec<&String> = held_files
         .iter()
         .filter(|name| !index.held.iter().any(|entry| &entry.name == *name))
+        .filter(|name| !index.released.contains(*name))
         .collect();
     let changed = if unknown.is_empty() {
         dropped
     } else {
         unknown.sort();
         let unknown: Vec<String> = unknown.into_iter().cloned().collect();
-        let (added, named) = name_held(
-            &held,
-            header,
-            content_key,
-            index_key,
-            index,
-            unknown,
-            sources,
-        );
+        let (added, named) = name_held(&held, keys, index, unknown, backup_zips);
         let id = vault_id_of(store_dir);
         let moved = moved.to_string();
         let named = named.to_string();
@@ -148,6 +126,45 @@ pub(crate) fn settle_held(
     // Every blob may have gone back to `data/`, or been an app file deleted.
     remove_empty_held(store_dir);
     changed
+}
+
+/// True when a file of `index` with data names a blob `data/` does not hold
+/// and was not marked missing before: what the walk of [`settle_held`] would
+/// mark missing for the first time. Reads only folder listings and moves
+/// nothing, for an unlock that must decide before it writes (a pending
+/// password change). A shard that cannot be listed counts as holding its
+/// blobs.
+pub(crate) fn newly_missing(store_dir: &Path, index: &VaultIndex) -> bool {
+    let named: HashSet<Uuid> = index
+        .nodes()
+        .iter()
+        .filter(|node| node.problem != Some(FileProblem::Missing))
+        .filter_map(|node| node.as_file())
+        .filter(|(_, size, _)| *size > 0)
+        .filter_map(|(file_id, _, _)| Uuid::parse_str(file_id).ok())
+        .collect();
+    let mut walk = DataWalk::default();
+    let data = store_dir.join(DATA_DIR_NAME);
+    match crate::host_fs::read_dir(&data) {
+        Ok(entries) => {
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    return false;
+                };
+                let Some(shard) = blob_shard_name(&entry) else {
+                    continue;
+                };
+                if !list_shard(&entry.path(), &named, &mut walk) {
+                    walk.unlisted.insert(shard);
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return false,
+    }
+    named.iter().any(|id| {
+        !walk.present.contains(id) && !walk.unlisted.contains(&id.simple().to_string()[..2])
+    })
 }
 
 /// Remove the `held/` folder of the store at `store_dir` once nothing is in
@@ -180,6 +197,15 @@ fn list_held(held: &Path) -> Option<HashSet<String>> {
         }
     }
     Some(names)
+}
+
+/// Every held blob of the store at `store_dir`, by its path in `held/`
+/// ([`list_held`]). Empty when `held/` is not there or cannot be listed.
+pub(crate) fn held_blob_paths(store_dir: &Path) -> Vec<PathBuf> {
+    let held = held_dir(store_dir);
+    let mut names: Vec<String> = list_held(&held).unwrap_or_default().into_iter().collect();
+    names.sort();
+    names.into_iter().map(|name| held.join(name)).collect()
 }
 
 /// Bytes the held blobs of the store at `store_dir` take on disk: the files
@@ -220,7 +246,7 @@ pub(crate) fn held_disk_bytes(store_dir: &Path) -> Result<u64> {
 
 /// The blob id a held file name carries: `<id>.blob`, or `<id>.<n>.blob` when
 /// that name was taken.
-fn held_blob_id(name: &str) -> Option<Uuid> {
+pub(crate) fn held_blob_id(name: &str) -> Option<Uuid> {
     let stem = name.strip_suffix(BLOB_FILE_SUFFIX)?;
     let id = stem.split_once('.').map_or(stem, |(id, _)| id);
     Uuid::parse_str(id).ok()
@@ -247,40 +273,44 @@ fn held_name_for(id: Uuid, held_files: &HashSet<String>, index: &VaultIndex) -> 
         .unwrap_or(first)
 }
 
-/// What one shard folder of `data/` holds.
+/// What the shard folders of `data/` hold.
 #[derive(Default)]
 struct DataWalk {
-    /// Blobs the tree names.
+    /// Blobs the tree names or releases.
     present: HashSet<Uuid>,
-    /// Blobs no file names.
+    /// Regular files `<id>.blob` no file names and the index did not release.
     unnamed: Vec<(Uuid, PathBuf)>,
-    /// Anything else, deleted.
-    stray: Vec<PathBuf>,
+    /// Anything named like a blob that is not a regular file: left as it is.
+    odd: usize,
     /// Shards that could not be listed in full.
     unlisted: HashSet<String>,
 }
 
 /// Walk `data/`: mark files whose blob is gone, take back held blobs the tree
-/// names, and move blobs no file names to `held/`. `held_files` is `None`
-/// when `held/` could not be listed: then nothing moves either way. `opens`
-/// says whether a blob's first chunk opens as a file's ([`take_back`]).
-/// Returns how many blobs moved to `held/`.
+/// names, and move blobs no file names to `held/`. When a file is marked
+/// missing for the first time, the released blobs go to `held/` too and leave
+/// the list. `held_files` is `None` when `held/` could not be listed: then
+/// nothing moves either way. `opens` says whether a blob's first chunk opens
+/// as a file's ([`take_back`]). Returns how many blobs moved to `held/`.
 fn walk_data(
     store_dir: &Path,
     held: &Path,
+    keys: &Keyring,
     index: &mut VaultIndex,
     mut held_files: Option<&mut HashSet<String>>,
     opens: &dyn Fn(&Path, &VaultNode) -> bool,
 ) -> usize {
-    // A released blob stays in `data/` for the session's first seal that
-    // flushes, which deletes it: it is an old version, not data to review.
+    let released: HashSet<Uuid> = index
+        .released
+        .iter()
+        .filter_map(|file_id| Uuid::parse_str(file_id).ok())
+        .collect();
     let referenced: HashSet<Uuid> = index
         .nodes()
         .iter()
         .filter_map(|node| node.as_file())
-        .map(|(file_id, _, _)| file_id)
-        .chain(index.released.iter().map(String::as_str))
-        .filter_map(|file_id| Uuid::parse_str(file_id).ok())
+        .filter_map(|(file_id, _, _)| Uuid::parse_str(file_id).ok())
+        .chain(released.iter().copied())
         .collect();
     let mut walk = DataWalk::default();
     match crate::host_fs::read_dir(store_dir.join(DATA_DIR_NAME)) {
@@ -302,15 +332,20 @@ fn walk_data(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return 0,
     }
-    for path in &walk.stray {
-        let _ = crate::host_fs::remove_file(path);
+    if walk.odd > 0 {
+        let odd = walk.odd.to_string();
+        log_event(
+            LogLevel::Warn,
+            "vault_data_odd_entries",
+            &[
+                ("id", vault_id_of(store_dir).as_str()),
+                ("count", odd.as_str()),
+            ],
+        );
     }
     // Every move is flushed before the seal that records it.
     let mut moves = StagedBlobs::default();
-    let mut moved = 0;
-    if let Some(held_files) = held_files.as_deref_mut() {
-        moved = hold_unnamed(held, &walk.unnamed, held_files, index, &mut moves);
-    }
+    let mut newly_missing = false;
     index.mark_files(|node| {
         // An empty file has no blob.
         let Some((file_id, size, _)) = node.as_file() else {
@@ -327,11 +362,42 @@ fn walk_data(
                 take_back(store_dir, held, node, held_files, &mut moves, opens)
             });
         match node.problem {
-            _ if !present => Some(FileProblem::Missing),
+            Some(FileProblem::Missing) if !present => Some(FileProblem::Missing),
+            _ if !present => {
+                newly_missing = true;
+                Some(FileProblem::Missing)
+            }
             Some(FileProblem::Missing) => None,
             kept => kept,
         }
     });
+    if newly_missing && !released.is_empty() {
+        // The index may be older than the blobs: what it released may hold a
+        // file's only copy. Set aside, never deleted.
+        let named: HashSet<Uuid> = index
+            .nodes()
+            .iter()
+            .filter_map(|node| node.as_file())
+            .filter_map(|(file_id, _, _)| Uuid::parse_str(file_id).ok())
+            .collect();
+        for id in released.iter().filter(|id| !named.contains(*id)) {
+            if let Ok(path) = blob_path(store_dir, &id.to_string()) {
+                if walk.present.contains(id) && path.host_is_file() {
+                    walk.unnamed.push((*id, path));
+                }
+            }
+        }
+        index.released.clear();
+        log_event(
+            LogLevel::Warn,
+            "vault_released_held",
+            &[("id", vault_id_of(store_dir).as_str())],
+        );
+    }
+    let mut moved = 0;
+    if let Some(held_files) = held_files {
+        moved = hold_unnamed(held, keys, &walk.unnamed, held_files, index, &mut moves);
+    }
     // Not tried again: the next unlock walks both folders anew.
     if moves.sync_moves().is_err() {
         log_event(
@@ -352,7 +418,7 @@ fn blob_shard_name(entry: &crate::host_fs::DirEntry) -> Option<String> {
 }
 
 /// Sort what one shard folder holds into `walk`. False when the folder could
-/// not be listed in full. Only a blob no file names is measured.
+/// not be listed in full.
 fn list_shard(shard: &Path, referenced: &HashSet<Uuid>, walk: &mut DataWalk) -> bool {
     let Ok(children) = crate::host_fs::read_dir(shard) else {
         return false;
@@ -376,12 +442,10 @@ fn list_shard(shard: &Path, referenced: &HashSet<Uuid>, walk: &mut DataWalk) -> 
             continue;
         }
         let path = child.path();
-        // `remove_file` on a link removes the link, not its target.
+        // A link is not followed: it is no blob of this vault.
         match crate::host_fs::symlink_metadata(&path) {
-            Ok(meta) if meta.is_file() && meta.len() >= MIN_BLOB_LEN => {
-                walk.unnamed.push((id, path));
-            }
-            Ok(_) => walk.stray.push(path),
+            Ok(meta) if meta.is_file() => walk.unnamed.push((id, path)),
+            Ok(_) => walk.odd += 1,
             Err(_) => complete = false,
         }
     }
@@ -389,12 +453,14 @@ fn list_shard(shard: &Path, referenced: &HashSet<Uuid>, walk: &mut DataWalk) -> 
 }
 
 /// Move each blob no file names into `held/`, and stage `held/` in `moves`.
-/// One that cannot move stays in `data/` for the next unlock.
+/// One that cannot move stays in `data/` for the next unlock. A moved blob
+/// whose key copy is behind `keys`' block, or does not read, turns the pass on.
 fn hold_unnamed(
     held: &Path,
+    keys: &Keyring,
     unnamed: &[(Uuid, PathBuf)],
     held_files: &mut HashSet<String>,
-    index: &VaultIndex,
+    index: &mut VaultIndex,
     moves: &mut StagedBlobs,
 ) -> usize {
     if unnamed.is_empty() || crate::host_fs::create_dir_all(held).is_err() {
@@ -408,9 +474,23 @@ fn hold_unnamed(
             moves.add_moved(&target);
             held_files.insert(name);
             moved += 1;
+            if key_copy_behind(&target, keys) {
+                index.key_copies_due = true;
+            }
         }
     }
     moved
+}
+
+/// True when the blob at `path` carries no key copy that reads, or one of
+/// this vault behind the block `keys` came from.
+pub(crate) fn key_copy_behind(path: &Path, keys: &Keyring) -> bool {
+    match read_prefix(path) {
+        None => true,
+        Some(prefix) => {
+            prefix.identity == keys.identity() && prefix.generation < keys.block().generation
+        }
+    }
 }
 
 /// Put a held blob of the file `node` back into `data/` when the tree names
@@ -490,12 +570,7 @@ fn all_named(open: &[Unknown]) -> bool {
 }
 
 /// Name the blobs of `open` that `source` names by their id.
-fn name_from_index(
-    open: &mut [Unknown],
-    source: &VaultIndex,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-) {
+fn name_from_index(open: &mut [Unknown], source: &VaultIndex, keys: &Keyring) {
     let by_id: HashMap<Uuid, &VaultNode> = source
         .nodes()
         .iter()
@@ -509,7 +584,7 @@ fn name_from_index(
         let Some(&node) = unknown.id.and_then(|id| by_id.get(&id)) else {
             continue;
         };
-        if first_chunk_opens(&unknown.path, header, content_key, node) {
+        if first_chunk_opens(&unknown.path, keys, node) {
             unknown.file = Some((source.saves, node.clone()));
         }
     }
@@ -517,21 +592,15 @@ fn name_from_index(
 
 /// Name the blobs of `open` from the record each one carries
 /// ([`super::record`]): the newest one, as the seal that wrote it saw the file.
-fn name_from_records(
-    open: &mut [Unknown],
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-    record_key: &[u8; RECORD_KEY_LEN],
-) {
+fn name_from_records(open: &mut [Unknown], keys: &Keyring) {
     for unknown in open.iter_mut().filter(|unknown| unknown.file.is_none()) {
         let Some(id) = unknown.id else {
             continue;
         };
-        let Some(record) = read_record(&unknown.path, &id.to_string(), header, record_key, false)
-        else {
+        let Some(record) = read_record(&unknown.path, &id.to_string(), keys, false) else {
             continue;
         };
-        if first_chunk_opens(&unknown.path, header, content_key, &record.node) {
+        if first_chunk_opens(&unknown.path, keys, &record.node) {
             unknown.file = Some((record.save, record.node));
         }
     }
@@ -545,9 +614,7 @@ fn name_from_records(
 /// still unnamed.
 pub(super) fn name_from_backups(
     blobs: &[(PathBuf, String)],
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-    index_key: &[u8; INDEX_KEY_LEN],
+    keys: &Keyring,
     backup_zips: &dyn Fn() -> Vec<PathBuf>,
 ) -> Vec<Option<(u64, VaultNode)>> {
     let mut open: Vec<Unknown> = blobs
@@ -561,8 +628,8 @@ pub(super) fn name_from_backups(
         .collect();
     if !all_named(&open) {
         for zip in backup_zips() {
-            if let Some(source) = backup_index(&zip, header, index_key) {
-                name_from_index(&mut open, &source, header, content_key);
+            if let Some(source) = backup_index(&zip, keys) {
+                name_from_index(&mut open, &source, keys);
                 if all_named(&open) {
                     break;
                 }
@@ -580,17 +647,14 @@ pub(super) fn name_from_backups(
 }
 
 /// Record each of the `unknown` held files in `index`, with the file it holds
-/// when a source names it: the other index file, then the record the blob
-/// carries, then each backup zip. Returns how many were recorded, and how
-/// many of those hold a file.
+/// when a source names it: the record the blob carries, then each backup zip.
+/// Returns how many were recorded, and how many of those hold a file.
 fn name_held(
     held: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-    index_key: &[u8; INDEX_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
     unknown: Vec<String>,
-    sources: HeldSources<'_>,
+    backup_zips: &dyn Fn() -> Vec<PathBuf>,
 ) -> (usize, usize) {
     let mut open: Vec<Unknown> = unknown
         .into_iter()
@@ -601,16 +665,11 @@ fn name_held(
             file: None,
         })
         .collect();
-    if let Some(copy) = sources.other_copy {
-        name_from_index(&mut open, copy, header, content_key);
-    }
+    name_from_records(&mut open, keys);
     if !all_named(&open) {
-        name_from_records(&mut open, header, content_key, sources.record_key);
-    }
-    if !all_named(&open) {
-        for zip in (sources.backup_zips)() {
-            if let Some(source) = backup_index(&zip, header, index_key) {
-                name_from_index(&mut open, &source, header, content_key);
+        for zip in backup_zips() {
+            if let Some(source) = backup_index(&zip, keys) {
+                name_from_index(&mut open, &source, keys);
                 if all_named(&open) {
                     break;
                 }
@@ -655,24 +714,22 @@ fn name_held(
     (index.held.len() - recorded, named)
 }
 
-/// The index of the backup zip at `zip`, when it is a copy of this vault.
-/// The content identity a backup zip carries in its header, readable with no
-/// password. `None` when it holds no vault header.
-pub(crate) fn backup_zip_identity(zip: &Path) -> Option<Uuid> {
+/// The header a backup zip carries, readable with no password: its content
+/// identity and its unlock settings. `None` when it holds no vault header that
+/// reads.
+pub(crate) fn backup_zip_header(zip: &Path) -> Option<VaultHeader> {
     let file = crate::paths::open_nofollow(zip, crate::paths::NofollowMode::Read).ok()?;
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file)).ok()?;
     let header_name = format!("{STORE_DIR_NAME}/{HEADER_DIR_NAME}/{HEADER_FILE_NAME}");
     let raw = zip_entry(&mut archive, &header_name, MAX_SOURCE_HEADER_BYTES)?;
-    parse_header_bytes(&raw)
-        .ok()
-        .map(|header| header.content_identity)
+    parse_header_bytes(&raw).ok()
 }
 
-fn backup_index(
-    zip: &Path,
-    header: &VaultHeader,
-    index_key: &[u8; INDEX_KEY_LEN],
-) -> Option<VaultIndex> {
+/// The index of the backup zip at `zip`, when it is a copy of this vault and
+/// `keys` holds the key its index is sealed with: the write key of the
+/// backup's header. A backup from before a password change was sealed with a
+/// key the vault no longer holds, so it names nothing.
+fn backup_index(zip: &Path, keys: &Keyring) -> Option<VaultIndex> {
     let file = crate::paths::open_nofollow(zip, crate::paths::NofollowMode::Read).ok()?;
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file)).ok()?;
     let header_name = format!("{STORE_DIR_NAME}/{HEADER_DIR_NAME}/{HEADER_FILE_NAME}");
@@ -683,11 +740,12 @@ fn backup_index(
         MAX_SOURCE_HEADER_BYTES,
     )?)
     .ok()?;
-    if backup_header.content_identity != header.content_identity {
+    if backup_header.content_identity != keys.identity() {
         return None;
     }
+    let pair = IndexPair::of_block(keys, &backup_header.top)?;
     let sealed = zip_entry(&mut archive, &index_name, MAX_SOURCE_INDEX_BYTES)?;
-    open_sealed_index(&backup_header, index_key, &sealed).ok()
+    open_sealed_index(&pair, &sealed).ok()
 }
 
 fn zip_entry<R: Read + std::io::Seek>(
@@ -826,6 +884,49 @@ fn restore_parent(index: &mut VaultIndex, path: &str) -> Result<String> {
     Ok(parent.to_string())
 }
 
+/// After a seal of `index` that flushed: delete what it lists as released
+/// ([`VaultIndex::take_released`]), a blob of `data/` by its file id, one of
+/// `held/` by its name. Returns how many could not be deleted: each stays as
+/// ciphertext no index names, and the next unlock sets it aside.
+pub(crate) fn delete_released(store_dir: &Path, index: &mut VaultIndex) -> usize {
+    let held = held_dir(store_dir);
+    let mut failed = 0;
+    let mut touched_held = false;
+    for entry in index.take_released() {
+        let path = if held_blob_id(&entry).is_some() {
+            touched_held = true;
+            Ok(held.join(&entry))
+        } else {
+            blob_path(store_dir, &entry)
+        };
+        let removed =
+            path.map_err(|_| ())
+                .and_then(|path| match crate::host_fs::remove_file(&path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(_) => Err(()),
+                });
+        if removed.is_err() {
+            failed += 1;
+        }
+    }
+    if touched_held {
+        remove_empty_held(store_dir);
+    }
+    if failed > 0 {
+        let count = failed.to_string();
+        log_event(
+            LogLevel::Warn,
+            "vault_fs_leftover_blobs",
+            &[
+                ("id", vault_id_of(store_dir).as_str()),
+                ("count", count.as_str()),
+            ],
+        );
+    }
+    failed
+}
+
 /// Take the held files `names` out of `index` and delete them from `held/`.
 /// A name that is not held is skipped. A file that cannot be deleted keeps its
 /// record. Nothing needs a seal: a record whose file is gone is dropped by the
@@ -863,6 +964,7 @@ mod tests {
     use super::*;
     use crate::store::chunk::{read_logical_file, write_logical_file, write_logical_range};
     use crate::store::index::{index_copy_path, index_path};
+    use crate::store::key_copy::KEY_COPY_LEN;
     use crate::store::tree::INTERNAL_WORKSPACE_FILE;
     use crate::store::{create_empty_store, flush_index, open_store, KdfUnlockPreset, OpenedStore};
 
@@ -885,46 +987,21 @@ mod tests {
             open_store(&self.dir, PW).unwrap()
         }
 
+        /// Write `path` whole and seal, with no record on its blob.
         fn write(&self, opened: &mut OpenedStore, path: &str, body: &[u8]) {
-            write_logical_file(
-                &self.dir,
-                &opened.header,
-                &opened.content_key,
-                &mut opened.index,
-                path,
-                body,
-            )
-            .unwrap();
+            write_logical_file(&self.dir, &opened.keys, &mut opened.index, path, body).unwrap();
             flush_index(&self.dir, opened).unwrap();
         }
 
         fn read(&self, opened: &OpenedStore, path: &str) -> Vec<u8> {
-            read_logical_file(
-                &self.dir,
-                &opened.header,
-                &opened.content_key,
-                &opened.index,
-                path,
-            )
-            .unwrap()
+            read_logical_file(&self.dir, &opened.keys, &opened.index, path).unwrap()
         }
 
         /// Open and settle, with `zips` as the backups.
         fn settle(&self, zips: Vec<PathBuf>) -> OpenedStore {
             let mut opened = self.open();
             let backups = move || zips.clone();
-            settle_held(
-                &self.dir,
-                &opened.header,
-                &opened.content_key,
-                &opened.index_key,
-                &mut opened.index,
-                HeldSources {
-                    other_copy: opened.other_copy.as_ref(),
-                    record_key: &opened.record_key,
-                    backup_zips: &backups,
-                },
-            );
+            settle_held(&self.dir, &opened.keys, &mut opened.index, &backups);
             opened
         }
 
@@ -937,33 +1014,45 @@ mod tests {
             blob_path(&self.dir, file_id).unwrap()
         }
 
-        /// `a.txt` sealed, then `docs/b.txt` written by a seal whose primary
-        /// index never landed: only the index copy names it. Returns its blob.
-        fn seal_cut_after_copy(&self) -> PathBuf {
+        /// `a.txt` sealed, then `docs/b.txt` made and recorded for a seal that
+        /// never reached the disk. Returns its blob, which only its own record
+        /// names.
+        fn made_and_recorded(&self) -> PathBuf {
             let mut opened = self.open();
             self.write(&mut opened, "a.txt", b"first");
-            let previous = crate::host_fs::read(index_path(&self.dir)).unwrap();
             mkdir_logical(&mut opened.index, "docs").unwrap();
-            self.write(&mut opened, "docs/b.txt", b"second");
-            crate::host_fs::write(index_path(&self.dir), previous).unwrap();
+            let (_, made) = write_logical_file(
+                &self.dir,
+                &opened.keys,
+                &mut opened.index,
+                "docs/b.txt",
+                b"second",
+            )
+            .unwrap();
+            made.sync_before_index(&opened.records()).unwrap();
             self.blob_of(&opened, "docs/b.txt")
+        }
+
+        /// Put the index files back to `sealed`, as an older index restored.
+        fn put_index(&self, sealed: &[u8]) {
+            crate::host_fs::write(index_path(&self.dir), sealed).unwrap();
+            crate::host_fs::write(index_copy_path(&self.dir), sealed).unwrap();
         }
     }
 
     #[test]
     fn open_store_leaves_data_as_it_is() {
         let store = Store::new();
-        let blob = store.seal_cut_after_copy();
-        let opened = store.open();
-        assert!(opened.other_copy.is_some());
+        let blob = store.made_and_recorded();
+        store.open();
         assert!(blob.host_exists());
         assert!(!store.held().host_exists());
     }
 
     #[test]
-    fn a_blob_only_the_other_index_file_names_is_held_and_named() {
+    fn a_blob_only_its_record_names_is_held_and_named() {
         let store = Store::new();
-        let blob = store.seal_cut_after_copy();
+        let blob = store.made_and_recorded();
 
         let mut opened = store.settle(Vec::new());
         assert!(!blob.host_exists());
@@ -976,8 +1065,7 @@ mod tests {
             crate::host_fs::metadata(&held_path).unwrap().len()
         );
 
-        // Put back where it was: its folder, gone with the newer tree, is
-        // made again.
+        // Put back where it was: its folder, never sealed, is made again.
         assert!(opened.index.find("docs").is_none());
         let restored = restore_held(
             &store.dir,
@@ -995,7 +1083,7 @@ mod tests {
     #[test]
     fn a_held_file_whose_path_is_taken_comes_back_beside_it() {
         let store = Store::new();
-        store.seal_cut_after_copy();
+        store.made_and_recorded();
         let mut opened = store.settle(Vec::new());
         let name = opened.index.held[0].name.clone();
         mkdir_logical(&mut opened.index, "docs").unwrap();
@@ -1010,7 +1098,7 @@ mod tests {
     #[test]
     fn a_held_file_whose_folder_is_a_file_now_comes_back_at_the_top() {
         let store = Store::new();
-        store.seal_cut_after_copy();
+        store.made_and_recorded();
         let mut opened = store.settle(Vec::new());
         let name = opened.index.held[0].name.clone();
         store.write(&mut opened, "docs", b"a file");
@@ -1023,7 +1111,7 @@ mod tests {
     #[test]
     fn an_undone_restore_puts_the_blob_back_in_held() {
         let store = Store::new();
-        store.seal_cut_after_copy();
+        store.made_and_recorded();
         let mut opened = store.settle(Vec::new());
         let name = opened.index.held[0].name.clone();
         let restored =
@@ -1044,17 +1132,22 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_zip_names_a_held_blob_when_no_index_file_does() {
+    fn a_backup_zip_names_a_held_blob_when_no_record_does() {
         let store = Store::new();
-        let blob = store.seal_cut_after_copy();
-        // A backup made while both index files named `docs/b.txt`.
+        let mut opened = store.open();
+        store.write(&mut opened, "a.txt", b"first");
+        let older = crate::host_fs::read(index_path(&store.dir)).unwrap();
+        mkdir_logical(&mut opened.index, "docs").unwrap();
+        store.write(&mut opened, "docs/b.txt", b"second");
+        let blob = store.blob_of(&opened, "docs/b.txt");
+        // A backup made while the index named `docs/b.txt`; the blob has no
+        // record of its own.
         let zip = store.dir.parent().unwrap().join("backup.zip");
-        let header = crate::host_fs::read(VaultHeader::path(&store.dir)).unwrap();
-        let named = crate::host_fs::read(index_copy_path(&store.dir)).unwrap();
+        let header = crate::host_fs::read(crate::store::VaultHeader::path(&store.dir)).unwrap();
+        let named = crate::host_fs::read(index_path(&store.dir)).unwrap();
         write_zip(&zip, &header, &named);
-        // Then the copy went back too.
-        let primary = crate::host_fs::read(index_path(&store.dir)).unwrap();
-        crate::host_fs::write(index_copy_path(&store.dir), &primary).unwrap();
+        // Then an older index came back.
+        store.put_index(&older);
 
         let opened = store.settle(vec![zip]);
         assert!(!blob.host_exists());
@@ -1066,36 +1159,6 @@ mod tests {
     }
 
     #[test]
-    fn a_blob_whose_seal_never_landed_is_named_from_its_own_record() {
-        let store = Store::new();
-        let mut opened = store.open();
-        store.write(&mut opened, "a.txt", b"first");
-        // A file made and recorded for a seal whose index never reached the
-        // disk, and that no backup names.
-        mkdir_logical(&mut opened.index, "docs").unwrap();
-        let (_, made) = write_logical_file(
-            &store.dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "docs/b.txt",
-            b"second",
-        )
-        .unwrap();
-        made.sync_before_index(&opened.records()).unwrap();
-        let blob = store.blob_of(&opened, "docs/b.txt");
-        drop(opened);
-
-        let mut opened = store.settle(Vec::new());
-        assert!(!blob.host_exists());
-        assert_eq!(opened.index.held.len(), 1);
-        let held = opened.index.held[0].clone();
-        assert_eq!(held.file.as_ref().unwrap().path, "docs/b.txt");
-        restore_held(&store.dir, &mut opened.index, &[held.name]).unwrap();
-        assert_eq!(store.read(&opened, "docs/b.txt"), b"second");
-    }
-
-    #[test]
     fn a_blob_with_no_record_and_no_index_naming_it_stays_a_piece() {
         let store = Store::new();
         let mut opened = store.open();
@@ -1103,8 +1166,7 @@ mod tests {
         // Made, never recorded, never sealed.
         write_logical_file(
             &store.dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "b.txt",
             b"second",
@@ -1132,30 +1194,63 @@ mod tests {
     }
 
     #[test]
-    fn a_blob_no_index_names_is_kept_as_a_piece_and_a_short_one_is_deleted() {
+    fn every_unnamed_blob_is_held_whatever_its_length_and_none_is_deleted() {
         let store = Store::new();
-        let piece = blob_path(&store.dir, "00000000-0000-4000-8000-000000000099").unwrap();
+        let long = blob_path(&store.dir, "00000000-0000-4000-8000-000000000099").unwrap();
         let short = blob_path(&store.dir, "00000000-0000-4000-8000-000000000098").unwrap();
-        crate::host_fs::create_dir_all(piece.parent().unwrap()).unwrap();
-        crate::host_fs::write(&piece, vec![7u8; MIN_BLOB_LEN as usize]).unwrap();
-        crate::host_fs::write(&short, vec![7u8; MIN_BLOB_LEN as usize - 1]).unwrap();
+        let empty = blob_path(&store.dir, "00000000-0000-4000-8000-000000000097").unwrap();
+        crate::host_fs::create_dir_all(long.parent().unwrap()).unwrap();
+        crate::host_fs::write(&long, vec![7u8; 9000]).unwrap();
+        crate::host_fs::write(&short, vec![7u8; 3]).unwrap();
+        crate::host_fs::write(&empty, b"").unwrap();
 
         let mut opened = store.settle(Vec::new());
-        assert!(!piece.host_exists());
-        assert!(!short.host_exists());
-        assert_eq!(opened.index.held.len(), 1);
-        let held = opened.index.held[0].clone();
-        assert_eq!(held.name, "00000000-0000-4000-8000-000000000099.blob");
-        assert!(held.file.is_none());
-        assert_eq!(held.size, MIN_BLOB_LEN);
+        let mut names: Vec<(String, u64)> = opened
+            .index
+            .held
+            .iter()
+            .map(|held| (held.name.clone(), held.size))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                ("00000000-0000-4000-8000-000000000097.blob".to_string(), 0),
+                ("00000000-0000-4000-8000-000000000098.blob".to_string(), 3),
+                (
+                    "00000000-0000-4000-8000-000000000099.blob".to_string(),
+                    9000
+                ),
+            ]
+        );
+        assert!(opened.index.held.iter().all(|held| held.file.is_none()));
+        // Their key copies do not read, so the pass is due.
+        assert!(opened.index.key_copies_due);
 
         // A piece cannot be put back; deleting it removes it for good.
-        let names = std::slice::from_ref(&held.name);
+        let name = opened.index.held[0].name.clone();
+        let names = std::slice::from_ref(&name);
         let err = restore_held(&store.dir, &mut opened.index, names).unwrap_err();
         assert!(matches!(err, UprivError::VaultHeldNotFound(_)), "{err:?}");
         delete_held(&store.dir, &mut opened.index, names).unwrap();
+        assert_eq!(opened.index.held.len(), 2);
+        assert!(!store.held().join(&name).host_exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_of_data_that_is_no_regular_file_is_left_where_it_is() {
+        let store = Store::new();
+        let link = blob_path(&store.dir, "00000000-0000-4000-8000-000000000099").unwrap();
+        let folder = blob_path(&store.dir, "00000000-0000-4000-8000-000000000098").unwrap();
+        crate::host_fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", &link).unwrap();
+        crate::host_fs::create_dir_all(&folder).unwrap();
+
+        let opened = store.settle(Vec::new());
         assert!(opened.index.held.is_empty());
-        assert!(!store.held().join(&held.name).host_exists());
+        assert!(crate::host_fs::symlink_metadata(&link).is_ok());
+        assert!(folder.host_is_dir());
     }
 
     #[test]
@@ -1213,8 +1308,8 @@ mod tests {
         assert!(stray.host_exists());
     }
 
-    /// A blob the index lists as released is an old version a seal let go of:
-    /// the unlock leaves it in `data/` for the session to delete, and records
+    /// A blob the index lists as released is one a seal let go of: the
+    /// unlock leaves it in `data/` for the session to delete, and records
     /// nothing to review.
     #[test]
     fn a_released_blob_stays_in_data_and_is_not_held() {
@@ -1235,27 +1330,78 @@ mod tests {
         assert!(!store.held().host_exists());
     }
 
-    /// The other index file names a blob the primary lists as released (an
-    /// emptied file written again keeps its id): it holds that tree's bytes,
-    /// so it is set aside and named, never left to be deleted.
+    /// When the unlock marks a file missing for the first time, the index may
+    /// be older than the blobs: what it released is set aside, named by its
+    /// record, and taken off the list. Nothing is deleted.
     #[test]
-    fn a_released_blob_the_index_copy_names_is_held_and_named() {
+    fn released_blobs_are_held_when_a_file_goes_missing_for_the_first_time() {
         let store = Store::new();
-        let blob = store.seal_cut_after_copy();
-        let id = blob.file_stem().unwrap().to_str().unwrap().to_string();
-        let mut primary = store.open();
-        primary.index.released.push(id);
-        let sealed =
-            crate::store::sealed_index_bytes(&primary.header, &primary.index_key, &primary.index)
-                .unwrap();
-        crate::host_fs::write(index_path(&store.dir), sealed).unwrap();
+        let mut opened = store.open();
+        store.write(&mut opened, "gone.txt", b"lost");
+        let (_, made) = write_logical_file(
+            &store.dir,
+            &opened.keys,
+            &mut opened.index,
+            "a.txt",
+            b"only",
+        )
+        .unwrap();
+        made.sync_before_index(&opened.records()).unwrap();
+        let only = store.blob_of(&opened, "a.txt");
+        let id = only.file_stem().unwrap().to_str().unwrap().to_string();
+        // An index that releases the blob holding a file's only copy, while
+        // another file's blob is gone.
+        opened.index.remove("a.txt");
+        opened.index.released.push(id);
+        flush_index(&store.dir, &mut opened).unwrap();
+        crate::host_fs::remove_file(store.blob_of(&opened, "gone.txt")).unwrap();
 
         let opened = store.settle(Vec::new());
+        assert_eq!(
+            opened.index.find("gone.txt").unwrap().problem,
+            Some(FileProblem::Missing)
+        );
         assert!(opened.index.released.is_empty());
-        assert!(!blob.host_exists());
+        assert!(!only.host_exists());
         assert_eq!(opened.index.held.len(), 1);
-        let file = opened.index.held[0].file.as_ref().expect("named");
-        assert_eq!(file.path, "docs/b.txt");
+        assert_eq!(opened.index.held[0].file.as_ref().unwrap().path, "a.txt");
+
+        // Missing before, it does not count again: nothing new is set aside.
+        let mut opened = opened;
+        flush_index(&store.dir, &mut opened).unwrap();
+        assert!(!newly_missing(&store.dir, &opened.index));
+    }
+
+    #[test]
+    fn newly_missing_reads_without_moving_anything() {
+        let store = Store::new();
+        let mut opened = store.open();
+        store.write(&mut opened, "a.txt", b"first");
+        assert!(!newly_missing(&store.dir, &opened.index));
+        let blob = store.blob_of(&opened, "a.txt");
+        let parked = store.dir.join("parked");
+        crate::host_fs::rename(&blob, &parked).unwrap();
+        assert!(newly_missing(&store.dir, &opened.index));
+        assert!(!store.held().host_exists());
+        crate::host_fs::rename(&parked, &blob).unwrap();
+        assert!(!newly_missing(&store.dir, &opened.index));
+    }
+
+    #[test]
+    fn a_held_blob_whose_key_copy_is_good_does_not_turn_the_pass_on() {
+        let store = Store::new();
+        store.made_and_recorded();
+        let opened = store.settle(Vec::new());
+        assert_eq!(opened.index.held.len(), 1);
+        assert!(!opened.index.key_copies_due);
+        let path = store.held().join(&opened.index.held[0].name);
+        assert!(!key_copy_behind(&path, &opened.keys));
+        // A blob of this vault behind the header turns it on.
+        let mut bytes = crate::host_fs::read(&path).unwrap();
+        assert!(bytes.len() as u64 > KEY_COPY_LEN);
+        bytes[0] = b'X';
+        crate::host_fs::write(&path, &bytes).unwrap();
+        assert!(key_copy_behind(&path, &opened.keys));
     }
 
     /// Two held blobs carry the file's id: the one whose first chunk opens as
@@ -1270,8 +1416,7 @@ mod tests {
         // Same id, a new version of its first chunk.
         write_logical_range(
             &store.dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "a.txt",
             0,
@@ -1300,7 +1445,7 @@ mod tests {
     #[test]
     fn a_record_keeps_its_name_when_its_blob_came_back_to_data() {
         let store = Store::new();
-        let blob = store.seal_cut_after_copy();
+        let blob = store.made_and_recorded();
         let id = blob.file_stem().unwrap().to_str().unwrap().to_string();
         // Another file already used the first name, so the blob is held as
         // `<id>.2.blob`.
@@ -1335,9 +1480,17 @@ mod tests {
         let mut opened = store.open();
         store.write(&mut opened, "a.txt", b"first");
         let previous = crate::host_fs::read(index_path(&store.dir)).unwrap();
-        store.write(&mut opened, INTERNAL_WORKSPACE_FILE, b"{}");
+        let (_, made) = write_logical_file(
+            &store.dir,
+            &opened.keys,
+            &mut opened.index,
+            INTERNAL_WORKSPACE_FILE,
+            b"{}",
+        )
+        .unwrap();
+        made.sync_before_index(&opened.records()).unwrap();
         let layout = store.blob_of(&opened, INTERNAL_WORKSPACE_FILE);
-        crate::host_fs::write(index_path(&store.dir), previous).unwrap();
+        store.put_index(&previous);
 
         let opened = store.settle(Vec::new());
         assert!(!layout.host_exists());

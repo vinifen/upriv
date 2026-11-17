@@ -21,6 +21,8 @@ export function useVaultListModals() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [vaultInfoVaultId, setVaultInfoVaultId] = useState<string | null>(null);
+  /** The vault whose Delete vault window is open. */
+  const [deleteVaultId, setDeleteVaultId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createDraft, setCreateDraft] = useState<CreateVaultDraft | null>(null);
   const [createStep, setCreateStep] = useState<CreateVaultStepId | null>(null);
@@ -72,6 +74,8 @@ export function useVaultListModals() {
     setSystemInfoOpen,
     vaultInfoVaultId,
     setVaultInfoVaultId,
+    deleteVaultId,
+    setDeleteVaultId,
     createOpen,
     setCreateOpen,
     createDraft,

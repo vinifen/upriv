@@ -35,7 +35,7 @@ export function changePasswordFormCanSubmit(fields: {
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
-  /** Rewrap requires `vault_closed` (recovery blocked). */
+  /** A password change requires `vault_closed` (recovery blocked). */
   vaultListStatus: VaultDisplayStatus;
   submitting?: boolean;
 }): boolean {
@@ -67,7 +67,7 @@ export function changeKdfFormCanSubmit(fields: {
   password: string;
   nextPreset: KdfUnlockPreset;
   currentPreset: KdfUnlockPreset;
-  /** Rewrap requires `vault_closed`. */
+  /** An unlock-RAM change requires `vault_closed`. */
   vaultListStatus: VaultDisplayStatus;
   submitting?: boolean;
 }): boolean {

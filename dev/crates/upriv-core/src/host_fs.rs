@@ -2274,8 +2274,7 @@ mode = "encrypted_dir"
         let expected = crate::store::seed_plaintext(opened.header.content_identity);
         let got = crate::store::read_logical_file(
             &store,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &opened.index,
             crate::store::SEED_LOGICAL_PATH,
         )

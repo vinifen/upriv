@@ -2,15 +2,18 @@ import { describe, expect, it } from "vitest";
 import { parseVaultDeleteOutcome } from "../delete";
 
 describe("parseVaultDeleteOutcome", () => {
-  it("reads what happened to the backups outside the data folder", () => {
-    expect(parseVaultDeleteOutcome({ outside: "kept", folder: "/mnt/usb/a" })).toEqual({
+  it("reads what happened to the backups outside the data folder, and their first folder", () => {
+    expect(
+      parseVaultDeleteOutcome({ outside: "kept", folders: ["/mnt/usb/a", "/mnt/usb/b"] }),
+    ).toEqual({
       outside: "kept",
       folder: "/mnt/usb/a",
     });
-    expect(parseVaultDeleteOutcome({ outside: "removed", folder: "/mnt/usb/a" }).outside).toBe(
-      "removed",
-    );
-    expect(parseVaultDeleteOutcome({ outside: "failed", folder: "/mnt/usb/a" }).outside).toBe(
+    expect(parseVaultDeleteOutcome({ outside: "removed", folders: [] })).toEqual({
+      outside: "removed",
+      folder: null,
+    });
+    expect(parseVaultDeleteOutcome({ outside: "failed", folders: ["/mnt/usb/a"] }).outside).toBe(
       "failed",
     );
   });

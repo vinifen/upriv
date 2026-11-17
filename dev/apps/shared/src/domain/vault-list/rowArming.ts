@@ -38,18 +38,24 @@ export interface RowPressInput {
 /**
  * What the open/close button of a vault row does now. Work the row can stop
  * puts Stop in its place: `stop`, then `stop_final` in the step it cannot
- * stop, and `stopping` once asked. `busy` is work without a row Stop (a close).
+ * stop, and `stopping` once asked. `busy` is work without a row Stop (a close,
+ * a delete). A delete that did not finish puts Continue there
+ * (`continue_delete`).
  */
-export type VaultRowButtonRole = "unlock" | "lock" | "busy" | "stop" | "stop_final" | "stopping";
+export type VaultRowButtonRole =
+  "unlock" | "lock" | "busy" | "stop" | "stop_final" | "stopping" | "continue_delete";
 
 export function vaultRowButtonRole(
   status: VaultDisplayStatus,
   work: VaultRowWork | null | undefined,
+  /** `isVaultDeleteUnfinished`: the row is `deleting` and no delete of it runs. */
+  deleteUnfinished = false,
 ): VaultRowButtonRole {
   if (work?.stop === "ready") return "stop";
   if (work?.stop === "final") return "stop_final";
   if (work?.stop === "stopping") return "stopping";
   if (status === "open") return "lock";
+  if (status === "deleting" && deleteUnfinished) return "continue_delete";
   if (isVaultPipelineDisplayBusy(status)) return "busy";
   return "unlock";
 }

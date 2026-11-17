@@ -58,6 +58,7 @@ import {
   hereDevice,
   useClosingDisplayHold,
   useDeviceInfo,
+  useKeyCopiesAfterOpen,
   usePlainRemoveJob,
   useVaultExportJob,
   useVaultPipelineRun,
@@ -68,6 +69,7 @@ import {
   useJobService,
   useVaultFileSystemService,
   useVaultLifecycleService,
+  useVaultSecurityService,
   useVaultService,
 } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -121,6 +123,7 @@ export function useVaultLifecycleActions({
   const fs = useVaultFileSystemService();
   const lifecycleService = useVaultLifecycleService();
   const jobs = useJobService();
+  const updateKeyCopies = useKeyCopiesAfterOpen(useVaultSecurityService());
   const { settings, patchSettings, replaceSettings, getSettingsSnapshot } = useAppSettingsContext();
   const here = hereDevice(useDeviceInfo(useDeviceService()));
   const {
@@ -697,6 +700,7 @@ export function useVaultLifecycleActions({
           if (switched) showToast(switched);
           const opened = vaultsRef.current.find((item) => item.id === vaultId);
           if (opened && !storageModeIsPlaintext(opened.storageMode)) startAttach(vaultId);
+          updateKeyCopies(vaultId);
         },
         onError: (errorI18nKey) => {
           openSwitchesRef.current.delete(vaultId);
@@ -766,6 +770,7 @@ export function useVaultLifecycleActions({
       showToast,
       startAttach,
       t,
+      updateKeyCopies,
       vaultName,
       vaultOpenHeld,
     ],

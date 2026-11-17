@@ -129,15 +129,16 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 1. Resolve `<vault-root>` (`UPRIV_VAULT_ROOT`, or this device's choice in the data folder list; the Gate shows Setup or the list when there is none, §3.5.3).
 2. Load `vaults/<id>/config.toml`.
 3. Wait for another process to let go of `runtime/<id>.lock` (§2.5), then acquire it — failure → `vault_locked`.
-4. Read `header/vault.header` (or `vault.header.copy` when the primary cannot be used); derive master key (Argon2id from header params) — failure → abort.
-5. Verify index / chunk tags needed for the session.
-6. If dirty close: **recovery** → unlock the encrypted vault. If a leftover `upriv_plain` folder is still there: wipe it. If header/index dead: create from backup / store zip (not a dirty-close peer).
+4. Unlock (one rule for every caller, SECURITY-CRYPTO): read both header files, try the password on every block they hold (Argon2id from each block's params), and take the first block that opens an index under a pair it may use. A pending password change is settled here (§3.2.3). A failure answers `wrong_password`, `password_outdated`, `password_change_interrupted`, `vault_index_unreadable`, or `vault_header_unreadable`, and writes nothing; only once a header and an index open together are their twins repaired.
+5. Verify index / chunk tags needed for the session. Set aside every file of `data/` no file names (`held/`), and remove header keys no chunk uses.
+6. If dirty close: **recovery** → unlock the encrypted vault. If a leftover `upriv_plain` folder is still there: wipe it. If the header or both index files are lost: the rebuild (§7), or create from backup / store zip when no key copy opens (not a dirty-close peer).
 7. `encrypted_dir`: the vault opens in the in-app file manager at once. The open never waits for a folder: the desktop then calls `vault_unlocked_folder_attach`, which mounts the unlocked folder — FUSE (Linux) + WinFsp (Windows) — when the vault's switch says so (§3.5.2). Mobile uses the in-app file manager only.
 8. `upriv_plain`: walk the vault's unlocked folder chain, write the plain-text record (§7.1), and stream `store/` into the folder it names on this device; a folder that fails hands over to the next choice with a toast (the app asks where before the password while nothing is selected). No FUSE/WinFsp.
 9. Update `.upriv/state.json` → `vaults.<id>.session = "open"`.
+10. The UI calls `vault_key_copies_update`, a job outside the open/close queue: when some key copy is behind the header (`key_copies_due`), the pass makes it the header's; otherwise it answers at once. A close stops it, and none starts once a close began.
 
 **close (v1):**
-1. Use the open session keys in RAM. Lock does not ask for the password and does not rewrap `vault.header`.
+1. Use the open session keys in RAM. Lock does not ask for the password and does not write `vault.header`.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
 3. Decide on the backup, then remove the entry in `state.json` and take the vault lock.
 4. `upriv_plain`: save the folder into `store/`, wipe the files, and remove the folder. Lock starts immediately.
@@ -203,11 +204,13 @@ Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), `files_bytes` (a
 | Condition | Action |
 |-----------|--------|
 | Dirty close / leftover `upriv_plain` folder | `recovery` |
-| `content_hash` differs from header + sealed index | `recovery` (same session). Unlock still opens that `store/`; close records its hash. Both index files gone under a header that is there counts as a difference. A missing hash or any other read error while hashing does not select recovery |
-| Header unreadable | Create new vault from backup only |
+| `content_hash` differs from both header files + the primary sealed index | `recovery` (same session). Unlock still opens that `store/`; close records its hash. A header file put back from an earlier time, the primary or the copy, shows here before any unlock. Both index files gone under a header that is there counts as a difference. A missing hash or any other read error while hashing does not select recovery |
+| Header unreadable or older than the blobs | `recovery`; the unlock answers `vault_header_unreadable` and offers the rebuild (§7.4), which reads the header back from the key copies; a new vault from backup only when no key copy opens |
 | Both index files unreadable, header opens | `recovery`; the unlock offers the rebuild (§7.4), or a new vault from backup |
+| A password change pending (a crash in it) | `recovery`, with a line saying so; the unlock asks for the new password (§3.2.3) |
 | A file's data missing or failing its tag | That file is marked and kept; vault still opens (§7.1) |
 | Successful close | Update `content_hash` + `last_close_ok_at` |
+| Any write of a header or index file of a closed vault (a change, Finish, the rebuild, a twin repaired by an unlock) | Update `content_hash` in the same step, so the row stays as it was |
 
 Related: PRD **RF-47**, **RF-48**, **RF-57**, §3.4.
 
@@ -294,12 +297,14 @@ In `encrypted_dir`, **logical paths must not appear in plaintext** under `vaults
 ```text
 store/
 ├── DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md
-├── header/vault.header       # format + KDF params + wrapped key (no cleartext tree)
+├── header/vault.header       # format + the keyring: generation, KDF params, key ids, since, wrapped keys; `change` while a password change is pending (no cleartext tree)
 ├── header/vault.header.copy  # same bytes; spare for a damaged primary
-├── index/root.idx.enc        # encrypted directory tree (paths + metadata)
+├── index/root.idx.enc        # encrypted directory tree (paths + metadata, each chunk's offset, version, and key id)
 ├── index/root.idx.enc.copy   # same bytes; spare for a damaged primary
-└── data/<hh>/<file_id>.blob  # one ciphertext file per logical file (<hh> = first two hex digits of the id); chunk offsets live in the index
+└── data/<hh>/<file_id>.blob  # one ciphertext file per logical file (<hh> = first two hex digits of the id): a 4096-byte key copy, the chunks from 4096, then recovery records
 ```
+
+Every blob's key copy is the header block it was written under, byte for byte, so the password opens any blob alone and the rebuild can read back a lost header. A chunk's version is derived from its nonce.
 
 **Crypto (see [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md)):**
 
@@ -313,7 +318,7 @@ store/
 - Never persist logical paths as human-readable filenames under `store/data/`.
 - Index updates are write-through with content (same session key).
 - An open session holds the index as its list of nodes plus a lookup table keyed by a hash of each path, so finding a file is one probe at any vault size. Every change to the list goes through the index's own methods, which keep the table in step; a rewritten file keeps its place. Each chunk version is held as its 8 bytes and written as 16 lowercase hex digits.
-- Reading an index checks its tree in the same pass that builds the table: every path is a valid store path (no empty, `.` or `..` part, no leading `/`, `\` or NUL), one node holds it, the folder above it is a folder node, and no two files name one blob. A tree that breaks one does not open, like a file whose tag fails: open uses the other index file, and a vault whose two files both break needs a backup. Every edit keeps these rules, and each save in debug test builds proves it.
+- Reading an index checks its tree in the same pass that builds the table: every path is a valid store path (no empty, `.` or `..` part, no leading `/`, `\` or NUL), one node holds it, the folder above it is a folder node, and no two files name one blob. A tree that breaks one does not open, like a file whose tag fails: open uses the other index file, and a vault whose two files both break goes to the rebuild (§7.4). A chunk whose key id is not 0 and is not in the header's keys (or a pending change's) breaks the tree too. Every edit keeps these rules, and each save in debug test builds proves it.
 - Zeros a file gains (a truncate that grows it, a write that starts past its end) are written as ciphertext. Before writing them, core asks the drive that holds `store/` for room and refuses with a full-drive error when it has too little, so one small request cannot fill the drive. Appending data does not ask. The mounted folder answers a full drive as `ENOSPC` (Linux) or `STATUS_DISK_FULL` (Windows), whether core refused or the drive did. A storage-access folder does not report its room; there the writes fail when it fills.
 - Logical names are visible only in the **virtual mount** / in-app file manager while the vault is **open** (session), not as durable plaintext on the vault volume.
 
@@ -370,7 +375,7 @@ Related: PRD **RF-52**.
   |-----|-------------|---------------|------------|
   | Close | The folder in use | The next choice of the chain that works, saved as the selection, with a toast | Retention, in the folder in use only |
   | Back up now | `saves/` of the folder in use | The same handover, into `saves/` | Kept until the person deletes it |
-  | Password or unlock-RAM safety zip | The data folder | The folder in use, only when the data folder has no room | Removed after the commit. A failed change keeps it, a stop removes it |
+  | Password change start backup (**Back up first**) | `saves/` of the data folder | `saves/` of the folder in use, only when the data folder has no room; with no room or a failed zip the change goes on without it | Kept as a Save until the person deletes it. A stop during the zip removes the partial file |
   | Rebuild copy | `saves/` of the data folder | `saves/` of the folder in use, only when the data folder has no room | Kept as a Save until the person deletes it |
 
   Close now and Stop write no zip and switch nothing. With no folder of the chain working, the backup fails with a toast and the selection stays.
@@ -396,6 +401,8 @@ Related: PRD **RF-56**, **RF-UI-05**.
 **Problem:** on HDD, `remove_file` / `rm -rf` **do not** erase bytes — only mark clusters free. On SSD, per-file wipe is best effort.
 
 **Requirement:** before removing a plaintext `upriv_plain` folder, overwrite + `fsync` + `unlink`. Close now alone removes with `unlink`, because the person chose speed behind that warning (RF-42b).
+
+**Delete vault** (`vault_delete`, a job on the delete lane) overwrites each blob's key copy with the vault's wipe setting, flushes, and removes the blob, for every blob of `data/` and `held/`: every blob holds the wrapped keys, so the wipe reaches each one. It records `[deleting]` in `config.toml` first and removes `config.toml` last (after `persistence.json`), so a crash at any step leaves a `deleting` row with **Continue**, which goes on from what is left. **Delete now** (`vault_delete_hurry`, or `vault_delete` with `now` on a delete the app did not finish) removes the blobs not reached with no overwrite. An empty vault folder left by a crash at the last step is free for a create of that id.
 
 **Algorithm (per file, order: deepest files first):**
 
@@ -781,18 +788,20 @@ User-facing metadata that is **not** sync state:
 
 Available in vault settings (**Security** / password area in UI; stored fields span `[vault]` hint + `[security]` metadata). Edit-policy gate is **`vault_closed`** — vault must be **closed** (not open, opening, closing, or recovery). User **always** enters the **current password** (never inferred from session alone).
 
-**Why closed-only:** an open session must not race the header rewrite. Recovery is out of this flow (same as `action.change_password` / `change_kdf` in `edit-policy.json`). File blobs stay. The master key stays. See SECURITY-CRYPTO.
+**Why closed-only:** an open session must not race the conversion or the header writes. Recovery is out of this flow (same as `action.change_password` / `action.finish_password_change` / `change_kdf` in `edit-policy.json`). Every change makes a new key and re-encrypts the vault; there is no other kind. The full protocol (crash states, stop, the 8-key limit, who can open what) is in SECURITY-CRYPTO.
 
 | Step | Action |
 |------|--------|
-| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current; bytes exactly as typed). One line under the new password says when it is objectively poor (§3.2.3b) |
-| 2 | UI shows **`warning.password_change_backups`** — existing backup zips keep the password from when each snapshot was created |
-| 3 | **`upriv-core`:** vault closed; verify the current password (same 5/60s unlock throttle as open). Same password is rejected |
-| 4 | Write one safety zip of the current body **before** any header byte changes, in the data folder (the backup folder in use only when the data folder has no room). If that zip fails, leave `store/` unchanged |
-| 5 | New salt, same master key. Reseal the header wrap and the name index (both bind salt/`m`/`t`/`p`). Do not rewrite file blobs |
-| 6 | Commit order: new index copy, new header primary, new header copy, new index primary. A crash in the middle still opens with one of the two passwords |
-| 7 | Update `persistence` content hash. Set `[security] password_changed_at` (ISO 8601 UTC, millisecond precision) |
-| 8 | After the header commit succeeds, remove the safety zip. A failed commit keeps it and the previous zips, and a stop removes it. The safety zip is never the close-backup record and never counts toward retention |
+| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current; bytes exactly as typed). One line under the new password says when it is objectively poor (§3.2.3b). **Back up first** is on each time the window opens; off, a warning shows and the change still runs |
+| 2 | UI shows the time note, **`vault.change_password.stop_note`**, **`vault.change_password.crash_note`**, **`vault.change_password.unreadable_note`**, and **`warning.password_change_backups`** — existing backup zips keep the password from when each snapshot was created |
+| 3 | **`upriv-core`** (`vault_change_password`, a job on the keys lane, no time limit): vault closed, no leftover plain-text folder, no change pending, no delete started, new password differs; verify the current password (same 5/60s unlock throttle as open). Free space for the largest file, twice the index, and 16 MiB, or `password_change_space_short` with the sizes |
+| 4 | With the switch on and room for it, a zip of the store as it is goes into `saves/` (data folder, or the backup folder in use when the data folder has no room) before anything in `store/` moves; no room, or a failed zip, and the change goes on without it, saying why (`backup_skipped`) |
+| 5 | Set aside unnamed blobs; free keys down to 6 when the header holds more; derive the new KEK (same cost, new salt) and make the new key; write `change` into both header twins; seal the index under the top block's pair with the first batch's new ids in `released` |
+| 6 | Convert batch by batch (64 MiB at most, within the free space): each file into a new blob under the new key, an unreadable chunk carried byte for byte with key id 0; flush, seal under `change`'s pair, delete the old blobs once that seal is flushed. The window shows the step, bar, and elapsed time from `job_status` |
+| 7 | Finish (refuses a stop): the header with the new key alone, the index with `key_copies_due` on, four atomic writes (index copy, header primary, header copy, index primary); update `content_hash`, set `[security] password_changed_at` (ISO 8601 UTC, millisecond precision), and mark the backup stamp so the next close writes a backup |
+| 8 | The pass makes every key copy the final header's, in the same job, which starts over so Stop works again; a stop there leaves the change made and the job after the next open finishes it. The result says whether the backup was written or skipped, how many files hold unreadable parts, and whether key copies wait |
+
+A **stop** after `change` was written leaves the old password, with the attempt's key kept for the files on it and a fresh write key the new password never held. A **crash** leaves a pending change: the new password settles it forward at the next open or rebuild, the old password cancels it only when nothing was converted, and otherwise answers `password_change_interrupted`. A settled change with files left on an older key is **unfinished**: the row says so, and the Password screen opens on **Finish** (`vault_password_change_finish`), which converts what is left with one password.
 
 **Config after change:**
 
@@ -803,7 +812,7 @@ password_changed_at = "2026-05-30T18:00:00Z"   # omitted or empty until first ch
 
 Backups opened via Plan B or Upriv backups modal still require the **password active when that backup was taken**. Document in vault settings and backups modal footer.
 
-**Desktop and mobile UI:** password area — `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls `vault_change_password`. Unlock RAM calls `vault_change_kdf` (same backup and commit; the password stays; `password_changed_at` is not updated).
+**Desktop and mobile UI:** password area — `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls `vault_change_password` through `usePasswordChangeJob`, which the vault list owns, so the change outlives the window and the row shows `changing_password`. Unlock RAM calls `vault_change_kdf` through `useUnlockRamChangeJob`: the keys stay, the header and the name index are resealed with a new salt and cost in the same four writes, and the pass updates every key copy; it writes no backup, and `password_changed_at` is not updated.
 
 Related: PRD **RF-58**, **RF-59**; i18n `vault.change_password.*`, `warning.password_change_backups`.
 
@@ -1051,12 +1060,15 @@ upriv-core/src/
 ├── folder_list/     # per-device lists: model, path rules, chains, data folder list, layouts
 ├── folder_probe.rs  # time-limited folder checks and statuses
 ├── logging/         # Logger / log_event → `.upriv/logs/`
-├── vault/           # list, create, open/close, fs, export, import, backup, rename, rewrap,
-│   │                #   unlocked folder attach, data folder apply/search, folder status
+├── vault/           # list, create, open/close, fs, export, import, backup, rename, delete,
+│   │                #   rebuild, unlocked folder attach, data folder apply/search, folder status
+│   ├── password_change.rs, unlock_ram_change.rs, header_commit.rs, closed_store.rs
+│   │                # the two changes, their four-write commit, the closed-vault unlock
+│   ├── key_pass.rs  # the key copies pass after an open; Info's key status
 │   ├── plain/       # upriv_plain folder open/close + wipe, plain-text records
 │   └── seven_zip*   # in-process .7z via sevenz-rust2
-├── session/         # open session keys in RAM, unlock throttle
-├── store/           # header, index, chunks
+├── session/         # open session keyring in RAM, unlock throttle, jobs and their steps
+├── store/           # header keyring, index, blobs with key copies and records, the unlock rule, the pass
 ├── paths/           # VaultRoot, launch resolution of the data folder, reserved paths
 ├── mount/           # FUSE host (Linux), WinFsp (Windows)
 ├── runtime_state.rs # .upriv/state.json open records (dirty-close recovery)
@@ -1065,7 +1077,7 @@ upriv-core/src/
 
 ### 4.3 Public interface (Rust)
 
-Free functions over a `VaultRoot`, re-exported from `upriv_core::` — for example `list_vaults(&root)`, `create_vault(…)`, `open_vault(&root, id, password)`, `close_vault(&root, id)`, `fs_*`, `export_store_zip(…)`, `import_from_backup(…)`, `change_vault_password(…)`. An open vault is an `OpenSession` (master, content, and index keys plus the decrypted index) held in `session/` until close.
+Free functions over a `VaultRoot`, re-exported from `upriv_core::` — for example `list_vaults(&root)`, `create_vault(…)`, `open_vault(&root, id, password)`, `close_vault(&root, id)`, `fs_*`, `export_store_zip(…)`, `import_from_backup(…)`, `change_vault_password(…)`, `finish_password_change(…)`, `change_vault_kdf(…)`, `delete_vault(…)`. An open vault is an `OpenSession` (the header, its keyring with each key's layer keys, and the decrypted index) held in `session/` until close.
 
 Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via the `upriv-ffi` UniFFI library; both call the same `upriv-rpc` handlers. See `ARCHITECTURE.md` §2.3.
 
@@ -1128,7 +1140,7 @@ Do not shell out to 7-Zip. These commands are not the implementation (they put t
 
 ### 6.1 `OpenSession` (RAM)
 
-`session::OpenSession` holds the vault's master, content, and index keys and the decrypted index while the vault is open. It derives `Zeroize`, and the keys are cleared when the session is dropped at close.
+`session::OpenSession` holds the vault's header, the keyring of its top block (each key's content, index, and record keys), and the decrypted index while the vault is open. A read picks each chunk's key by the id its index entry names; a write uses the write key. It derives `Zeroize`, and the keys are cleared when the session is dropped at close.
 
 ### 6.2 Close
 
@@ -1152,7 +1164,8 @@ The password string stays in the app after a successful unlock, until lock or qu
 |------|-------------|
 | Dirty close (A) | `.upriv/state.json` records the session as open and no live process holds `runtime/<id>.lock` (`dirty_close_ids`) |
 | Leftover `upriv_plain` folder (D) | `state.json` records a plaintext folder this device can reach that was never wiped (`leftover`). Each record, written before the folder's first byte, names the device that wrote it (its ID and system), the path, a token, and the ID in the `.upriv-unlocked-id` of its `upriv-unlocked`. A record goes only when wiped, on proof (that `upriv-unlocked` answers with the record's ID and nothing of the session is in it: the vault's folder is gone or holds no marker of that session, `gone`; a folder or marker that does not read proves nothing), or by Forget (`plain_record_forget`, the files stay). While nothing proves where its folder is (`away`; `elsewhere` for another device's record out of reach) the vault does not open on this device (`plain_folder_unreachable`), its unlocked folder group, mode, name, and id stay locked, and the row names the device and the folder with Retry and Forget. A folder that merely answers proves nothing: a mount point stays as an empty folder while its drive is away, and another drive can take the same letter. A record follows its folder to this device when that folder answers here with the vault's marker and token (the list checks other devices' records, one time-limited check each on the folder lane). A vault is not deleted while another device's record of it remains (`vault_plain_elsewhere`) |
-| Different `store/` (A) | `persistence.json` `content_hash` differs from the header + sealed index on disk. A missing hash or a read error is not a mismatch |
+| Different `store/` (A) | `persistence.json` `content_hash` differs from both header files + the primary sealed index on disk. A missing hash or a read error is not a mismatch |
+| A password change pending | The header holds a `change` block (a crash during the change); the row is `recovery` with a line saying so, and its unlock asks for the new password |
 
 A file whose data is missing or damaged (B) fails only that file, with `vault_file_unreadable` (`details.problem`: `missing` or `damaged`); the vault still opens. The file's index node carries the mark (`problem`), sealed with the index and not counted as vault content:
 
@@ -1164,19 +1177,20 @@ A file whose data is missing or damaged (B) fails only that file, with `vault_fi
 
 The explorer tree carries the mark on each file (`FileTreeNode.problem`). The file manager marks the file and the folders above it, a bar counts them and can show only those files (opening their folders), and the editor explains the problem, offers Delete, and points to Backups. Range reads from a mount never clear a mark, and a read of a healthy vault does no extra work. Nothing else stops for such a file: `.7z` and plain-text `.zip` exports keep it with zeros (§5.1, §5.1b), the plain-text folder holds it the same way, close compaction skips it and packs the rest, and a seal skips a staged blob that is gone.
 
-**Set-aside data** is not recovery either. The unlock that opens a session, and the one before a password or unlock-RAM change, finds every blob in `data/` no file of the tree names: what a save cut short left, a seal that did not reach the disk, or the newest bytes of a file when an older index came back. Export, the `.7z` password test, and probes leave `data/` as it is.
+**Set-aside data** is not recovery either. The unlock that opens a session, and the one before a password or unlock-RAM change, finds every regular file `<id>.blob` in `data/` no file of the tree names and the index did not release: the newest bytes of a file when an older index came back, a blob put in by hand, or a seal that did not reach the disk. Export, the `.7z` password test, and probes leave `data/` as it is. Upriv deletes none of them, whatever their length.
 
 | Blob | What the unlock does |
 |------|----------------------|
-| Too short to hold one chunk (under 41 bytes), or not a plain file | Deletes it: it holds nothing |
-| Any other | Moves it to `vaults/<id>/held/`, beside `store/`, and records it in the sealed index (`held`) |
+| Not a regular file | Leaves it where it is and logs it |
+| Listed as `released` by the index | Leaves it for the first seal that flushes, which deletes it; when this unlock marks a file missing for the first time, the index may be older than the blobs, so the released blobs are set aside like any other, taken off the list, and none is deleted |
+| Any other no file names | Moves it to `vaults/<id>/held/`, beside `store/`, and records it in the sealed index (`held`); a key copy behind the header turns `key_copies_due` on, so the pass gives it the header's |
 | Held, and named by the tree again | Moves it back to `data/` |
 
-A newly held blob is matched with what the vault still has that names it: the index copy when it holds another tree (a seal that stopped after writing it; open leaves that copy as it is until the next seal), then the blob's own newest recovery record (§7.4), then each backup zip, newest first, whose header has the same content identity. The first file naming the blob's id whose first chunk opens is the file it holds. A blob that holds the app's own file (the file-manager layout) is deleted. Chunk AAD binds a version only an index or a record holds, so a blob none of them names cannot be read: it stays an unnamed piece. When the records change, or the index copy held another tree, the unlock seals the index at once, so the records survive a crash and both index files match again, as a backup zip requires. A failed seal at a session open is logged (`vault_held_seal_failed`) and the open goes on.
+A newly held blob is matched with what the vault still has that names it: the blob's own newest recovery record (§7.4), then each backup zip, newest first, whose header has the same content identity. The first file naming the blob's id whose first chunk opens is the file it holds. A blob that holds the app's own file (the file-manager layout) is deleted. Chunk AAD binds a version only an index or a record holds, so a blob none of them names cannot be read: it stays an unnamed piece. Every seal lists the blobs it drops in `released`, and when both index files open with different trees the higher `saves` wins (the primary on a tie), so a crash between a seal's two writes sends nothing to `held/`. When the records change, the unlock seals the index at once, so the records survive a crash and both index files match again, as a backup zip requires. A failed seal at a session open is logged (`vault_held_seal_failed`) and the open goes on.
 
 The file manager shows a line under its toolbar while anything is set aside and a review window. Only the unlock sets data aside, so the list (`vault_fs_held`) is read when the vault opens, when the review window opens, and after each put back or delete, which return the tree revision. A file can be put back (`vault_fs_held_restore`): its blob moves into `data/` and the file returns at its path, its missing folders made again, or at a free name beside it (`name-2.ext`); when a file holds the path of one of its folders, it goes to the top of the vault. The seal that names it comes after the move is flushed, and a failed seal moves it back. A file or a piece can be deleted for good (`vault_fs_held_delete`). The window is laid out like Backups: a files section and a pieces section (with Delete pieces), and once it holds more than one item, a checkbox on each row and Select all above them, with Put back and Delete for every chosen item beside the row's own buttons (`useHeldReview`). One call puts back or deletes every chosen item. A delete asks below the list (in the footer on a phone) and runs only once the person confirms, so a double click cannot delete, and a second press for an item already on its way is ignored (`useVaultHeld`). Nothing else deletes what is held. Every move into or out of `held/` is flushed before the seal that records it. Files in `held/` that are not named like a blob are not the vault's and are left alone. Backups and store zips copy `store/` only, so they leave `held/` out, and their index copy holds the primary index, so a seal that stopped between the two files does not stop a backup; Export data folder copies it as it is, ciphertext. Vault Info shows its size (`vault_disk_usage`, `heldBytes`) while it holds anything.
 
-A dead header: the vault does not open, and a new vault comes from a backup. Both index files dead or gone under a header the password opens: the row is recovery (a changed index file changes the content hash, and both files gone count as a different store), the open fails with `vault_index_unreadable`, which also turns the row to recovery, and the unlock window offers the rebuild (§7.4).
+Both header files dead, gone, or older than the blobs: the open fails with `vault_header_unreadable` (a sampled blob carries a newer key copy the password opens, or no header file reads) and the unlock window offers the rebuild (§7.4), which reads the header back from the key copies; a new vault from a backup only when no key copy opens. An earlier password of the vault on a header older than the blobs answers `password_outdated`. Both index files dead or gone under a header the password opens: the row is recovery (a changed index file changes the content hash, and both files gone count as a different store), the open fails with `vault_index_unreadable`, which also turns the row to recovery, and the unlock window offers the rebuild (§7.4).
 
 ### 7.2 Actions
 
@@ -1185,7 +1199,8 @@ A dead header: the vault does not open, and a new vault comes from a backup. Bot
 | Unlock (A) | Opens the `store/` on disk with the password; the next close records its hash and clears recovery |
 | Remove the folder (D, `vault_plain_remove`) | Wipe the leftover plaintext folder after the user confirms and leave the vault closed; `store/` stays as last saved. Unlock refuses until then (`plain_leftover`). It is a job (`usePlainRemoveJob`, one at a time, on the pack lane so closes do not wait behind it): the window closes at once, the rest of the app stays usable, and the row shows `recovering` with its budget, sized from the folder's bytes. A stop or a timeout leaves the files not reached yet and the vault in recovery, and files that could not be wiped keep it there too (`toast.recovery_incomplete`) |
 | Create from backup (C) | Unpack a backup zip into a **new** vault — never overwrite the source |
-| Rebuild from its own data (C, `vault_rebuild`) | Seal a new index from the recovery records of the vault's blobs (§7.4) |
+| Rebuild from its own data (C, `vault_rebuild`) | Read the header back from the blobs' key copies when it is lost, and seal a new index from their recovery records when the index is lost (§7.4) |
+| Unlock with the new password (pending change) | Settles the change forward; the old password cancels it only when nothing was converted (§3.2.3) |
 
 ### 7.3 Reopen after crash (no RAM session, `store/` still on disk)
 
@@ -1219,11 +1234,11 @@ Validate header + index (§2.2)
 - **Close** flushes the session into `store/` and leaves the vault closed.
 - Portable `.zip` / `.7z` export remains a separate user action, not rest layout.
 
-**Dead header:** create a **new** vault from a backup stamp or store zip. **Dead index:** rebuild it from the vault's own data (§7.4), or create a new vault from a backup.
+**Dead header or dead index:** rebuild from the vault's own data (§7.4); create a **new** vault from a backup stamp or store zip when no key copy opens, or when the person prefers it.
 
 ### 7.4 Recovery records and the rebuild
 
-Each blob carries recovery records after its chunks (`store::record`): its file's index entry (`VaultNode`, without the problem mark) with the vault's content identity, the save number of the seal it was written for (`VaultIndex::saves`, one more each seal), and when. Each is sealed with XChaCha20-Poly1305 under the record key (HKDF `upriv-record-key-v1`), AAD binding version, content identity, algorithm, `kind` `"record"`, the blob's file id, and `seq`, and is followed by a 20-byte footer (magic, `seq`, length, end of the previous footer), the only part readable without the key.
+Each blob carries recovery records after its chunks (`store::record`): its file's index entry (`VaultNode`, without the problem mark) with the vault's content identity, the save number of the seal it was written for (`VaultIndex::saves`, one more each seal), and when. Each is sealed with XChaCha20-Poly1305 under the record key (HKDF `upriv-record-key-v1`) of the write key at the time it is written, and read by trying the keys the reader holds, newest first, AAD binding version, content identity, algorithm, `kind` `"record"`, the blob's file id, and `seq`, and is followed by a 20-byte footer (magic, `seq`, length, end of the previous footer), the only part readable without the key.
 
 | When | Who appends it |
 |------|----------------|
@@ -1234,15 +1249,16 @@ Each blob carries recovery records after its chunks (`store::record`): its file'
 
 A record that cannot be written is logged (`vault_blob_record_failed`, counts only) and the seal goes on. Records are never rewritten; a rename writes none. Chunk placement keeps off the blob's newest record, found from its last bytes when a write opens the blob and kept in the session (`SessionWrites::records`) once chunks follow it. The waste measure leaves the newest record out and counts older ones, so packing drops them. Opens, reads, writes, and exports never read records; set-aside naming (§7.1) reads a held blob's newest record, and the rebuild reads every blob's.
 
-**Rebuild (`vault_rebuild`).** A job on the rewrap lane (`upriv-rewrap`, desktop and Android), started only from the unlock window after `vault_index_unreadable`, with the password typed there (`useVaultRebuildJob`, owned by the vault list; the window closes and the row shows `recovering` with its elapsed time and Stop). On a closed vault with no plain-text leftover:
+**Rebuild (`vault_rebuild`).** A job on the keys lane (`upriv-keys`, desktop and Android), started only from the unlock window after `vault_index_unreadable` or `vault_header_unreadable`, with the password typed there (`useVaultRebuildJob`, owned by the vault list; the window closes and the row shows `recovering` with its elapsed time and Stop). On a closed vault with no plain-text leftover:
 
-1. Unlock the header under the open throttle; refuse with `vault_index_readable` when an index file opens.
-2. Pin a Stored copy of `store/` in `saves/` of the data folder, or of the backup folder in use when the data folder has no room (`pin_before_rebuild`), after checking the drive has room (`vault_rebuild_space_short`, `details.needed` / `details.available`, shown in the toast). Its index files do not open, so the pair check of a backup is left out. Any other failure is `vault_backup_failed`.
-3. Name every blob in `data/` (`store::record::rebuild_tree`) from the newer of its own newest record (a blob whose last bytes are no record is searched whole) and the newest backup zip with the same content identity whose tree names it and whose first chunk opens from it (`held::name_from_backups`). The higher save number wins, the backup on a tie: a file renamed since its record takes its name from the backup, and a blob with no record still comes back. Order them by save number, then time, newest first.
-4. Place each file at its path with the folders above it; a path a newer file took, or one under a file, is left. Empty folders and empty files have no blob and do not come back.
-5. Seal both index files (the save count goes on from the highest one read), record the new content hash in `persistence.json` and drop each device's last backup, and log `vault_rebuilt` with counts (`files`, `from_backups`, `left`, `unnamed`).
+1. A pending password change settles first, as at an open. Unlock under the open throttle; refuse with `vault_index_readable` when a header and an index open together.
+2. **The header** when it is lost or older than the blobs: key copies are grouped by salt and cost, the password is tried on the groups from the highest generation down (8 at most), and the first that opens is written as both header files with a generation above every blob's (`vault_header_restored_from_key_copies`); none opens → `wrong_password`. When an index opens with it, the rebuild ends here. A header older than one blob's key copy whose key copy the password does not open is an earlier password (`password_outdated`).
+3. **The copy from before** (`copy_before_rebuild`): a Stored copy of `store/` in `saves/` of the data folder, or of the backup folder in use when the data folder has no room. Its index files do not open, so the pair check of a backup is left out. When it does not fit or fails for any other reason, the rebuild goes on without it; the result (`copySkipped`) and the log say why.
+4. Name every blob in `data/` (`store::record::rebuild_tree`) from the newer of its own newest record (a blob whose last bytes are no record is searched whole) and the newest backup zip with the same content identity whose tree names it and whose first chunk opens from it (`held::name_from_backups`). The higher save number wins, the backup on a tie: a file renamed since its record takes its name from the backup, and a blob with no record still comes back. Order them by save number, then time, newest first.
+5. Place each file at its path with the folders above it; a path a newer file took, or one under a file, is left. Empty folders and empty files have no blob and do not come back.
+6. Seal both index files (the save count goes on from the highest one read), record the new content hash in `persistence.json` and drop each device's last backup, and log `vault_rebuilt` with counts (`files`, `from_backups`, `left`, `unnamed`).
 
-No blob is moved, rewritten, or deleted. A blob nothing places stays in `data/`, and the next open sets it aside, named by its own record or a backup when one names it. A stop before the seal removes the pinned copy; the seal refuses a stop. The result (`VaultRebuild`: `files`, `setAside`) drives the toast (`toast.vault_rebuilt` / `toast.vault_rebuilt_set_aside`). Once the rebuild lands, the vault list opens the vault with the password the rebuild used (`openWithPassword`), so it is ready at once; the job holds that password only until it ends, and a failed open shows as any open's error. A rebuilt file holds what its record or backup names: as the last close, or the seal that made it, left it.
+No blob is moved, rewritten, or deleted. A blob nothing places stays in `data/`, and the next open sets it aside, named by its own record or a backup when one names it. A stop leaves the store as the steps before it left it: a header read back stays, and so does the copy; the seal refuses a stop. The result (`VaultRebuild`: `headerRestored`, `treeRebuilt`, `files`, `setAside`, `copy`, `copySkipped`) drives the toast (`vaultRebuiltToast`). Once the rebuild lands, the vault list opens the vault with the password the rebuild used (`openWithPassword`), so it is ready at once; the job holds that password only until it ends, and a failed open shows as any open's error. A rebuilt file holds what its record or backup names: as the last close, or the seal that made it, left it.
 
 Reference: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
@@ -1389,7 +1405,14 @@ No separate Welcome screen in v1; on first run the Gate asks for the data folder
 - **`[vault]` section** includes **`order`** (integer) — same semantics as list sort; user may set position manually when not using drag-and-drop.
 - **Save (preferences):** if `display_name` changed vs baseline → **`vault_rename`** first (folder/`[vault].id` migration when the slug changes; remaps groups + `last_opened` + leftover closed mount leaf). List/modal identity updates immediately after a successful rename, even if a later `vault_config_save` of other prefs fails. Other dirty preference fields → **`vault_config_save`** against the **effective** id.
 - **Unlocked folder** and **Backups** sections edit the vault's lists for this device (`FolderList`; other devices below, collapsed, once one has a group). The unlocked folder group is quiet-gated (`vault_quiet`); the encrypted switch shows only for an encrypted vault, unavailable on a phone. A save sends the lists' change (`vaultListChanges`), never whole lists.
-- Footer **`modal.settings.danger_zone`:** **`modal.settings.delete_vault`** button (red) → confirmation with `input === id` → `vault_delete(id, outsideBackups)`. The switch to also delete the backups outside the data folder shows only when the vault has some (`outsideBackups`) and starts off.
+- **No delete here.** The row's Settings menu lists the settings screens (Preferences, Password, Unlock RAM, Group; `vaultSettingsMenuEntries`), then **Delete vault**, which opens its own window (`VaultDeleteModal`), never a screen of vault settings. While a delete runs or did not finish, that entry is the menu's only one, so the window can reopen.
+
+#### 8.2.4a Modal — Delete vault
+
+- Body: `modal.delete_vault.help`, the hold line when a delete must wait (`vaultDeleteHold`: the vault not closed or in recovery, or a backup export reading its backups), the vault ID to type (`modal.delete_vault.confirm`, `input.trim() === id`; Enter runs it), and the switch to also delete the backups outside the data folder, shown only when the vault has some (`outsideBackups`), off each time the window opens.
+- Footer: Cancel and **Delete vault** (red), which starts `vault_delete(id, { outsideBackups, now: false, job })` through `useVaultDeleteJob`, owned by the vault list. One that did not finish shows `modal.delete_vault.unfinished` and **Continue**, with nothing to type.
+- While the delete runs: its step, bar, and elapsed time (`job_status`), no footer, and `modal.delete_vault.running`; the window closes freely and the delete goes on. **Delete now** sits in the row's More options while a delete runs or waits, behind its own confirmation (`DeleteNowModal`, `modal.delete_now.*`).
+- Group settings has no danger zone either: its **Delete group…** entry opens a Delete group window in its place.
 
 #### 8.2.5 Front-end components (suggestion)
 
@@ -1434,7 +1457,7 @@ ui/
 | Folder lists | `folder_status`, `vault_unlocked_folder_attach`, `vault_unlocked_folder_info`, `plain_record_forget` |
 | Logs | `log_list`, `log_get`, `log_delete`, `log_event` |
 | Groups | `vault_group_list`, `vault_group_create`, `vault_group_update`, `vault_group_delete`, `vault_group_set_collapsed`, `vault_group_reorder`, `vault_group_reorder_grouped_vaults`, `vault_group_repair` |
-| Vaults | `vault_list`, `vault_create`, `vault_config_get`, `vault_config_save`, `vault_rename`, `vault_delete`, `vault_disk_usage`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild` |
+| Vaults | `vault_list`, `vault_create`, `vault_config_get`, `vault_config_save`, `vault_rename`, `vault_delete`, `vault_delete_hurry`, `vault_disk_usage`, `vault_change_password`, `vault_password_change_finish`, `vault_change_kdf`, `vault_key_copies_update`, `vault_key_status`, `vault_rebuild` |
 | Open / close | `vault_open`, `vault_close`, `vault_close_phase`, `vault_close_hurry`, `vault_plain_destination`, `vault_plain_leftover`, `vault_plain_remove`, `vault_plain_sync`, `vault_plain_status`, `vault_plain_deletions`, `vault_plain_send`, `vault_plain_unsend` |
 | File manager | `vault_fs_list`, `vault_fs_held`, `vault_fs_held_restore`, `vault_fs_held_delete`, `vault_fs_revision`, `vault_fs_preview_fits`, `vault_fs_read`, `vault_fs_read_range`, `vault_fs_write`, `vault_fs_write_range`, `vault_fs_import_os_file`, `vault_fs_truncate`, `vault_fs_create_file`, `vault_fs_create_folder`, `vault_fs_ensure_folder`, `vault_fs_delete`, `vault_fs_rename`, `vault_fs_move`, `vault_fs_os_path` |
 | Export / import | `vault_export`, `vault_export_capabilities`, `vault_unfinished_sweep`, `vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, `vault_import_probe` |
@@ -1451,7 +1474,7 @@ ui/
 
 **Backup export.** `backup_export` takes the backups' `keys`, the folder chosen in the Backups window (`destDir`), and a `job`. One backup is copied under its own name; several go into one Stored zip, `upriv-backups-<id>.zip`, whose entries are those files (names shared between folders are told apart: `saves-<file name>` for a pin, `<ref>-<file name>` for a zip outside the data folder, `<ref>-saves-<file name>` for a pin there). Like a vault export it never replaces a file or a partial already using the name: it takes the next free number (`upriv-backups-<id>-2.zip`, `<stamp>-<id>-2.zip`) and logs `backup_export_numbered` (`id`, `number`). A backup zip is no package: its envelope stays at the zip root, and the copy's bytes are the backup's. It refuses a folder inside a `.upriv`. Progress counts the bytes of the backups copied. Backups are frozen files, so the vault may be open and every other export stays free; delete and rename of that vault refuse with `vault_config_busy` until the export ends, and the settings window locks both with copy naming the export (`backupExportVaultIds`, edit-policy `backupExportLocked`, `vaultDeleteHold`). The export holds the zips it reads (`BackupExportGuard`): `backup_delete` and `backup_promote` of one of them refuse with `backup_exporting`, and close retention leaves it for a later close. It runs on the same lane as `vault_export`.
 
-**Jobs.** Work the person can stop is a job: `vault_open` (with the fill of a plain-text folder), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild`, `vault_unlocked_folder_attach`, `data_folder_search`, and `data_folder_apply` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done and whether it can still stop, and stays `null` while the job waits for its lane, which the UI shows as Queued. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password or unlock-RAM change removes its safety zip and leaves the header as it was, a stopped rebuild removes its pinned copy and leaves both index files as they were, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
+**Jobs.** Work the person can stop is a job: `vault_open` (with the fill of a plain-text folder), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_password_change_finish`, `vault_change_kdf`, `vault_rebuild`, `vault_key_copies_update`, `vault_delete`, `vault_unlocked_folder_attach`, `data_folder_search`, and `data_folder_apply` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done, whether it can still stop, and, for a job made of steps (the two changes, Finish, the delete), the `step` it is in (`unlocking`, `backing_up`, `rewriting_files`, `finishing`, `updating_key_copies`, `overwriting`, `removing`; `null` for the others), and stays `null` while the job waits for its lane, which the UI shows as Queued. The two changes refuse a stop while their header commits, then start over (`start_over`) so the pass after it can be stopped. The password change, Finish, the unlock-RAM change, and the rebuild run on the keys lane, the delete on its own lane, and the key copies pass on its own, so none waits behind another vault's long work or holds a close. A delete has no Stop: `vault_delete_hurry` ends it early with no overwrite. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password change keeps the old password (its start backup stays as a Save; a partial one is removed) and gives the vault a fresh write key, a stop during a change's key copies pass leaves the change made, a stopped rebuild leaves what its steps before it wrote (a header read back, the copy) and both index files as they were, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
 
 ### 8.4 Launch
 
@@ -1732,7 +1755,8 @@ Content: TOML, one `[devices.<id>]` group per device that differs from the defau
 - **`vault::plain`**: real unlocked folder while open; close reads that folder and overwrites it before removal (no virtual mount). Close now does neither.
 - **Folder lists**: per-device lists for the data folder, the unlocked folders, and the backup folders, with failover, other devices, and phone trees (§3.5).
 - **open/close** for both `encrypted_dir` and `upriv_plain` (Linux + Windows); unlock checks the password with Argon2id before any write.
-- **Recovery**: dirty close and leftover `upriv_plain` folder.
+- **Recovery**: dirty close and leftover `upriv_plain` folder; the rebuild of a lost header (from the blobs' key copies) or index (from their records and the backups).
+- **Password change** (a new key, every file rewritten, Finish after a crash) and **unlock-RAM change** (the keys stay, every key copy updated), as jobs; **Delete vault** as a job with Delete now.
 - **Electron** UI: vault list (§8.2), Lock/Unlock, settings/backups modals, in-app file manager.
 - **Packaging**: AppImage + `.deb` (Linux), NSIS + portable `.exe` with the WinFsp installer (Windows). No `7zz` binary.
 - **React Native Android** (`dev/apps/mobile/`): UniFFI bridge → `upriv-core`; storage-access data folder; open/close; in-app file manager; single APK.
@@ -1764,7 +1788,10 @@ Content: TOML, one `[devices.<id>]` group per device that differs from the defau
 | Vault root | `.upriv/` groups system | UX: at the root only the portable app files, `upriv-unlocked/` while a vault is open beside the data folder, and `.upriv/` |
 | Mobile file editing | In-app file manager | No FUSE on Android; plaintext stays in RAM |
 | Hint + note storage | `config.toml` `[vault]` | User metadata; readable without unlock; not sync manifest |
-| Change password | Closed vault only; current password required; backup zip first; same master key; header and name index resealed; file blobs stay | Snapshots keep the password from when they were written |
+| Change password | Closed vault only; current password required; a new key and every file rewritten with it, file by file; an optional start backup that never blocks; a stop keeps the old password with a fresh write key; a crash settles with the new password | Nothing in the vault opens with the old password afterwards, never a second copy of the vault on disk, nobody locked out; snapshots keep the password from when they were written |
+| Unlock-RAM change | Closed vault only; the keys stay; header and name index resealed; every key copy updated by its pass; no backup | A new key protects nothing while the password is the same; a copy at the earlier cost would keep the cheaper guess |
+| Key copy in every blob | The 4096-byte header block each blob was written under, at offset 0 | Any blob plus the password opens its file; a lost header comes back from the blobs |
+| Delete vault | A job in its own window from the Settings menu; `[deleting]` in `config.toml`, removed last; key copies overwritten; Delete now | A crash never hides a half-deleted vault, and every blob's wrapped keys are overwritten |
 | Settings UI (v1) | Subset of TOML; explicit save/discard | Hide `id`, paths, 7z tuning, wipe passes |
 
 ---

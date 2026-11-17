@@ -215,6 +215,7 @@ pub fn rename_vault(
 
     with_vault_registry_lock(|| {
         refuse_if_busy(&old_dir)?;
+        super::delete::refuse_deleting(&old_dir)?;
         // The core of an app that went away may still be closing it, in the
         // folder a rename would move.
         refuse_if_held_elsewhere(root, old_id)?;

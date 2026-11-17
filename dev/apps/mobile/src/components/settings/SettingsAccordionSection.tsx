@@ -11,7 +11,6 @@ interface SettingsAccordionSectionProps {
   /** When set, expansion is controlled by the parent (desktop `VaultSettingsSection` parity). */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  tone?: "default" | "danger";
   /** End of the header, outside the expand control, so its controls never toggle the section. */
   aside?: ReactNode;
   children: ReactNode;
@@ -23,7 +22,6 @@ export function SettingsAccordionSection({
   defaultOpen = false,
   open: openProp,
   onOpenChange,
-  tone = "default",
   aside,
   children,
 }: SettingsAccordionSectionProps) {
@@ -56,17 +54,8 @@ export function SettingsAccordionSection({
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
         >
-          <DisclosureChevron
-            open={open}
-            color={tone === "danger" ? colors.onErrorContainer : colors.onSurfaceVariant}
-          />
-          <Text
-            style={[
-              typography.caption,
-              styles.title,
-              { color: tone === "danger" ? colors.onErrorContainer : colors.onSurface },
-            ]}
-          >
+          <DisclosureChevron open={open} color={colors.onSurfaceVariant} />
+          <Text style={[typography.caption, styles.title, { color: colors.onSurface }]}>
             {title}
           </Text>
         </Pressable>

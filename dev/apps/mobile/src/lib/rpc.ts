@@ -48,8 +48,19 @@ import {
   parsePlainWipe,
   parseBackupFailure,
   parseJobStatus,
+  parseKeyCopiesUpdate,
+  parsePasswordChangeFinishResult,
+  parsePasswordChangeResult,
+  parseUnlockRamChangeResult,
   parseVaultDiskUsage,
+  parseVaultKeyStatus,
   type CloseVaultOutcome,
+  type KeyCopies,
+  type PasswordChangeFinishResult,
+  type PasswordChangeResult,
+  type UnlockRamChangeResult,
+  type VaultDeleteInput,
+  type VaultKeyStatus,
   type JobProgress,
   type JobStopBy,
   type PlainDestination,
@@ -632,14 +643,31 @@ export async function rpcVaultChangePassword(
   id: string,
   currentPassword: string,
   newPassword: string,
+  backUpFirst: boolean,
   job: string,
-): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
+): Promise<PasswordChangeResult> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
     id,
     currentPassword,
     newPassword,
+    backUpFirst,
     job,
   });
+  return parsePasswordChangeResult(raw);
+}
+
+/** Rewrite the files an unfinished password change left, as the job `job`. */
+export async function rpcVaultPasswordChangeFinish(
+  id: string,
+  password: string,
+  job: string,
+): Promise<PasswordChangeFinishResult> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PASSWORD_CHANGE_FINISH, {
+    id,
+    password,
+    job,
+  });
+  return parsePasswordChangeFinishResult(raw);
 }
 
 /** Change the unlock RAM as the job `job`. */
@@ -648,16 +676,29 @@ export async function rpcVaultChangeKdf(
   currentPassword: string,
   unlockPreset: string,
   job: string,
-): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_KDF, {
+): Promise<UnlockRamChangeResult> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_KDF, {
     id,
     currentPassword,
     unlockPreset,
     job,
   });
+  return parseUnlockRamChangeResult(raw);
 }
 
-/** Rebuild the lost index of a closed vault as the job `job`. */
+/** The job after an open: every key copy made the header's, when one is behind. */
+export async function rpcVaultKeyCopiesUpdate(id: string, job: string): Promise<KeyCopies> {
+  return parseKeyCopiesUpdate(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_KEY_COPIES_UPDATE, { id, job }),
+  );
+}
+
+/** Where an open vault's keys stand; null while it has no open session. */
+export async function rpcVaultKeyStatus(id: string): Promise<VaultKeyStatus | null> {
+  return parseVaultKeyStatus(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_KEY_STATUS, { id }));
+}
+
+/** Rebuild a closed vault's lost header or index as the job `job`. */
 export async function rpcVaultRebuild(
   id: string,
   password: string,
@@ -777,13 +818,25 @@ function parseVaultResult(raw: unknown, label: string): VaultListItem {
   return parseVaultListItemWire(record.vault);
 }
 
+/** Delete the vault as the job `input.job`, or go on with a delete that did not finish. */
 export async function rpcVaultDelete(
   id: string,
-  outsideBackups: boolean,
+  input: VaultDeleteInput,
 ): Promise<VaultDeleteOutcome> {
   return parseVaultDeleteOutcome(
-    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, { id, outsideBackups }),
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, {
+      id,
+      outsideBackups: input.outsideBackups,
+      now: input.now,
+      job: input.job,
+    }),
   );
+}
+
+/** Delete now for the delete running on this vault. False when none runs. */
+export async function rpcVaultDeleteHurry(id: string): Promise<boolean> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE_HURRY, { id });
+  return typeof raw === "object" && raw !== null && (raw as { running?: unknown }).running === true;
 }
 
 export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean }> {

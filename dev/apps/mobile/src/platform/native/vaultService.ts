@@ -12,6 +12,7 @@ import {
   rpcVaultConfigSave,
   rpcVaultCreate,
   rpcVaultDelete,
+  rpcVaultDeleteHurry,
   rpcVaultDiscardImport,
   rpcVaultExportCapabilities,
   rpcVaultExportToFolder,
@@ -98,8 +99,11 @@ export const nativeVaultService = createLiveVaultService({
   async rename(vaultId, displayName) {
     return rpcVaultRename(vaultId, displayName);
   },
-  async deleteVault(vaultId, outsideBackups) {
-    return rpcVaultDelete(vaultId, outsideBackups);
+  async deleteVault(vaultId, input) {
+    return rpcVaultDelete(vaultId, input);
+  },
+  async hurryDelete(vaultId) {
+    return rpcVaultDeleteHurry(vaultId);
   },
   // A picked folder is reached at its tree's root, so Rust writes the file straight into it.
   async exportVaultToFolder(vaultId, request, destDir, job) {

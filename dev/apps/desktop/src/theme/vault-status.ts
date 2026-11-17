@@ -36,6 +36,8 @@ export const vaultStatusRowClass = {
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   changing_kdf:
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+  deleting:
+    "border-l-2 border-vault-recovery/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Status badge (uppercase mono chip) per display status. */
@@ -52,6 +54,7 @@ export const vaultStatusBadgeClass = {
   backing_up: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   changing_password: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   changing_kdf: "bg-surface-container-highest text-on-surface-variant animate-pulse",
+  deleting: "bg-[var(--vault-recovery-badge-bg)] text-vault-recovery",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Leading circle icon tint on vault row. */
@@ -68,4 +71,5 @@ export const vaultStatusIconClass = {
   backing_up: "bg-surface-container-highest text-on-surface-variant",
   changing_password: "bg-surface-container-highest text-on-surface-variant",
   changing_kdf: "bg-surface-container-highest text-on-surface-variant",
+  deleting: "bg-[var(--vault-recovery-icon-bg)] text-vault-recovery",
 } as const satisfies Record<VaultDisplayStatus, string>;

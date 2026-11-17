@@ -85,11 +85,11 @@ pub fn refuse_config_save_if_busy(
 /// Load current config, enforce edit policy, then write `after` with
 /// `lists` applied to the lists as the file holds them now.
 ///
-/// A preparing vault (open, export, or password / unlock-RAM rewrap) returns
-/// [`UprivError::VaultBusy`] without waiting on the directory lock. The settings
-/// save budget is 30 seconds; rewrap can hold that lock for minutes.
+/// A preparing vault (open, export, or a password or unlock-RAM change)
+/// returns [`UprivError::VaultBusy`] without waiting on the directory lock. The
+/// settings save budget is 30 seconds; a change can hold that lock for minutes.
 /// `password_changed_at` stays the value already on disk. Only a password
-/// rewrap writes it, so a stale settings form cannot clear it.
+/// change writes it, so a stale settings form cannot clear it.
 ///
 /// A plaintext folder left by an earlier session blocks a change of this
 /// device's unlocked folder or of the mode.
@@ -109,6 +109,9 @@ pub fn save_vault_config_checked(
             return Err(UprivError::VaultBusy);
         }
         let before = crate::config::load_vault_config(vault_dir)?;
+        if before.deleting.is_some() {
+            return Err(UprivError::VaultDeleting);
+        }
         // Id / display_name are never a live `vault_config_save` — always
         // `vault_rename` first, even when the session is busy (do not mask as
         // `vault_config_busy`).
@@ -448,7 +451,7 @@ mode = "encrypted_dir"
         let before = crate::config::load_vault_config(&dir).unwrap();
         let _preparing = PreparingGuard::enter_exclusive(&dir).unwrap();
         let mut after = before.clone();
-        after.vault.note = "during rewrap".into();
+        after.vault.note = "during a password change".into();
         let err = save_vault_config_checked(&root, "notes", &after, &VaultListChanges::default())
             .unwrap_err();
         assert!(matches!(err, UprivError::VaultBusy));

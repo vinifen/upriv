@@ -433,9 +433,9 @@ mode = "encrypted_dir"
             .find(|&index| archive.by_index(index).unwrap().name().ends_with(&a_blob))
             .expect("the blob of a.txt");
         let entry = archive.by_index(blob).unwrap();
-        // Past the nonce, inside the blob's one chunk: the zip checksum no
-        // longer matches either.
-        let in_chunk = (entry.data_start() + 30) as usize;
+        // Past the key copy and the nonce, inside the blob's one chunk: the
+        // zip checksum no longer matches either.
+        let in_chunk = (entry.data_start() + crate::store::KEY_COPY_LEN + 30) as usize;
         drop(entry);
         drop(archive);
         bytes[in_chunk] ^= 0x01;

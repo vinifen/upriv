@@ -59,6 +59,21 @@ pub enum UprivError {
     #[error("wrong password")]
     WrongPassword,
 
+    /// The password opens a header block of this vault, but the vault's files
+    /// were written under a newer one: an earlier password of this vault.
+    #[error("an earlier password of this vault")]
+    PasswordOutdated,
+
+    /// No header file reads, or every one is older than the vault's files. The
+    /// header can be read back from the files' key copies (`vault_rebuild`).
+    #[error("vault header unreadable")]
+    VaultHeaderUnreadable,
+
+    /// A password change on this vault did not finish, and this password
+    /// cannot settle it: the new password the change was given does.
+    #[error("a password change on this vault did not finish")]
+    PasswordChangeInterrupted,
+
     /// Vault session is already open in this process.
     #[error("vault already open: {0}")]
     VaultAlreadyOpen(String),
@@ -145,14 +160,21 @@ pub enum UprivError {
     #[error("vault index unreadable: {detail}")]
     VaultIndexUnreadable { detail: String },
 
-    /// A rebuild was asked for a vault whose index opens: there is nothing to
-    /// rebuild, and a rebuild would only lose what the index alone holds.
+    /// A rebuild was asked for a vault whose header and index open: there is
+    /// nothing to rebuild, and a rebuild would only lose what the index alone
+    /// holds.
     #[error("the vault index opens, so there is nothing to rebuild")]
     VaultIndexReadable,
 
-    /// The safety zip a rebuild writes first does not fit on the drive.
-    #[error("rebuild needs {needed} bytes for its safety zip, {available} free")]
-    VaultRebuildSpaceShort { needed: u64, available: u64 },
+    /// A password change needs room for its largest file, twice the index,
+    /// and a margin on the drive of the data folder.
+    #[error("the password change needs {needed} bytes free, {available} free")]
+    PasswordChangeSpaceShort { needed: u64, available: u64 },
+
+    /// This vault is being deleted, or a delete of it did not finish: nothing
+    /// opens or changes it until the delete ends.
+    #[error("this vault is being deleted")]
+    VaultDeleting,
 
     /// `runtime/<id>.lock` is held by a live process (this host or another).
     #[error("vault locked: {0}")]
@@ -173,24 +195,24 @@ pub enum UprivError {
     #[error("import source unreadable: {0}")]
     ImportSourceUnreadable(PathBuf),
 
-    /// This vault must be closed first (export, password / unlock-RAM rewrap,
-    /// or the rebuild of a lost index).
+    /// This vault must be closed first (export, a password or unlock-RAM
+    /// change, Finish, or a rebuild).
     #[error("close this vault first")]
     VaultMustBeClosed,
 
-    /// Export, password change, unlock-RAM change, or a rebuild already holds
-    /// this vault.
+    /// Export, a password or unlock-RAM change, Finish, or a rebuild already
+    /// holds this vault.
     #[error("vault is busy")]
     VaultBusy,
 
-    /// The safety zip could not be written, so the live `store/` was not rewritten.
-    #[error("could not write a backup, so the vault was left unchanged")]
-    VaultBackupFailed,
+    /// A password change was asked for the password the vault already has.
+    #[error("the new password is the current one")]
+    PasswordUnchanged,
 
-    /// Password or unlock-RAM change asked for the value already in the header.
-    /// Not a broken `config.toml` and not a broken `vault.header`.
-    #[error("rewrap changes nothing")]
-    RewrapUnchanged(RewrapUnchangedKind),
+    /// An unlock-RAM change was asked for the cost already in the header. Not
+    /// a broken `config.toml` and not a broken `vault.header`.
+    #[error("the unlock RAM is already this one")]
+    UnlockRamUnchanged,
 
     /// A vault in this data folder is open, closing, or held by other work, so
     /// the data folder cannot be exported now.
@@ -313,13 +335,6 @@ pub enum UprivError {
 }
 
 pub type Result<T> = std::result::Result<T, UprivError>;
-
-/// Which rewrap was a no-op. The wire code picks the matching "must be different" string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RewrapUnchangedKind {
-    Password,
-    UnlockRam,
-}
 
 /// Why a plaintext folder cannot be placed. Wire `details.reason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

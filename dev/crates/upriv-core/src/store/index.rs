@@ -1,6 +1,14 @@
 //! Sealed logical tree (`store/index/root.idx.enc` and a byte-identical `.copy`).
 //! Empty vault = no files. The primary file is the commit; the copy is written
 //! first so a crash still leaves the previous primary in place.
+//!
+//! The index is sealed under a **pair**: the index key of a keyring's write
+//! key and the AAD of that keyring's header block ([`super::keys`]). An index
+//! under any other pair does not open, so someone who holds an older key
+//! cannot make a tree the vault accepts. When both files open and hold
+//! different trees, the one with the higher save count is the vault's tree
+//! (the primary on a tie): a seal writes the copy first, so the copy is the
+//! newer one only after a crash between the two writes.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -11,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use super::aead::{open_index, seal_index, INDEX_KEY_LEN};
 use super::chunk::validate_logical_path;
-use super::header::{index_aad, VaultHeader};
+use super::header::index_aad;
+use super::keys::{KeyId, Keyring};
 use super::tree::parent_logical;
 use crate::error::{Result, UprivError};
 use crate::paths;
@@ -45,6 +54,10 @@ pub struct VaultIndex {
     /// the seal it was written for, so a rebuild can tell the newer of two
     /// records for one path without trusting any clock.
     pub saves: u64,
+    /// Some blob's key copy is behind the header: the pass makes it the
+    /// header's ([`super::key_copy`]). Written only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub key_copies_due: bool,
     /// Every file and folder, in the order they joined the tree. Changed only
     /// through the methods below, which keep `lookup` in step with it.
     nodes: Vec<VaultNode>,
@@ -52,11 +65,14 @@ pub struct VaultIndex {
     /// vault's `held/` folder. Not part of the tree.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub held: Vec<HeldBlob>,
-    /// Blobs (by file id) the tree stopped naming in a seal whose folder could
-    /// not be flushed: a power cut may bring back the index that names them,
-    /// so they stay in `data/` until a seal that flushes, which deletes them.
-    /// Sealed, so a session that ends first hands them to the next one, whose
-    /// unlock leaves them in `data/` rather than set them aside.
+    /// Blobs this tree let go of: a blob of `data/` by its file id, one of
+    /// `held/` by its file name there. The ones each seal dropped, and the
+    /// ones a password change reserves for its next batch before they exist.
+    /// Whichever index file a crash leaves, every blob of a seal cut short is
+    /// named or listed here, so none reaches `held/` as unnamed. The first
+    /// seal that flushes deletes them ([`Self::take_released`]), unless a file
+    /// or a held entry names one again (a file emptied and written again keeps
+    /// its id).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub released: Vec<String>,
     /// Not sealed. Cleared after the index that abandoned these spans is flushed.
@@ -77,6 +93,8 @@ struct IndexFile {
     #[serde(default)]
     saves: u64,
     #[serde(default)]
+    key_copies_due: bool,
+    #[serde(default)]
     nodes: Vec<VaultNode>,
     #[serde(default)]
     held: Vec<HeldBlob>,
@@ -92,6 +110,7 @@ impl TryFrom<IndexFile> for VaultIndex {
         let index = Self {
             format_version: file.format_version,
             saves: file.saves,
+            key_copies_due: file.key_copies_due,
             nodes: file.nodes,
             held: file.held,
             released: file.released,
@@ -109,6 +128,7 @@ impl PartialEq for VaultIndex {
     fn eq(&self, other: &Self) -> bool {
         self.format_version == other.format_version
             && self.saves == other.saves
+            && self.key_copies_due == other.key_copies_due
             && self.nodes == other.nodes
             && self.held == other.held
             && self.released == other.released
@@ -331,25 +351,42 @@ pub struct HeldBlob {
     pub size: u64,
     /// When the unlock moved it there, in Unix epoch milliseconds.
     pub held_at: u64,
-    /// The file it holds, as something else of this vault named it: the other
-    /// index file, the record the blob carries, or the index in a backup zip.
-    /// `None` when none does, so it cannot be read.
+    /// The file it holds, as something else of this vault named it: the
+    /// record the blob carries, or the index in a backup zip. `None` when
+    /// none does, so it cannot be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<VaultNode>,
 }
 
 /// Bytes in a [`ChunkVersion`].
 pub(crate) const CHUNK_VERSION_LEN: usize = 8;
+/// What [`ChunkVersion::of_nonce`] hashes before the nonce.
+const CHUNK_VERSION_LABEL: &[u8] = b"upriv-chunk-version-v1";
 
-/// The random value one write of a chunk is sealed under. Each write draws a
-/// new one and [`super::header::chunk_aad`] binds it, so a stale copy of that
-/// chunk does not open. Held as its 8 bytes; the index and the AAD carry it as
-/// 16 lowercase hex digits.
+/// The value one write of a chunk is sealed under: the first 8 bytes of
+/// SHA-256 of a label and the chunk's fresh random nonce
+/// ([`ChunkVersion::of_nonce`]). Each write has its own, and
+/// [`super::header::chunk_aad`] binds it, so a stale copy of that chunk does
+/// not open; with the key, a chunk opens from its own bytes. Held as its 8
+/// bytes; the index and the AAD carry it as 16 lowercase hex digits.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ChunkVersion([u8; CHUNK_VERSION_LEN]);
 
 impl ChunkVersion {
+    #[cfg(test)]
     pub(crate) const fn from_bytes(bytes: [u8; CHUNK_VERSION_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The version of the chunk sealed under `nonce`.
+    pub(crate) fn of_nonce(nonce: &[u8; super::aead::XCHACHA_NONCE_LEN]) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(CHUNK_VERSION_LABEL);
+        hasher.update(nonce);
+        let digest = hasher.finalize();
+        let mut bytes = [0u8; CHUNK_VERSION_LEN];
+        bytes.copy_from_slice(&digest[..CHUNK_VERSION_LEN]);
         Self(bytes)
     }
 
@@ -483,6 +520,12 @@ pub enum VaultNodeKind {
         /// that chunk is rewritten and bound into its AAD, so a stale blob
         /// cannot be replayed without the index key.
         chunk_versions: Vec<ChunkVersion>,
+        /// The id of the key each chunk is sealed with, aligned with
+        /// `chunk_versions`. [`KeyId::NONE`] marks a chunk that has no key: it
+        /// was unreadable when a password change copied it, or its blob was
+        /// missing then, and the key it was written with left the vault. It
+        /// reads as damaged.
+        chunk_keys: Vec<KeyId>,
         /// Byte offset of that chunk inside `store/data/<hh>/<file_id>.blob`.
         /// A rewrite stores the new ciphertext in a free span, or appends one.
         /// Bytes the index no longer names stay until that index is sealed,
@@ -491,22 +534,45 @@ pub enum VaultNodeKind {
     },
 }
 
+/// Where one file's chunks are: version, key, and offset of each, in order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChunkList {
+    pub versions: Vec<ChunkVersion>,
+    pub keys: Vec<KeyId>,
+    pub offsets: Vec<u64>,
+}
+
+impl ChunkList {
+    pub(crate) fn with_capacity(count: usize) -> Self {
+        Self {
+            versions: Vec::with_capacity(count),
+            keys: Vec::with_capacity(count),
+            offsets: Vec::with_capacity(count),
+        }
+    }
+
+    pub(crate) fn push(&mut self, version: ChunkVersion, key: KeyId, offset: u64) {
+        self.versions.push(version);
+        self.keys.push(key);
+        self.offsets.push(offset);
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.versions.len()
+    }
+}
+
 impl VaultNode {
-    pub fn file(
-        path: &str,
-        file_id: String,
-        size: u64,
-        chunk_versions: Vec<ChunkVersion>,
-        chunk_offsets: Vec<u64>,
-    ) -> Self {
+    pub fn file(path: &str, file_id: String, size: u64, chunks: ChunkList) -> Self {
         let now = crate::time::unix_millis();
         Self {
             path: path.to_string(),
             kind: VaultNodeKind::File {
                 file_id,
                 size,
-                chunk_versions,
-                chunk_offsets,
+                chunk_versions: chunks.versions,
+                chunk_keys: chunks.keys,
+                chunk_offsets: chunks.offsets,
             },
             created_at: now,
             modified_at: now,
@@ -537,6 +603,7 @@ impl VaultNode {
             size,
             chunk_versions,
             chunk_offsets,
+            ..
         } = &self.kind
         else {
             return None;
@@ -592,6 +659,49 @@ impl VaultNode {
             VaultNodeKind::File { chunk_offsets, .. } => Some(chunk_offsets.as_slice()),
         }
     }
+
+    /// The key each chunk is sealed with.
+    pub fn chunk_keys(&self) -> Option<&[KeyId]> {
+        match &self.kind {
+            VaultNodeKind::Dir => None,
+            VaultNodeKind::File { chunk_keys, .. } => Some(chunk_keys.as_slice()),
+        }
+    }
+
+    /// The chunk lists of a file node: versions, keys, and offsets.
+    pub fn chunks(&self) -> Option<ChunkList> {
+        match &self.kind {
+            VaultNodeKind::Dir => None,
+            VaultNodeKind::File {
+                chunk_versions,
+                chunk_keys,
+                chunk_offsets,
+                ..
+            } => Some(ChunkList {
+                versions: chunk_versions.clone(),
+                keys: chunk_keys.clone(),
+                offsets: chunk_offsets.clone(),
+            }),
+        }
+    }
+
+    /// Point this file at `file_id` and `chunks`, keeping its size, times,
+    /// and marks. A directory stays as it is.
+    pub(crate) fn set_storage(&mut self, new_id: String, chunks: ChunkList) {
+        if let VaultNodeKind::File {
+            file_id,
+            chunk_versions,
+            chunk_keys,
+            chunk_offsets,
+            ..
+        } = &mut self.kind
+        {
+            *file_id = new_id;
+            *chunk_versions = chunks.versions;
+            *chunk_keys = chunks.keys;
+            *chunk_offsets = chunks.offsets;
+        }
+    }
 }
 
 impl VaultIndex {
@@ -599,6 +709,7 @@ impl VaultIndex {
         Self {
             format_version: super::header::FORMAT_VERSION,
             saves: 0,
+            key_copies_due: false,
             nodes: Vec::new(),
             held: Vec::new(),
             released: Vec::new(),
@@ -796,6 +907,132 @@ impl VaultIndex {
         Ok(())
     }
 
+    /// Every chunk is on a key `held` returns true for, or on no key
+    /// ([`KeyId::NONE`]): a tree that names a key its header does not hold
+    /// does not open. The error names the node by its place in the list.
+    pub(crate) fn check_keys(
+        &self,
+        held: &dyn Fn(KeyId) -> bool,
+    ) -> std::result::Result<(), String> {
+        for (at, node) in self.nodes.iter().enumerate() {
+            let keys = node.chunk_keys().unwrap_or_default();
+            if keys.iter().any(|key| !key.is_none() && !held(*key)) {
+                return Err(format!(
+                    "node {at}: a chunk on a key the header does not hold"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Every file of the tree, then every held blob's file: what a key of
+    /// the header serves.
+    fn files_and_held(&self) -> impl Iterator<Item = &VaultNode> {
+        self.nodes
+            .iter()
+            .chain(self.held.iter().filter_map(|entry| entry.file.as_ref()))
+    }
+
+    /// The keys a chunk of a file, or of a held blob's file, is on.
+    pub(crate) fn keys_in_use(&self) -> std::collections::BTreeSet<KeyId> {
+        self.files_and_held()
+            .filter_map(VaultNode::chunk_keys)
+            .flatten()
+            .copied()
+            .filter(|key| !key.is_none())
+            .collect()
+    }
+
+    /// Files of the tree, and held blobs' files, with a chunk on a key
+    /// `wanted` picks. A chunk with no key counts for none.
+    pub(crate) fn files_on_keys(&self, wanted: impl Fn(KeyId) -> bool) -> u64 {
+        self.files_and_held()
+            .filter_map(VaultNode::chunk_keys)
+            .filter(|keys| keys.iter().any(|key| !key.is_none() && wanted(*key)))
+            .count() as u64
+    }
+
+    /// Bytes of content on each key, by chunk: what converting that key's
+    /// files would rewrite.
+    pub(crate) fn bytes_on_keys(&self) -> std::collections::BTreeMap<KeyId, u64> {
+        let mut bytes = std::collections::BTreeMap::new();
+        for node in self.files_and_held() {
+            let (Some((_, size, _)), Some(keys)) = (node.as_file(), node.chunk_keys()) else {
+                continue;
+            };
+            for (at, key) in keys.iter().enumerate() {
+                if key.is_none() {
+                    continue;
+                }
+                let len = super::chunk::chunk_plain_len(size, at as u32, super::header::CHUNK_SIZE);
+                *bytes.entry(*key).or_insert(0u64) += u64::from(len);
+            }
+        }
+        bytes
+    }
+
+    /// Give every chunk on a key `keep` refuses no key ([`KeyId::NONE`]), in
+    /// the tree and in held blobs' files: those keys leave the header, and
+    /// such a chunk reads as damaged. True when a chunk changed.
+    pub(crate) fn drop_keys(&mut self, keep: impl Fn(KeyId) -> bool) -> bool {
+        let mut changed = false;
+        let held = self.held.iter_mut().filter_map(|entry| entry.file.as_mut());
+        for node in self.nodes.iter_mut().chain(held) {
+            if let VaultNodeKind::File { chunk_keys, .. } = &mut node.kind {
+                for key in chunk_keys.iter_mut() {
+                    if !key.is_none() && !keep(*key) {
+                        *key = KeyId::NONE;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// List `entries` as released ([`Self::released`]) for the seal about to
+    /// drop them, and return the ones it added: [`Self::unlist_released`]
+    /// takes them back when that seal fails, since the previous index, still
+    /// on disk, names them.
+    pub(crate) fn list_released(
+        &mut self,
+        entries: impl IntoIterator<Item = String>,
+    ) -> Vec<String> {
+        let mut added = Vec::new();
+        for entry in entries {
+            if !self.released.contains(&entry) {
+                self.released.push(entry.clone());
+                added.push(entry);
+            }
+        }
+        added
+    }
+
+    pub(crate) fn unlist_released(&mut self, added: &[String]) {
+        self.released.retain(|entry| !added.contains(entry));
+    }
+
+    /// Empty the released list after a seal that flushed, and return what of
+    /// it to delete: every entry no file and no held entry names again.
+    pub(crate) fn take_released(&mut self) -> Vec<String> {
+        let released = std::mem::take(&mut self.released);
+        if released.is_empty() {
+            return released;
+        }
+        let named: std::collections::HashSet<&str> = self
+            .nodes
+            .iter()
+            .filter_map(VaultNode::as_file)
+            .filter(|(_, size, _)| *size > 0)
+            .map(|(file_id, _, _)| file_id)
+            .chain(self.held.iter().map(|entry| entry.name.as_str()))
+            .collect();
+        released
+            .into_iter()
+            .filter(|entry| !named.contains(entry.as_str()))
+            .collect()
+    }
+
     /// Every path of the tree is where the lookup says. Each save runs this
     /// in debug test builds, and each lookup checks itself against a scan.
     #[cfg(test)]
@@ -858,14 +1095,37 @@ pub fn decode_index(bytes: &[u8]) -> Result<VaultIndex> {
     })
 }
 
-pub fn sealed_index_bytes(
-    header: &VaultHeader,
-    index_key: &[u8; INDEX_KEY_LEN],
-    index: &VaultIndex,
-) -> Result<Vec<u8>> {
-    let aad = index_aad(header)?;
-    let plain = encode_index(index)?;
-    seal_index(index_key, &plain, &aad)
+/// What an index is sealed under: an index key, and the AAD of the header
+/// block that key belongs to.
+pub(crate) struct IndexPair<'a> {
+    key: &'a [u8; INDEX_KEY_LEN],
+    aad: Vec<u8>,
+}
+
+impl<'a> IndexPair<'a> {
+    /// The pair `keys` seals under: its write key's index key and its own
+    /// block's AAD.
+    pub(crate) fn of(keys: &'a Keyring) -> Result<Self> {
+        Ok(Self {
+            key: keys.write_index(),
+            aad: index_aad(keys.identity(), &keys.block().kdf)?,
+        })
+    }
+
+    /// The pair of `block`, a block of the vault `keys` belongs to, when
+    /// `keys` holds that block's write key.
+    pub(crate) fn of_block(keys: &'a Keyring, block: &super::header::HeaderBlock) -> Option<Self> {
+        Some(Self {
+            key: keys.index_key(block.write_id())?,
+            aad: index_aad(keys.identity(), &block.kdf).ok()?,
+        })
+    }
+}
+
+pub fn sealed_index_bytes(keys: &Keyring, index: &VaultIndex) -> Result<Vec<u8>> {
+    let pair = IndexPair::of(keys)?;
+    let plain = zeroize::Zeroizing::new(encode_index(index)?);
+    seal_index(pair.key, &plain, &pair.aad)
 }
 
 /// How a seal reached the disk.
@@ -889,8 +1149,7 @@ pub enum Sealed {
 /// the index written again right after one.
 pub fn save_sealed_index(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    index_key: &[u8; INDEX_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
 ) -> Result<(Vec<u8>, Sealed)> {
     let store_dir = store_dir.as_ref();
@@ -899,7 +1158,7 @@ pub fn save_sealed_index(
         crate::host_fs::create_dir_all(parent)?;
     }
     index.saves = index.saves.saturating_add(1);
-    let sealed = sealed_index_bytes(header, index_key, index)?;
+    let sealed = sealed_index_bytes(keys, index)?;
     // Copy first. The primary file is the commit, so a crash before that write
     // still opens the previous tree. Both live in one folder: once its flush
     // failed for the copy, a later flush that succeeds proves nothing, so the
@@ -925,11 +1184,10 @@ pub fn save_sealed_index(
 /// survive a power cut fails the creation.
 pub(crate) fn save_new_sealed_index(
     store_dir: &Path,
-    header: &VaultHeader,
-    index_key: &[u8; INDEX_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
 ) -> Result<()> {
-    match save_sealed_index(store_dir, header, index_key, index)? {
+    match save_sealed_index(store_dir, keys, index)? {
         (_, Sealed::Flushed) => Ok(()),
         (_, Sealed::Unflushed) => {
             Err(std::io::Error::other("the index folder could not be flushed").into())
@@ -937,90 +1195,139 @@ pub(crate) fn save_new_sealed_index(
     }
 }
 
-/// The tree a store opens with, and the tree in the copy file when that file
-/// opens too but holds another one: a seal that stopped after writing its
-/// copy, so its blobs may be the newest bytes of some files.
-pub struct LoadedIndex {
-    pub index: VaultIndex,
-    pub other_copy: Option<VaultIndex>,
+/// Which of the two index files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexSlot {
+    Primary,
+    Copy,
 }
 
-/// Open the primary index, or the copy when the primary does not open, and
-/// write a file that does not open back from the one that does. A copy that
-/// opens but holds another tree stays as it is and is handed back: the unlock
-/// that keeps its blobs ([`super::held`]) reads it, and the next seal
-/// replaces it.
+impl IndexSlot {
+    fn path(self, store_dir: &Path) -> PathBuf {
+        match self {
+            Self::Primary => index_path(store_dir),
+            Self::Copy => index_copy_path(store_dir),
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Primary => INDEX_FILE_NAME,
+            Self::Copy => INDEX_COPY_FILE_NAME,
+        }
+    }
+
+    fn twin(self) -> Self {
+        match self {
+            Self::Primary => Self::Copy,
+            Self::Copy => Self::Primary,
+        }
+    }
+}
+
+/// The tree a store opens with: the index file that opened, the newer one
+/// when both do.
+pub(crate) struct LoadedIndex {
+    pub index: VaultIndex,
+    slot: IndexSlot,
+    raw: Vec<u8>,
+    /// The other index file does not hold these bytes: it is missing, does
+    /// not open, or holds another tree.
+    twin_differs: bool,
+}
+
+impl LoadedIndex {
+    /// Write the other index file from this one when it differs. True when
+    /// it was written. Called once a header and this index opened together.
+    pub(crate) fn repair_twin(&self, store_dir: &Path) -> Result<bool> {
+        if !self.twin_differs {
+            return Ok(false);
+        }
+        let twin = self.slot.twin();
+        paths::write_bytes_atomic(&twin.path(store_dir), &self.raw)?;
+        log_index_restored(store_dir, twin.file_name());
+        Ok(true)
+    }
+}
+
+/// One index file that opened: its tree and its bytes.
+struct OpenedFile {
+    index: VaultIndex,
+    raw: Vec<u8>,
+}
+
+/// Open the index files of `store_dir` under `pairs`, each file under the
+/// first pair that opens it. A tree with a chunk on a key `held` refuses does
+/// not open. When both files open and hold different trees, the one with the
+/// higher save count is the vault's tree, the primary on a tie: a seal writes
+/// the copy first, so the copy is newer only after a crash between its two
+/// writes. Nothing is written here ([`LoadedIndex::repair_twin`]).
 ///
 /// When neither file opens, the error is [`UprivError::VaultIndexUnreadable`]
 /// with why the primary was refused (the copy's when there is no primary): a
 /// tag that fails, or a tree that breaks its rules. "Missing" only when
-/// neither file is there. The header opened, so the blobs can still rebuild
-/// the tree (`vault::rebuild`).
-pub fn load_index_files(
-    store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    index_key: &[u8; INDEX_KEY_LEN],
+/// neither file is there.
+pub(crate) fn load_index_files(
+    store_dir: &Path,
+    pairs: &[IndexPair<'_>],
+    held: &dyn Fn(KeyId) -> bool,
 ) -> Result<LoadedIndex> {
-    let store_dir = store_dir.as_ref();
-    let primary_path = index_path(store_dir);
-    let copy_path = index_copy_path(store_dir);
-    let primary_raw = crate::host_fs::read(&primary_path).ok();
-    let copy_raw = crate::host_fs::read(&copy_path).ok();
-    let aad = index_aad(header)?;
-    let mut refused = None;
-    if let Some(raw) = primary_raw.as_deref() {
-        match unseal_index(&primary_path, index_key, raw, &aad) {
-            Ok(index) => {
-                if copy_raw.as_deref() == Some(raw) {
-                    return Ok(LoadedIndex {
-                        index,
-                        other_copy: None,
-                    });
+    let mut refused: Option<UprivError> = None;
+    let mut open = |slot: IndexSlot| -> Option<OpenedFile> {
+        let path = slot.path(store_dir);
+        let raw = crate::host_fs::read(&path).ok()?;
+        for pair in pairs {
+            match unseal_index(&path, pair.key, &raw, &pair.aad).and_then(|index| {
+                index
+                    .check_keys(held)
+                    .map_err(|problem| UprivError::VaultStoreInvalid {
+                        path: path.clone(),
+                        detail: problem,
+                    })?;
+                Ok(index)
+            }) {
+                Ok(index) => return Some(OpenedFile { index, raw }),
+                Err(error) => {
+                    refused.get_or_insert(error);
                 }
-                let other_copy = copy_raw
-                    .as_deref()
-                    .and_then(|copy| unseal_index(&copy_path, index_key, copy, &aad).ok());
-                if other_copy.is_none() {
-                    paths::write_bytes_atomic(&copy_path, raw)?;
-                    log_index_restored(store_dir, INDEX_COPY_FILE_NAME);
-                }
-                return Ok(LoadedIndex { index, other_copy });
-            }
-            Err(error) => refused = Some(error),
-        }
-    }
-    if let Some(raw) = copy_raw.as_deref() {
-        match unseal_index(&copy_path, index_key, raw, &aad) {
-            Ok(index) => {
-                paths::write_bytes_atomic(&primary_path, raw)?;
-                log_index_restored(store_dir, INDEX_FILE_NAME);
-                return Ok(LoadedIndex {
-                    index,
-                    other_copy: None,
-                });
-            }
-            Err(error) => {
-                refused.get_or_insert(error);
             }
         }
-    }
-    let detail = match refused {
-        None => "missing index".to_string(),
-        Some(UprivError::VaultStoreInvalid { detail, .. }) => detail,
-        Some(other) => other.to_string(),
+        None
     };
-    Err(UprivError::VaultIndexUnreadable { detail })
+    let primary = open(IndexSlot::Primary);
+    let copy = open(IndexSlot::Copy);
+    let (chosen, slot, twin_differs) = match (primary, copy) {
+        (Some(primary), Some(copy)) => {
+            let differ = primary.raw != copy.raw;
+            if copy.index.saves > primary.index.saves {
+                (copy, IndexSlot::Copy, differ)
+            } else {
+                (primary, IndexSlot::Primary, differ)
+            }
+        }
+        (Some(primary), None) => (primary, IndexSlot::Primary, true),
+        (None, Some(copy)) => (copy, IndexSlot::Copy, true),
+        (None, None) => {
+            let detail = match refused {
+                None => "missing index".to_string(),
+                Some(UprivError::VaultStoreInvalid { detail, .. }) => detail,
+                Some(other) => other.to_string(),
+            };
+            return Err(UprivError::VaultIndexUnreadable { detail });
+        }
+    };
+    Ok(LoadedIndex {
+        index: chosen.index,
+        slot,
+        raw: chosen.raw,
+        twin_differs,
+    })
 }
 
-/// Open `sealed` as an index of the store `header` describes. Another copy of
-/// this vault, such as a backup zip, may carry another header.
-pub(crate) fn open_sealed_index(
-    header: &VaultHeader,
-    index_key: &[u8; INDEX_KEY_LEN],
-    sealed: &[u8],
-) -> Result<VaultIndex> {
-    let aad = index_aad(header)?;
-    unseal_index(Path::new(INDEX_FILE_NAME), index_key, sealed, &aad)
+/// Open `sealed` as an index under `pair`. Another copy of this vault, such
+/// as a backup zip, may carry another header.
+pub(crate) fn open_sealed_index(pair: &IndexPair<'_>, sealed: &[u8]) -> Result<VaultIndex> {
+    unseal_index(Path::new(INDEX_FILE_NAME), pair.key, sealed, &pair.aad)
 }
 
 fn unseal_index(
@@ -1100,8 +1407,7 @@ mod tests {
 
         // The copy and the primary are put in place; neither folder flush lands.
         crate::paths::fail_folder_flushes(2);
-        let (sealed, flushed) =
-            save_sealed_index(&dir, &opened.header, &opened.index_key, &mut index).unwrap();
+        let (sealed, flushed) = save_sealed_index(&dir, &opened.keys, &mut index).unwrap();
         crate::paths::fail_folder_flushes(0);
         assert_eq!(flushed, Sealed::Unflushed);
         assert_eq!(crate::host_fs::read(index_path(&dir)).unwrap(), sealed);
@@ -1110,16 +1416,21 @@ mod tests {
         // Only the copy's flush fails: the primary's flush of the same folder
         // that follows proves nothing.
         crate::paths::fail_folder_flushes(1);
-        let (_, flushed) =
-            save_sealed_index(&dir, &opened.header, &opened.index_key, &mut index).unwrap();
+        let (_, flushed) = save_sealed_index(&dir, &opened.keys, &mut index).unwrap();
         crate::paths::fail_folder_flushes(0);
         assert_eq!(flushed, Sealed::Unflushed);
 
         // Creating a store needs an index that survives a power cut.
         crate::paths::fail_folder_flushes(2);
-        let refused = save_new_sealed_index(&dir, &opened.header, &opened.index_key, &mut index);
+        let refused = save_new_sealed_index(&dir, &opened.keys, &mut index);
         crate::paths::fail_folder_flushes(0);
         assert!(refused.is_err());
+    }
+
+    /// The index files of `dir` under the pair of `keys`.
+    fn load(dir: &Path, keys: &Keyring) -> Result<LoadedIndex> {
+        let pairs = [IndexPair::of(keys).unwrap()];
+        load_index_files(dir, &pairs, &|id| keys.contains(id))
     }
 
     #[test]
@@ -1151,8 +1462,12 @@ mod tests {
         assert!(super::super::open_store(&dir, b"index-copy-ok").is_err());
     }
 
+    /// A seal writes the copy first: a crash between its two writes leaves a
+    /// copy with more saves, and that newer tree is the vault's. On a tie the
+    /// primary wins. The other file is written from the winner only once a
+    /// header opened with it.
     #[test]
-    fn a_copy_that_opens_with_another_tree_is_kept_and_handed_back() {
+    fn the_index_file_with_more_saves_wins_and_the_primary_on_a_tie() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("store");
         super::super::create_empty_store(
@@ -1164,22 +1479,91 @@ mod tests {
         let opened = super::super::open_store(&dir, b"other-copy-ok").unwrap();
         let mut newer = opened.index.clone();
         newer.push(VaultNode::dir("docs"));
+        newer.saves += 1;
         // A seal that stopped after its copy.
-        let sealed = sealed_index_bytes(&opened.header, &opened.index_key, &newer).unwrap();
+        let sealed = sealed_index_bytes(&opened.keys, &newer).unwrap();
         crate::host_fs::write(index_copy_path(&dir), &sealed).unwrap();
+        let primary = crate::host_fs::read(index_path(&dir)).unwrap();
 
-        let loaded = load_index_files(&dir, &opened.header, &opened.index_key).unwrap();
-        assert_eq!(loaded.index, opened.index);
-        assert_eq!(loaded.other_copy.unwrap().nodes, newer.nodes);
-        assert_eq!(crate::host_fs::read(index_copy_path(&dir)).unwrap(), sealed);
+        let loaded = load(&dir, &opened.keys).unwrap();
+        assert_eq!(loaded.index.nodes(), newer.nodes());
+        // Nothing is written while loading.
+        assert_eq!(crate::host_fs::read(index_path(&dir)).unwrap(), primary);
+        assert!(loaded.repair_twin(&dir).unwrap());
+        assert_eq!(crate::host_fs::read(index_path(&dir)).unwrap(), sealed);
+
+        // The same save count in both: the primary.
+        let mut tie = newer.clone();
+        tie.push(VaultNode::dir("other"));
+        let sealed_tie = sealed_index_bytes(&opened.keys, &tie).unwrap();
+        crate::host_fs::write(index_copy_path(&dir), &sealed_tie).unwrap();
+        assert_eq!(
+            load(&dir, &opened.keys).unwrap().index.nodes(),
+            newer.nodes()
+        );
 
         // A copy that does not open is written back from the primary.
         crate::host_fs::write(index_copy_path(&dir), b"torn").unwrap();
-        let loaded = load_index_files(&dir, &opened.header, &opened.index_key).unwrap();
-        assert!(loaded.other_copy.is_none());
+        load(&dir, &opened.keys).unwrap().repair_twin(&dir).unwrap();
         assert_eq!(
             crate::host_fs::read(index_copy_path(&dir)).unwrap(),
             crate::host_fs::read(index_path(&dir)).unwrap()
+        );
+    }
+
+    /// An index opens only under the pair of the header block it was sealed
+    /// for: the write key's index key and that block's unlock settings.
+    #[test]
+    fn an_index_sealed_under_another_pair_does_not_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("store");
+        super::super::create_empty_store(&dir, b"pair-ok-ok", super::super::KdfUnlockPreset::M32)
+            .unwrap();
+        let opened = super::super::open_store(&dir, b"pair-ok-ok").unwrap();
+        let kdf = super::super::HeaderKdf::fresh(super::super::KdfUnlockPreset::M32);
+        let kek = kdf.derive_kek(b"pair-ok-ok").unwrap();
+        // The same keys under other unlock settings: another AAD.
+        let same_keys = opened.keys.draft().seal(2, kdf.clone(), &kek).unwrap();
+        // A new write key under the same settings: another index key.
+        let new_key = opened
+            .keys
+            .draft()
+            .fresh(KeyId::new(2))
+            .unwrap()
+            .seal(2, opened.keys.block().kdf.clone(), &kek)
+            .unwrap();
+        for other in [&same_keys, &new_key] {
+            let sealed = sealed_index_bytes(other, &opened.index).unwrap();
+            crate::host_fs::write(index_path(&dir), &sealed).unwrap();
+            crate::host_fs::write(index_copy_path(&dir), &sealed).unwrap();
+            assert!(matches!(
+                load(&dir, &opened.keys),
+                Err(UprivError::VaultIndexUnreadable { .. })
+            ));
+            assert!(load(&dir, other).is_ok());
+        }
+    }
+
+    /// A tree whose chunks name a key the header does not hold does not open.
+    #[test]
+    fn a_tree_on_a_key_the_header_does_not_hold_does_not_open() {
+        let mut index = VaultIndex::empty();
+        let mut chunks = ChunkList::with_capacity(1);
+        chunks.push(VERSION, KeyId::new(7), 4096);
+        index.push(VaultNode::file(
+            "a.txt",
+            "00000000-0000-4000-8000-000000000001".into(),
+            5,
+            chunks,
+        ));
+        assert!(index.check_keys(&|id| id == KeyId::new(1)).is_err());
+        assert!(index.check_keys(&|id| id == KeyId::new(7)).is_ok());
+        // A chunk with no key reads as damaged: it names no key to hold.
+        index.drop_keys(|_| false);
+        assert!(index.check_keys(&|_| false).is_ok());
+        assert_eq!(
+            index.find("a.txt").unwrap().chunk_keys().unwrap(),
+            [KeyId::NONE]
         );
     }
 
@@ -1213,7 +1597,7 @@ mod tests {
                 let kind = match blob {
                     None => r#"{"type":"dir"}"#.to_string(),
                     Some(id) => format!(
-                        r#"{{"type":"file","file_id":"{id}","size":0,"chunk_versions":[],"chunk_offsets":[]}}"#
+                        r#"{{"type":"file","file_id":"{id}","size":0,"chunk_versions":[],"chunk_keys":[],"chunk_offsets":[]}}"#
                     ),
                 };
                 let path = serde_json::to_string(path).unwrap();
@@ -1278,11 +1662,11 @@ mod tests {
         let primary = index_path(&dir);
         let copy = index_copy_path(&dir);
         let original = crate::host_fs::read(&primary).unwrap();
-        // Sealed with the vault's own key: only the tree is wrong.
+        // Sealed under the vault's own pair: only the tree is wrong.
         let escaping = seal_index(
-            &opened.index_key,
+            opened.keys.write_index(),
             index_file(&[("../outside.txt", Some("a"))]).as_bytes(),
-            &index_aad(&opened.header).unwrap(),
+            &index_aad(opened.keys.identity(), &opened.keys.block().kdf).unwrap(),
         )
         .unwrap();
 
@@ -1320,7 +1704,7 @@ mod tests {
             r#"{"path":"docs","kind":{"type":"dir"},"created_at":1,"modified_at":2},"#,
             r#"{"path":"docs/a.txt","kind":{"type":"file","#,
             r#""file_id":"00000000-0000-4000-8000-000000000001","size":5,"#,
-            r#""chunk_versions":["a1b2c3d4e5f60718"],"chunk_offsets":[0]},"#,
+            r#""chunk_versions":["a1b2c3d4e5f60718"],"chunk_keys":[1],"chunk_offsets":[4096]},"#,
             r#""created_at":3,"modified_at":4,"#,
             r#""content_digest":{"sha256":"sha256:aa","storage":"sha256:bb"},"#,
             r#""problem":"damaged"}],"#,
@@ -1367,10 +1751,17 @@ mod tests {
 
     /// Sealed digests name their storage by this tag, so it hashes each
     /// version as the 16 hex digits the index file holds.
+    /// One chunk of [`VERSION`] on key 1 at `offset`.
+    fn one_chunk(offset: u64) -> ChunkList {
+        let mut chunks = ChunkList::with_capacity(1);
+        chunks.push(VERSION, KeyId::new(1), offset);
+        chunks
+    }
+
     #[test]
     fn the_storage_tag_hashes_each_version_as_its_hex_digits() {
         use sha2::{Digest, Sha256};
-        let node = VaultNode::file("a.txt", "id".into(), 5, vec![VERSION], vec![40]);
+        let node = VaultNode::file("a.txt", "id".into(), 5, one_chunk(40));
         let mut hasher = Sha256::new();
         hasher.update(b"id");
         hasher.update(5u64.to_le_bytes());
@@ -1387,21 +1778,9 @@ mod tests {
     fn a_rewritten_file_keeps_its_place_in_the_tree() {
         let mut index = VaultIndex::empty();
         index.push(VaultNode::dir("a"));
-        index.push(VaultNode::file(
-            "b",
-            "one".into(),
-            1,
-            vec![VERSION],
-            vec![0],
-        ));
+        index.push(VaultNode::file("b", "one".into(), 1, one_chunk(4096)));
         index.push(VaultNode::dir("c"));
-        index.put(VaultNode::file(
-            "b",
-            "two".into(),
-            1,
-            vec![VERSION],
-            vec![0],
-        ));
+        index.put(VaultNode::file("b", "two".into(), 1, one_chunk(4096)));
         let paths: Vec<&str> = index
             .nodes()
             .iter()
@@ -1487,8 +1866,7 @@ mod tests {
                         &path,
                         format!("blob-{blobs}"),
                         1,
-                        vec![VERSION],
-                        vec![0],
+                        one_chunk(4096),
                     ));
                 }
                 8 if !has_children(&index, &path) => {

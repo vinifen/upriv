@@ -11,8 +11,9 @@ export interface VaultDeleteOutcome {
 export function parseVaultDeleteOutcome(raw: unknown): VaultDeleteOutcome {
   const record = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const outside = record.outside;
+  const folders = Array.isArray(record.folders) ? record.folders : [];
   return {
     outside: outside === "kept" || outside === "removed" || outside === "failed" ? outside : "none",
-    folder: typeof record.folder === "string" ? record.folder : null,
+    folder: typeof folders[0] === "string" ? folders[0] : null,
   };
 }

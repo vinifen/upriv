@@ -17,6 +17,12 @@ export interface VaultBackupEntry {
   saved: boolean;
   /** Where the zip is on this device. */
   path: string;
+  /**
+   * Its header unlocks with less RAM than the vault's does now: someone who
+   * has the zip guesses the password at that lower cost. No row names a
+   * password.
+   */
+  lowerUnlockRam: boolean;
 }
 
 /** Which folder a section shows. */

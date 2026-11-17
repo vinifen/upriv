@@ -1,5 +1,6 @@
 import type { VaultBackupSection } from "../backups";
 import type { UnlockedFolderInfo } from "../folder-lists";
+import type { VaultKeyStatus } from "../vault/keyChanges";
 import type { VaultListItem } from "../vault-list";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
 
@@ -30,6 +31,11 @@ export interface VaultInfoSnapshot {
   passwordInSession: boolean;
   /** The vault's unlocked folder on this device; `null` while it is read. */
   unlockedFolder: UnlockedFolderInfo | null;
+  /**
+   * Where an open vault's keys stand; `null` while it has no open session or
+   * the answer did not come, `"reading"` while it is read.
+   */
+  keyStatus: VaultKeyStatus | null | "reading";
   storePath: string;
   backupsPath: string;
   /** Where the system file manager opens `storePath` (`vaultRootUprivOpenPath`). */

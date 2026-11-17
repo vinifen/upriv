@@ -14,7 +14,6 @@ export {
   useRowStatuses,
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
-  VaultSettingsDangerZoneSection,
   VaultSettingsKdfSection,
   VaultSettingsUnlockedFolderSection,
   VaultSettingsSevenZipSection,

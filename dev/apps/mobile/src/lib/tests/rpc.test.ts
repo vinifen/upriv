@@ -77,19 +77,31 @@ describe("folder lists on a phone", () => {
     expect(JSON.parse(params).lists).toEqual(lists);
   });
 
-  it("sends the choice about outside backups with a delete, and reads what happened", async () => {
+  it("sends the outside backups choice, Delete now, and the job with a delete", async () => {
     native.invoke.mockResolvedValueOnce(
-      JSON.stringify({ ok: true, result: { outside: "none", folder: null } }),
+      JSON.stringify({ ok: true, result: { outside: "kept", folders: ["/sd/backups"] } }),
     );
     const { rpcVaultDelete } = await import("../rpc");
 
-    await expect(rpcVaultDelete("notes", false)).resolves.toEqual({
-      outside: "none",
-      folder: null,
-    });
+    await expect(
+      rpcVaultDelete("notes", { outsideBackups: false, now: true, job: "job-1" }),
+    ).resolves.toEqual({ outside: "kept", folder: "/sd/backups" });
     expect(native.invoke).toHaveBeenCalledWith(
       "vault_delete",
-      JSON.stringify({ id: "notes", outsideBackups: false }),
+      JSON.stringify({ id: "notes", outsideBackups: false, now: true, job: "job-1" }),
+    );
+  });
+
+  it("tells a running delete to finish now, and reads whether one ran", async () => {
+    native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { running: true } }));
+    native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { running: false } }));
+    const { rpcVaultDeleteHurry } = await import("../rpc");
+
+    await expect(rpcVaultDeleteHurry("notes")).resolves.toBe(true);
+    await expect(rpcVaultDeleteHurry("notes")).resolves.toBe(false);
+    expect(native.invoke).toHaveBeenCalledWith(
+      "vault_delete_hurry",
+      JSON.stringify({ id: "notes" }),
     );
   });
 });
@@ -138,12 +150,18 @@ describe("job rpc", () => {
     native.invoke.mockReset();
   });
 
-  it("reads progress only while the job runs", async () => {
+  it("reads progress and its step only while the job runs", async () => {
     native.invoke
       .mockResolvedValueOnce(
         JSON.stringify({
           ok: true,
-          result: { running: true, bytesDone: 5, bytesTotal: 50, stoppable: false },
+          result: {
+            running: true,
+            bytesDone: 5,
+            bytesTotal: 50,
+            stoppable: false,
+            step: "rewriting_files",
+          },
         }),
       )
       .mockResolvedValueOnce(
@@ -154,6 +172,7 @@ describe("job rpc", () => {
       bytesDone: 5,
       bytesTotal: 50,
       stoppable: false,
+      step: "rewriting_files",
     });
     await expect(rpcJobStatus("job-1")).resolves.toBeNull();
     expect(native.invoke).toHaveBeenCalledWith("job_status", JSON.stringify({ job: "job-1" }));

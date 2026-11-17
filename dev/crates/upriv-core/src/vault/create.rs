@@ -120,11 +120,23 @@ pub(super) fn create_vault_with_welcome(
 /// registry lock covers only that, so Argon2 does not block rename. A
 /// data-folder export takes the same section: it either sees this vault on
 /// its way in, or this create refuses while the export runs.
+/// True when `dir` is an empty vault folder no create is setting up: what a
+/// delete leaves when it stops between its last two steps. Its id is free.
+pub(crate) fn vault_folder_is_free(dir: &Path) -> bool {
+    !crate::session::is_vault_preparing_at(dir)
+        && crate::host_fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
+}
+
 pub(super) fn claim_new_vault_dir(root: &VaultRoot, dest: &Path) -> Result<PreparingGuard> {
     with_vault_registry_lock(|| {
         ensure_data_folder_export_idle(root.root())?;
         with_vault_dir_lock(dest, || match crate::host_fs::create_dir(dest) {
             Ok(()) => Ok(()),
+            Err(error)
+                if error.kind() == ErrorKind::AlreadyExists && vault_folder_is_free(dest) =>
+            {
+                Ok(())
+            }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
                 Err(UprivError::VaultAlreadyExists(dest.to_path_buf()))
             }

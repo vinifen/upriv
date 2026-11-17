@@ -9,6 +9,7 @@ import {
   isVaultOpenCredentialResumeStatus,
   isVaultOpenResumeTarget,
   vaultCloseNowOffered,
+  vaultDeleteNowOffered,
   isVaultCloseQueued,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
@@ -97,7 +98,7 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultListRowUnlockTarget("closing")).toBe(false);
   });
 
-  it("names export and rewrap and refuses open", () => {
+  it("names export, a backup, and both key changes, and refuses open", () => {
     const row = vaultRowFixture({ id: "a", session: null });
     expect(resolveVaultListStatus(row, { exportingVaultIds: ["a"] })).toBe("exporting");
     expect(resolveVaultListStatus(row, { backupJobVaultIds: ["a"] })).toBe("backing_up");
@@ -268,9 +269,27 @@ describe("vaultStatusLabelKey", () => {
   });
 
   it("says auto-closed only for a closed vault that idle lock just finished", () => {
-    expect(vaultStatusLabelKey("closed", "notes", {}, true)).toBe("vault.status.auto_closed");
+    const autoClosed = { autoClosed: true };
+    expect(vaultStatusLabelKey("closed", "notes", {}, autoClosed)).toBe("vault.status.auto_closed");
     expect(vaultStatusLabelKey("closed", "notes")).toBe("vault.status.closed");
-    expect(vaultStatusLabelKey("open", "notes", {}, true)).toBe("vault.status.open");
+    expect(vaultStatusLabelKey("open", "notes", {}, autoClosed)).toBe("vault.status.open");
+  });
+
+  it("offers Delete now on a deleting row until it was told once", () => {
+    expect(vaultDeleteNowOffered("deleting", "a")).toBe(true);
+    expect(vaultDeleteNowOffered("deleting", "a", { deleteNowVaultIds: ["a"] })).toBe(false);
+    expect(vaultDeleteNowOffered("closed", "a")).toBe(false);
+  });
+
+  it("says a delete did not finish only while none of it runs here", () => {
+    const unfinished = { deleteUnfinished: true };
+    expect(vaultStatusLabelKey("deleting", "notes", {}, unfinished)).toBe(
+      "vault.status.delete_unfinished",
+    );
+    expect(
+      vaultStatusLabelKey("deleting", "notes", { deletingVaultIds: ["notes"] }, unfinished),
+    ).toBe("vault.status.deleting");
+    expect(vaultStatusLabelKey("deleting", "notes")).toBe("vault.status.deleting");
   });
 
   it("says Queued while the row's job waits for its lane, then the status", () => {

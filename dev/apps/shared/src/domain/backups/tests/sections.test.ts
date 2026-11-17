@@ -12,6 +12,7 @@ function entry(key: string, saved = false): VaultBackupEntry {
     sizeBytes: 1,
     saved,
     path: `/x/${key}`,
+    lowerUnlockRam: false,
   };
 }
 

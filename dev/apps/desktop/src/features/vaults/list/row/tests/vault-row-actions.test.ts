@@ -46,24 +46,32 @@ function show(
   pipelineListStatus: VaultPipelineListStatus = {},
   strict = false,
 ) {
-  const onCloseNow = vi.fn();
+  const handlers = {
+    onCloseNow: vi.fn(),
+    onOpenSettings: vi.fn(),
+    onOpenDelete: vi.fn(),
+    onDeleteWork: vi.fn(),
+  };
   const actions = createElement(VaultRowActions, {
     vault,
     pipelineListStatus,
     onOpenBackups: () => {},
     onOpenNote: () => {},
     onOpenVaultInfo: () => {},
-    onOpenSettings: () => {},
     onExportVault: () => {},
     onOpenFileManager: () => {},
-    onCloseNow,
+    ...handlers,
   });
   render(strict ? createElement(StrictMode, null, actions) : actions);
-  return onCloseNow;
+  return handlers;
 }
 
 function moreButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "app.menu.more" }) as HTMLButtonElement;
+}
+
+function settingsButton(): HTMLButtonElement {
+  return screen.getByRole("button", { name: "action.settings" }) as HTMLButtonElement;
 }
 
 /** By text: the popover stays hidden until a real layout positions it, and hides names too. */
@@ -145,7 +153,7 @@ describe("Close now in More options", () => {
   });
 
   it("is there during a running close, and runs from there", () => {
-    const onCloseNow = show(OPEN, { closingVaultIds: ["notes"] });
+    const { onCloseNow } = show(OPEN, { closingVaultIds: ["notes"] });
     fireEvent.click(moreButton());
     fireEvent.click(closeNowItem()!);
     expect(onCloseNow).toHaveBeenCalledWith(OPEN);
@@ -176,5 +184,60 @@ describe("Close now in More options", () => {
     fireEvent.click(moreButton());
     expect(menuItem("action.backups")).not.toBeNull();
     expect(closeNowItem()).toBeNull();
+  });
+});
+
+describe("Delete vault in the Settings menu", () => {
+  it("comes after the settings screens and opens its own window", () => {
+    const { onOpenDelete, onOpenSettings } = show(CLOSED);
+    fireEvent.click(settingsButton());
+    const labels = screen
+      .getAllByRole("menuitem", { hidden: true })
+      .map((item) => item.textContent);
+    expect(labels).toEqual([
+      "modal.settings.area.preferences",
+      "modal.settings.area.password",
+      "modal.settings.area.kdf",
+      "modal.settings.area.group",
+      "modal.delete_vault.title",
+    ]);
+    fireEvent.click(menuItem("modal.delete_vault.title")!);
+    expect(onOpenDelete).toHaveBeenCalledWith("notes");
+    expect(onOpenSettings).not.toHaveBeenCalled();
+  });
+
+  it("opens a settings screen from the other entries", () => {
+    const { onOpenDelete, onOpenSettings } = show(CLOSED);
+    fireEvent.click(settingsButton());
+    fireEvent.click(menuItem("modal.settings.area.preferences")!);
+    expect(onOpenSettings).toHaveBeenCalledWith("notes", "preferences");
+    expect(onOpenDelete).not.toHaveBeenCalled();
+  });
+
+  it("is the only entry while the vault is being deleted", () => {
+    show(CLOSED, { deletingVaultIds: ["notes"] });
+    expect(settingsButton().disabled).toBe(false);
+    fireEvent.click(settingsButton());
+    expect(menuItem("modal.delete_vault.title")).not.toBeNull();
+    expect(menuItem("modal.settings.area.preferences")).toBeNull();
+  });
+});
+
+describe("Delete now in More options", () => {
+  it("is there while a delete runs, and asks for Delete now", () => {
+    const { onDeleteWork } = show(CLOSED, { deletingVaultIds: ["notes"] });
+    fireEvent.click(moreButton());
+    fireEvent.click(menuItem("action.delete_now")!);
+    expect(onDeleteWork).toHaveBeenCalledWith(CLOSED, true);
+  });
+
+  it("goes once it was asked for, and is never there otherwise", () => {
+    show(CLOSED, { deletingVaultIds: ["notes"], deleteNowVaultIds: ["notes"] });
+    fireEvent.click(moreButton());
+    expect(menuItem("action.delete_now")).toBeNull();
+    cleanup();
+    show(CLOSED);
+    fireEvent.click(moreButton());
+    expect(menuItem("action.delete_now")).toBeNull();
   });
 });

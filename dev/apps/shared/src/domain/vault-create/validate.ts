@@ -88,7 +88,7 @@ function unlockedFolderUnchosen(draft: CreateVaultDraft, lists: CreateVaultLists
 /** Mock lifecycle unlock (`trim().length >= 4`). Live create and open refuse only an empty one. */
 const MOCK_LIFECYCLE_PASSWORD_MIN_LENGTH = 4;
 
-/** Mock unlock / rewrap reject this word. Live create does not. */
+/** Mock unlock and password or unlock-RAM changes reject this word. Live create does not. */
 const MOCK_LIFECYCLE_WRONG_PASSWORD = "wrong";
 
 /** Prototype mock unlock — still trims. Not used on live create. */
