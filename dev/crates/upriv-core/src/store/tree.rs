@@ -15,11 +15,8 @@ use crate::error::{Result, UprivError};
 pub const INTERNAL_WORKSPACE_FILE: &str = ".upriv-workspace.json";
 
 /// Names that start with this belong to plaintext folder mode: the folder
-/// marker, its temporary files, and [`PLAIN_POLICY_FILE`].
+/// marker and its temporary files.
 pub const PLAIN_RESERVED_PREFIX: &str = ".upriv-plain";
-
-/// Encrypted record of the place a plaintext folder was confirmed for, per system.
-pub const PLAIN_POLICY_FILE: &str = ".upriv-plain-policy.json";
 
 /// Folder beside the vault folder in the package of a `.7z` or a plain-text
 /// `.zip`. It carries the vault's settings and file-manager layout. A vault
@@ -502,7 +499,6 @@ mod tests {
         assert!(is_reserved_logical("upriv-seed.txt"));
         assert!(!is_reserved_logical("notes/upriv-seed.txt"));
         assert!(is_reserved_logical(".upriv-plain"));
-        assert!(is_reserved_logical(PLAIN_POLICY_FILE));
         assert!(is_reserved_logical("notes/.upriv-plain-tmp-1"));
         assert!(is_reserved_logical(".upriv-plain-x/inside.txt"));
         assert!(!is_reserved_logical("notes.txt"));

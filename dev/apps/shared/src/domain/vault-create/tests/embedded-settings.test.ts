@@ -7,8 +7,6 @@ import {
   revertEmbeddedVaultSettings,
 } from "../applyEmbeddedVaultSettings";
 import type { VaultSettingsConfig } from "../../vault-settings";
-import { vaultWorkspace } from "../../workspace";
-import { vaultBackupFolders } from "../../backups/folders";
 
 function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig {
   return {
@@ -21,17 +19,13 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       hidden: true,
     },
     storage: { mode: "encrypted_dir", plain_files: "whole" },
-    mount: {
-      ...vaultWorkspace(),
-      custom_file_manager_folder: true,
-      linux: { place: "unset", path: "/data/vaults" },
-    },
+    unlocked_folder: { encrypted: "on", devices: {} },
     backup: {
       enabled: false,
       mode: "keep_all",
       keep_last: 3,
       skip_unchanged: false,
-      ...vaultBackupFolders(),
+      devices: {},
     },
     security: {
       wipe_passes: 2,
@@ -96,7 +90,7 @@ describe("applyEmbeddedVaultSettings", () => {
         mode: "keep_all" as const,
         keep_last: 1,
         skip_unchanged: true,
-        ...vaultBackupFolders(),
+        devices: {},
       },
     };
     const draft = {
@@ -115,22 +109,26 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.archiveUnlockPreset).toBe("1gib");
   });
 
-  it("remembers the backup folders a file carried, and lets go of them with its settings", () => {
+  it("brings every device's groups a file carried, and lets go of them with its settings", () => {
     const snapshot = createEmptyCreateVaultDraft([]);
-    const folder = { place: "custom" as const, path: "/mnt/usb" };
+    const devices = {
+      ["b".repeat(32)]: {
+        system: "windows" as const,
+        selected: 1,
+        next_number: 2,
+        rows: [{ number: 1, name: "", path: "D:\\Backups" }],
+      },
+    };
     const applied = applyEmbeddedVaultSettings(
       snapshot,
-      {
-        settings: settings({ backup: { ...settings().backup, linux: folder } }),
-        unlockPreset: null,
-      },
+      { settings: settings({ backup: { ...settings().backup, devices } }), unlockPreset: null },
       snapshot,
     );
-    expect(applied.carriedBackupFolders?.linux).toEqual(folder);
-    expect(applied.backup.linux).toEqual(folder);
+    expect(applied.backup.devices).toEqual(devices);
+    expect(applied.unlocked_folder.encrypted).toBe("on");
 
     const reverted = revertEmbeddedVaultSettings(applied, applied, snapshot);
-    expect(reverted.carriedBackupFolders).toBeNull();
+    expect(reverted.backup.devices).toEqual({});
   });
 
   it("does not change KDF for a store zip", () => {

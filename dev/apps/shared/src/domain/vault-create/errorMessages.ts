@@ -19,14 +19,9 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   group_name_empty: "vault.create.error.group_name_empty",
   group_name_too_long: "vault.create.error.group_name_too_long",
   group_name_invalid: "vault.create.error.group_name_invalid",
-  mount_path_empty: "modal.workspace.error.empty",
-  mount_path_not_absolute: "modal.workspace.error.not_absolute",
-  mount_path_saf_tree: "modal.workspace.error.saf_tree_child",
-  mount_path_reserved: "modal.workspace.error.reserved",
-  mount_path_root_unknown: "modal.workspace.error.unavailable",
-  backup_folder_empty: "modal.workspace.error.empty",
-  backup_folder_not_absolute: "modal.workspace.error.not_absolute",
-  backup_folder_reserved: "modal.workspace.error.reserved",
+  unlocked_folder_row_invalid: "folder_list.error.rows_invalid",
+  unlocked_folder_unchosen: "modal.settings.field.unlocked_folder.unchosen",
+  backup_folder_row_invalid: "folder_list.error.rows_invalid",
 } as const satisfies Record<CreateVaultValidationCode, I18nKey>;
 
 export type CreateVaultErrorI18nKey =

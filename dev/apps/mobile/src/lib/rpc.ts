@@ -6,16 +6,26 @@ import {
   NO_DEADLINE_MS,
   OPERATION_LIMIT_MS,
   RPC_TIMEOUT_CODE,
-  vaultRootSetupPathTimeoutMs,
+  NO_APP_LIST_CHANGES,
+  NO_VAULT_LIST_CHANGES,
+  dataFolderApplyTimeoutMs,
   RpcError,
   isRpcError,
-  appWorkspaceForDaemon,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
-  vaultSettingsForDaemon,
   parseAppLogFile,
+  parseBackupEntry,
+  parseDataFolderApplied,
+  parseDataFolderList,
+  parseDataFolderSearch,
+  parseDataFolderStatus,
+  parseDeviceInfo,
   parseEmbeddedVaultSettings,
-  parseDefaultRootStatus,
+  parseFolderStatus,
+  parseListsSaved,
+  parseOsFolderAnswer,
+  parseSwitches,
+  parseUnlockedFolderInfo,
   parseVaultGroupListResult,
   parseVaultGroupWire,
   parseVaultListItemWire,
@@ -24,12 +34,8 @@ import {
   parseVaultListResult,
   parseVaultRebuildResult,
   parseVaultRenameResult,
-  parseVaultRootInspect,
-  parseVaultRootPrivateRoot,
   parseVaultRootResolve,
   vaultImportProbeTimeoutMs,
-  parseBackupFolderCheck,
-  parseBackupFolderStatus,
   parseBackupListing,
   parseBackupSaved,
   parseVaultDeleteOutcome,
@@ -54,11 +60,21 @@ import {
   type VaultDiskUsage,
   type AllowlistedUiLogEvent,
   type AppLogFile,
+  type AppListChanges,
   type AppSettingsConfig,
   type CreateVaultInput,
-  type DefaultRootStatusResult,
-  type IncompleteReplacePolicy,
-  type BackupFolderStatus,
+  type DataFolderApplied,
+  type DataFolderApplyRequest,
+  type DataFolderListView,
+  type DataFolderSearchResult,
+  type DataFolderStatus,
+  type DeviceInfo,
+  type FolderStatus,
+  type FolderSwitch,
+  type ListsSaved,
+  type OsFolderAnswer,
+  type UnlockedFolderInfo,
+  type VaultBackupEntry,
   type VaultBackupListing,
   type VaultBackupSaved,
   type VaultCloseReason,
@@ -71,11 +87,8 @@ import {
   type VaultGroupUpdateInput,
   type FolderRemoval,
   type VaultListItem,
+  type VaultListChanges,
   type VaultRebuildResult,
-  type VaultRootAliasInfo,
-  type VaultRootBootstrapPrefs,
-  type VaultRootInspectResult,
-  type VaultRootMode,
   type VaultRootResolveResult,
   type VaultRenameResult,
   type VaultSettingsConfig,
@@ -203,6 +216,16 @@ async function settleInvocation(
   }
 }
 
+/** This device as core knows it: whether it has an ID, its device name, its system. */
+export async function rpcDeviceInfo(): Promise<DeviceInfo> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DEVICE_INFO);
+  const device = parseDeviceInfo(raw);
+  if (!device) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "device_info: expected object", raw);
+  }
+  return device;
+}
+
 export async function rpcAppSettingsGet(): Promise<{
   settings: AppSettingsConfig;
   rootPath: string | null;
@@ -220,14 +243,12 @@ export async function rpcAppSettingsGet(): Promise<{
   };
 }
 
+/** Save the app settings; `lists` carries what changed in the app's folder lists. */
 export async function rpcAppSettingsSave(
   settings: AppSettingsConfig,
-  options?: { syncAlias?: boolean },
-): Promise<{ wrote: boolean }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SAVE, {
-    settings: { ...settings, workspace: appWorkspaceForDaemon(settings.workspace) },
-    syncAlias: options?.syncAlias ?? true,
-  });
+  lists: AppListChanges = NO_APP_LIST_CHANGES,
+): Promise<ListsSaved & { wrote: boolean }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SAVE, { settings, lists });
   if (
     typeof raw !== "object" ||
     raw === null ||
@@ -235,165 +256,99 @@ export async function rpcAppSettingsSave(
   ) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "app_settings_save: expected { wrote }", raw);
   }
-  return { wrote: (raw as { wrote: boolean }).wrote };
-}
-
-/**
- * Pure `settings.toml` → `AppSettingsConfig` parse (no disk access).
- *
- * Used by the Android SAF flow: Kotlin reads the TOML body through the
- * DocumentFile bridge, Rust owns the `TOML → wire` mapping so mobile and
- * desktop stay identical downstream of the wire shape.
- */
-export async function rpcAppSettingsParseToml(toml: string): Promise<AppSettingsConfig> {
-  const raw = await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML, { toml });
-  if (typeof raw !== "object" || raw === null) {
-    throw new RpcError(BRIDGE.INVALID_RESPONSE, "app_settings_parse_toml: expected object", raw);
-  }
-  const settings = (raw as { settings?: unknown }).settings;
-  if (typeof settings !== "object" || settings === null) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "app_settings_parse_toml: expected { settings }",
-      raw,
-    );
-  }
-  return normalizeAppSettings(settings as AppSettingsConfig);
+  return { wrote: (raw as { wrote: boolean }).wrote, ...parseListsSaved(raw) };
 }
 
 export async function rpcVaultRootResolve(options?: {
-  vaultRootMode?: VaultRootMode;
   explicitPath?: string | null;
   binaryDir?: string | null;
 }): Promise<VaultRootResolveResult> {
   return parseVaultRootResolve(
     await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_RESOLVE, {
-      vaultRootMode: options?.vaultRootMode ?? "default_root",
       explicitPath: options?.explicitPath ?? null,
       binaryDir: options?.binaryDir ?? null,
     }),
   );
 }
 
-export async function rpcVaultRootSetupDefaultRoot(options?: {
-  replaceIncomplete?: boolean;
-  replacePolicy?: IncompleteReplacePolicy;
-  bootstrap?: VaultRootBootstrapPrefs | null;
-}): Promise<{ rootPath: string }> {
-  const replaceIncomplete = options?.replaceIncomplete ?? false;
-  if (replaceIncomplete && options?.replacePolicy == null) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "replacePolicy is required when replaceIncomplete is true",
-    );
-  }
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_DEFAULT_ROOT, {
-    replaceIncomplete,
-    replacePolicy: options?.replacePolicy ?? null,
-    bootstrap: options?.bootstrap ?? null,
-  });
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { rootPath?: unknown }).rootPath !== "string"
-  ) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "vault_root_setup_default_root: expected { rootPath }",
-      raw,
-    );
-  }
-  return { rootPath: (raw as { rootPath: string }).rootPath };
-}
-
-export async function rpcVaultRootSetupPath(
-  path: string,
-  options?: {
-    replaceIncomplete?: boolean;
-    replacePolicy?: IncompleteReplacePolicy;
-    bootstrap?: VaultRootBootstrapPrefs | null;
-    /**
-     * Copy the private app-folder `.upriv` into a mounted grant before init,
-     * as the core job `job`: it has no deadline, and Stop leaves the original.
-     */
-    adoptPrivateRoot?: { job: string };
-    /** Last Android Custom folder, written to `.upriv-data-folder`. */
-    customUri?: string;
-  },
-): Promise<{
-  rootPath: string;
-  aliasPath: string;
-  privateRoot?: "none" | "moved" | "left_behind";
-}> {
-  const replaceIncomplete = options?.replaceIncomplete ?? false;
-  if (replaceIncomplete && options?.replacePolicy == null) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "replacePolicy is required when replaceIncomplete is true",
-    );
-  }
-  const adopt = options?.adoptPrivateRoot;
-  const raw = await nativeInvokeRaw(
-    CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_PATH,
-    {
-      path,
-      replaceIncomplete,
-      replacePolicy: options?.replacePolicy ?? null,
-      bootstrap: options?.bootstrap ?? null,
-      ...(adopt ? { adoptPrivateRoot: true, job: adopt.job } : {}),
-      ...(options?.customUri ? { customUri: options.customUri } : {}),
-    },
-    vaultRootSetupPathTimeoutMs({ adoptPrivateRoot: adopt !== undefined }),
+export async function rpcDataFolderList(newList: boolean): Promise<DataFolderListView> {
+  return parseDataFolderList(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_LIST, { newList }),
   );
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { rootPath?: unknown }).rootPath !== "string" ||
-    typeof (raw as { aliasPath?: unknown }).aliasPath !== "string"
-  ) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "vault_root_setup_path: expected { rootPath, aliasPath }",
-      raw,
-    );
-  }
-  return {
-    rootPath: (raw as { rootPath: string }).rootPath,
-    aliasPath: (raw as { aliasPath: string }).aliasPath,
-    privateRoot: parseVaultRootPrivateRoot((raw as { privateRoot?: unknown }).privateRoot),
-  };
 }
 
-export async function rpcVaultRootDeactivateAlias(): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS);
+/**
+ * Save the list and open the folder it selects, which the caller mounted at
+ * the data folder root. With `job`, the phone's private data folder is copied
+ * into it first, as that job.
+ */
+export async function rpcDataFolderApply(
+  request: DataFolderApplyRequest,
+): Promise<DataFolderApplied> {
+  const adoptPrivateRoot = request.job !== undefined;
+  return parseDataFolderApplied(
+    await nativeInvokeRaw(
+      CORE_RPC_COMMANDS.DATA_FOLDER_APPLY,
+      {
+        changes: request.changes,
+        newList: request.newList ?? false,
+        replaceIncomplete: request.replacePolicy != null,
+        replacePolicy: request.replacePolicy ?? null,
+        bootstrap: request.bootstrap,
+        ...(adoptPrivateRoot ? { adoptPrivateRoot, job: request.job } : {}),
+      },
+      dataFolderApplyTimeoutMs({ adoptPrivateRoot }),
+    ),
+  );
 }
 
-export async function rpcVaultRootRememberCustom(path: string): Promise<void> {
-  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM, { path });
+export async function rpcDataFolderSearch(job: string): Promise<DataFolderSearchResult> {
+  return parseDataFolderSearch(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_SEARCH, { job }),
+  );
 }
 
-export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_READ_ALIAS);
-  if (raw === null || raw === undefined) return null;
-  if (
-    typeof raw !== "object" ||
-    typeof (raw as { path?: unknown }).path !== "string" ||
-    typeof (raw as { active?: unknown }).active !== "boolean"
-  ) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "vault_root_read_alias: expected { path, active } | null",
-      raw,
-    );
-  }
-  const record = raw as { path: string; active: boolean; customPath?: unknown };
-  return {
-    path: record.path,
-    active: record.active,
-    ...(typeof record.customPath === "string" && record.customPath.trim()
-      ? { customPath: record.customPath.trim() }
-      : {}),
-  };
+/** A folder of the data folder list: `null` is Default. */
+export async function rpcDataFolderStatus(path: string | null): Promise<DataFolderStatus> {
+  return parseDataFolderStatus(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.FOLDER_STATUS, {
+      list: "data_folder",
+      ...(path === null ? {} : { path }),
+    }),
+  );
+}
+
+export async function rpcFolderStatus(
+  list: "unlocked" | "backup",
+  path: string,
+  vaultId: string | null,
+): Promise<FolderStatus> {
+  return parseFolderStatus(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.FOLDER_STATUS, {
+      list,
+      path,
+      ...(vaultId ? { vault: vaultId } : {}),
+    }),
+  );
+}
+
+export async function rpcVaultUnlockedFolderInfo(id: string): Promise<UnlockedFolderInfo> {
+  return parseUnlockedFolderInfo(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_UNLOCKED_FOLDER_INFO, { id }),
+  );
+}
+
+export async function rpcPlainRecordForget(id: string, token: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.PLAIN_RECORD_FORGET, { id, token });
+}
+
+/** The storage-access trees this phone's rows name, for the bridge to mount. */
+export async function rpcDeviceTrees(): Promise<string[]> {
+  const raw = await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.DEVICE_TREES);
+  const trees = (raw as { trees?: unknown } | null)?.trees;
+  return Array.isArray(trees)
+    ? trees.filter((tree): tree is string => typeof tree === "string")
+    : [];
 }
 
 export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
@@ -410,18 +365,6 @@ export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
     );
   }
   return (raw as { path: string }).path;
-}
-
-export async function rpcVaultRootDefaultRootStatus(): Promise<DefaultRootStatusResult> {
-  return parseDefaultRootStatus(
-    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS),
-  );
-}
-
-export async function rpcVaultRootInspectPath(path: string): Promise<VaultRootInspectResult> {
-  return parseVaultRootInspect(
-    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_INSPECT_PATH, { path }),
-  );
 }
 
 function parseAppLogFileOrThrow(raw: unknown): AppLogFile {
@@ -573,7 +516,7 @@ export async function rpcVaultCreate(
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CREATE, {
     password: input.password,
     unlockPreset: input.unlockPreset,
-    settings: vaultSettingsForDaemon(input.settings),
+    settings: input.settings,
     welcome: input.welcome,
     job,
     ...(forImport ? { forImport: true } : {}),
@@ -584,14 +527,17 @@ export async function rpcVaultCreate(
   return parseVaultListItemWire((raw as { vault?: unknown }).vault);
 }
 
-/** Unlock as the job `job`; a stop leaves the vault closed. */
-export async function rpcVaultOpen(id: string, password: string, job: string): Promise<unknown> {
-  return nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password, job });
-}
-
-/** Finish an open that waited for its plain-text folder, as the same job. */
-export async function rpcVaultPlainConfirm(id: string, path: string, job: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_CONFIRM, { id, path, job });
+/**
+ * Unlock as the job `job`; a stop leaves the vault closed. Resolves with the
+ * unlocked folder switches a plain-text open made.
+ */
+export async function rpcVaultOpen(
+  id: string,
+  password: string,
+  job: string,
+): Promise<FolderSwitch[]> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password, job });
+  return parseSwitches((raw as { switches?: unknown } | null)?.switches);
 }
 
 export async function rpcVaultPlainDestination(id: string): Promise<PlainDestination> {
@@ -723,19 +669,19 @@ export async function rpcVaultRebuild(
 
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
   if (typeof raw !== "object" || raw === null) {
-    return { backupFailed: false, backupFailure: null, backupFallback: null, plain: null };
+    return { backupFailed: false, backupFailure: null, backupSwitches: [], plain: null };
   }
   const body = raw as {
     backupFailed?: unknown;
     backupFailure?: unknown;
-    backupFallback?: unknown;
+    backupSwitches?: unknown;
     plain?: unknown;
   };
   const backupFailed = body.backupFailed === true;
   return {
     backupFailed,
     backupFailure: backupFailed ? (parseBackupFailure(body.backupFailure) ?? "other") : null,
-    backupFallback: parseBackupFolderStatus(body.backupFallback),
+    backupSwitches: parseSwitches(body.backupSwitches),
     plain: parsePlainCloseSummary(body.plain),
   };
 }
@@ -778,11 +724,15 @@ export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig
   return normalizeVaultSettingsConfig(settings as VaultSettingsConfig);
 }
 
-export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, {
-    id,
-    settings: vaultSettingsForDaemon(settings),
-  });
+/** Save a vault's settings; `lists` carries what changed in its folder lists. */
+export async function rpcVaultConfigSave(
+  id: string,
+  settings: VaultSettingsConfig,
+  lists: VaultListChanges = NO_VAULT_LIST_CHANGES,
+): Promise<ListsSaved> {
+  return parseListsSaved(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, { id, settings, lists }),
+  );
 }
 
 export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
@@ -887,7 +837,7 @@ export async function rpcVaultImportZip(
 ): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_ZIP, {
-    settings: vaultSettingsForDaemon(input.settings),
+    settings: input.settings,
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
     job,
@@ -901,7 +851,7 @@ export async function rpcVaultImport7z(
 ): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_7Z, {
-    settings: vaultSettingsForDaemon(input.settings),
+    settings: input.settings,
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -920,7 +870,7 @@ export async function rpcVaultImportFilesZip(
 ): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
-    settings: vaultSettingsForDaemon(input.settings),
+    settings: input.settings,
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -938,7 +888,7 @@ export async function rpcVaultImportOsPath(
 ): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH, {
-    settings: vaultSettingsForDaemon(input.settings),
+    settings: input.settings,
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -1162,14 +1112,10 @@ export async function rpcVaultFsMove(
   );
 }
 
-export async function rpcVaultFsOsPath(
-  id: string,
-  path: string,
-): Promise<{ osPath: string | null }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_OS_PATH, { id, path });
-  const record = requireRecord(raw, "vault_fs_os_path");
-  const osPath = typeof record.osPath === "string" ? record.osPath.trim() : "";
-  return { osPath: osPath || null };
+export async function rpcVaultFsOsPath(id: string, path: string): Promise<OsFolderAnswer> {
+  return parseOsFolderAnswer(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_OS_PATH, { id, path }),
+  );
 }
 
 export async function rpcVaultFsPreviewFits(id: string, path: string): Promise<{ fits: boolean }> {
@@ -1191,36 +1137,33 @@ export async function rpcVaultPlainUnsend(id: string, paths: string[]): Promise<
 }
 
 export async function rpcBackupList(id: string): Promise<VaultBackupListing> {
-  return parseBackupListing(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_LIST, { id }), id);
+  return parseBackupListing(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_LIST, { id }));
 }
 
-/** What a folder typed into the settings can do right now. */
-export async function rpcBackupFolderCheck(
-  path: string,
-  vault: string | null,
-): Promise<BackupFolderStatus> {
-  return parseBackupFolderCheck(
-    await nativeInvokeRaw(
-      CORE_RPC_COMMANDS.BACKUP_FOLDER_CHECK,
-      vault === null ? { path } : { path, vault },
-    ),
+export async function rpcBackupDelete(id: string, keys: readonly string[]): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_DELETE, { id, keys: [...keys] });
+}
+
+export async function rpcBackupPromote(id: string, key: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, key });
+}
+
+export async function rpcBackupRename(
+  id: string,
+  key: string,
+  name: string,
+): Promise<VaultBackupEntry> {
+  return parseBackupEntry(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_RENAME, { id, key, name }),
   );
 }
 
-export async function rpcBackupFolderReuse(id: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_FOLDER_REUSE, { id });
-}
-
-export async function rpcBackupDelete(id: string, stamps: readonly string[]): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_DELETE, { id, stamps: [...stamps] });
-}
-
-export async function rpcBackupPromote(id: string, stamp: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
+export async function rpcBackupFolderForget(id: string, folder: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_FOLDER_FORGET, { id, folder });
 }
 
 export async function rpcBackupSave(id: string, job: string): Promise<VaultBackupSaved> {
-  return parseBackupSaved(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id, job }), id);
+  return parseBackupSaved(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id, job }));
 }
 
 /** Zip the whole `.upriv` into `<name>.zip` inside `destDir`, as the job `job`. */
@@ -1251,16 +1194,16 @@ export async function rpcJobCancel(job: string, by: JobStopBy): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.JOB_CANCEL, { job, by });
 }
 
-/** Copy the backups named by `stamps` into `destDir`, as the job `job`. */
+/** Copy the backups named by `keys` into `destDir`, as the job `job`. */
 export async function rpcBackupExport(
   id: string,
-  stamps: readonly string[],
+  keys: readonly string[],
   destDir: string,
   job: string,
 ): Promise<{ path: string; size: number }> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_EXPORT, {
     id,
-    stamps: [...stamps],
+    keys: [...keys],
     destDir,
     job,
   });

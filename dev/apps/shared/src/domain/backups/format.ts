@@ -1,49 +1,34 @@
 import { formatIsoDate } from "../format/datetime";
-import type { BackupLocation } from "./types";
 
 export function formatBackupDate(iso: string, locale: string): string {
   return formatIsoDate(iso, locale);
 }
 
-/** On-disk snapshot: `YYYYMMDDHHmmss-<vaultId>.zip`. */
-export function backupSnapshotFileName(stamp: string, vaultId: string): string {
-  return `${stamp}-${vaultId.trim()}.zip`;
-}
-
-/** Name of the snapshot file. This name selects the zip; the stamp alone does not. */
-export function backupEntryFileName(
-  entry: { stamp: string; fileName?: string },
-  vaultId: string,
-): string {
-  const named = entry.fileName?.trim();
-  if (named && !named.includes("/") && !named.includes("\\")) return named;
-  return backupSnapshotFileName(entry.stamp, vaultId);
-}
+/** Longest name of a backup, in characters (core `BACKUP_NAME_MAX_CHARS`). */
+export const BACKUP_NAME_MAX_CHARS = 80;
 
 /**
- * Locator for one zip. A pin lives under `saves/` and can share its file name
- * with the copy beside it, and a zip in the chosen folder is under `chosen/`.
- * A key is never a path.
+ * A backup name as typed, trimmed and capped. Core turns characters a system
+ * refuses into `_`; an empty name takes the name away.
  */
-export function backupEntryKey(
-  entry: { stamp: string; fileName?: string; saved?: boolean; location?: BackupLocation },
-  vaultId: string,
-): string {
-  const name = backupEntryFileName(entry, vaultId);
-  const place = entry.location === "chosen" ? "chosen/" : "";
-  return `${place}${entry.saved ? "saves/" : ""}${name}`;
+export function normalizeBackupName(name: string): string {
+  return Array.from(name.trim()).slice(0, BACKUP_NAME_MAX_CHARS).join("");
+}
+
+/** The file part of a backup key (`<folder>/[saves/]<file>`). */
+function keyFileName(key: string): string {
+  return key.slice(key.lastIndexOf("/") + 1);
 }
 
 /**
- * The file an export of the backups `keys` (`backupEntryKey`) writes into its
- * folder: one keeps its own name, several go into `upriv-backups-<id>.zip`.
- * While that name is taken core adds the next free `number` (`{name}-2.zip`,
- * `export_backups`).
+ * The file an export of the backups `keys` writes into its folder: one keeps
+ * its own name, several go into `upriv-backups-<id>.zip`. While that name is
+ * taken core adds the next free `number` (`{name}-2.zip`, `export_backups`).
  */
 export function backupExportFilename(keys: readonly string[], vaultId: string, number = 1): string {
   const stem =
     keys.length === 1
-      ? keys[0].slice(keys[0].lastIndexOf("/") + 1).replace(/\.zip$/, "")
+      ? keyFileName(keys[0]).replace(/\.zip$/, "")
       : `upriv-backups-${vaultId.trim()}`;
   return number > 1 ? `${stem}-${number}.zip` : `${stem}.zip`;
 }

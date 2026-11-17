@@ -18,11 +18,8 @@ use super::config::LogConfig;
 use super::store::{self, LogFileInfo};
 use super::writer::Logger;
 use crate::config::{discover_bootstrap_root, load_app_settings, LoggingSettings};
-use crate::error::{Result as CoreResult, UprivError};
-use crate::paths::{
-    app_home_dir, read_vault_root_alias, setup_default_root_anchor, ResolveVaultRoot, VaultRoot,
-    VAULT_ROOT_SETTINGS_REL,
-};
+use crate::error::Result as CoreResult;
+use crate::paths::{data_folder_lost, VaultRoot};
 
 static SESSION: OnceLock<Mutex<SessionState>> = OnceLock::new();
 static APP_START_EMITTED: AtomicBool = AtomicBool::new(false);
@@ -136,22 +133,11 @@ pub fn session_logger() -> Option<Arc<Logger>> {
         .clone()
 }
 
-/// Intended vault-root path when discover reports absence (alias or default anchor).
-fn intended_vault_root_path() -> CoreResult<PathBuf> {
-    let home = app_home_dir()?;
-    if let Some(alias) = read_vault_root_alias(&home)? {
-        if alias.active {
-            return Ok(alias.path);
-        }
-    }
-    setup_default_root_anchor()
-}
-
 /// Strict logs dir for list/get/delete.
 ///
 /// - Valid root → `Ok(Some(logs_dir))`
 /// - True bootstrap (never ready this process, no root) → `Ok(None)` (empty list)
-/// - Mid-session missing / incomplete / alias invalid → typed `Err` (fail loud)
+/// - Mid-session missing / incomplete → typed `Err` (fail loud)
 fn require_session_logs_dir() -> CoreResult<Option<PathBuf>> {
     match discover_bootstrap_root() {
         Ok(Some(root)) => {
@@ -165,10 +151,7 @@ fn require_session_logs_dir() -> CoreResult<Option<PathBuf>> {
         Ok(None) => {
             clear_logging_session();
             if VAULT_ROOT_READY_EMITTED.load(Ordering::Relaxed) {
-                let target = intended_vault_root_path()?;
-                return Err(UprivError::VaultRootNotFound(
-                    target.join(VAULT_ROOT_SETTINGS_REL),
-                ));
+                return Err(data_folder_lost());
             }
             Ok(None)
         }
@@ -197,13 +180,22 @@ pub fn log_event(level: super::LogLevel, event: &str, fields: &[(&str, &str)]) {
     }
 }
 
+/// Write `event` with `fields` and then the fields that name the device that
+/// started this process, so a data folder that moves between machines keeps
+/// a log that says which machine wrote which lines.
+fn log_with_device(event: &str, fields: &[(&str, &str)]) {
+    let device = crate::device::this_device().log_fields();
+    let mut all = fields.to_vec();
+    all.extend(device.iter().map(|(key, value)| (*key, value.as_str())));
+    log_event(super::LogLevel::Info, event, &all);
+}
+
 /// Emit `app_start` once per process (after a vault-root is available).
 pub fn log_app_start(source: &str) {
     if APP_START_EMITTED.swap(true, Ordering::Relaxed) {
         return;
     }
-    log_event(
-        super::LogLevel::Info,
+    log_with_device(
         "app_start",
         &[("version", crate::app_version()), ("source", source)],
     );
@@ -217,11 +209,7 @@ pub fn log_vault_root_ready(source: &str, path: &str) {
     if VAULT_ROOT_READY_EMITTED.swap(true, Ordering::Relaxed) {
         return;
     }
-    log_event(
-        super::LogLevel::Info,
-        "vault_root_ready",
-        &[("source", source), ("path", path)],
-    );
+    log_with_device("vault_root_ready", &[("source", source), ("path", path)]);
 }
 
 /// Allow a subsequent [`log_vault_root_ready`] after a data-folder switch.
@@ -234,61 +222,34 @@ pub fn vault_root_was_ready() -> bool {
     VAULT_ROOT_READY_EMITTED.load(Ordering::Relaxed)
 }
 
-/// After this process already had a vault-root, a missing marker is not first-run
-/// `NeedsSetup` — callers must fail loud (`VaultRootNotFound`) so the UI can toast
-/// and reopen Setup.
-pub fn map_needs_setup_after_ready(resolved: ResolveVaultRoot) -> CoreResult<ResolveVaultRoot> {
-    match resolved {
-        ResolveVaultRoot::NeedsSetup {
-            default_root_anchor,
-            alias_path,
-            distribution,
-        } => {
-            if vault_root_was_ready() {
-                Err(UprivError::VaultRootNotFound(
-                    default_root_anchor.join(VAULT_ROOT_SETTINGS_REL),
-                ))
-            } else {
-                Ok(ResolveVaultRoot::NeedsSetup {
-                    default_root_anchor,
-                    alias_path,
-                    distribution,
-                })
-            }
-        }
-        other => Ok(other),
-    }
-}
-
 /// Write `vault_root_leaving` on an **existing** logger (old root).
 ///
-/// Call **after** a successful root/alias mutation and **before**
+/// Call **after** the data folder switched and **before**
 /// [`ensure_logging_session`] / [`install_logging_at`], holding the `Arc`
-/// captured before the mutation. Do **not** route through [`log_event`] —
+/// captured before the switch. Do **not** route through [`log_event`] —
 /// that re-resolves the root and can open the new folder first.
-pub fn log_vault_root_leaving_on(logger: &Logger, from: &str, to: &str, mode: &str) {
+pub fn log_vault_root_leaving_on(logger: &Logger, from: &str, to: &str, source: &str) {
     logger.info(
         "vault_root_leaving",
-        &[("from", from), ("to", to), ("mode", mode)],
+        &[("from", from), ("to", to), ("source", source)],
     );
     logger.flush();
 }
 
 /// Write on the **new** root after switch (also re-arms + emits `vault_root_ready`).
-pub fn log_vault_root_entered(from: &str, to: &str, mode: &str) {
+pub fn log_vault_root_entered(from: &str, to: &str, source: &str) {
     reset_vault_root_ready();
-    log_event(
-        super::LogLevel::Info,
+    log_with_device(
         "vault_root_entered",
-        &[("from", from), ("to", to), ("mode", mode)],
+        &[("from", from), ("to", to), ("source", source)],
     );
-    log_vault_root_ready(mode, to);
+    log_vault_root_ready(source, to);
 }
 
 /// List log files for the active vault-root.
 ///
 /// Empty only when the root is valid but has no files, or true pre-ready bootstrap.
-/// Mid-session missing/corrupt root → [`UprivError`] A/B (not `Ok([])`).
+/// Mid-session missing/corrupt root → [`crate::error::UprivError`] A/B (not `Ok([])`).
 ///
 /// Read-only: does **not** open/create a writer or emit `app_start`.
 pub fn list_session_log_files() -> CoreResult<Vec<LogFileInfo>> {
@@ -332,6 +293,7 @@ pub fn delete_session_log_files(filenames: &[String]) -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::UprivError;
     use crate::paths::{initialize_vault_root, ENV_LOCK};
 
     #[test]
@@ -376,31 +338,55 @@ mod tests {
     }
 
     #[test]
-    fn resolve_after_ready_then_delete_upriv_is_not_found() {
-        use crate::paths::{resolve_vault_root, ResolveVaultRootOptions, VaultRootMode};
+    fn a_data_folder_lost_after_ready_stays_selected_and_fails_again() {
+        use crate::folder_list::data_folder::{
+            load_data_folder_list, save_data_folder_list, selected_place, DataFolderList,
+            DataFolderPlace,
+        };
+        use crate::folder_list::{DeviceGroup, Row, Selection};
+        use crate::paths::{resolve_vault_root, ResolveVaultRoot, ResolveVaultRootOptions};
 
         let _guard = ENV_LOCK.lock().unwrap();
         reset_vault_root_ready();
         clear_logging_session();
         let home = tempfile::tempdir().unwrap();
+        let usb = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-        initialize_vault_root(home.path()).unwrap();
-        log_vault_root_ready("test", home.path().to_str().unwrap_or(""));
+        initialize_vault_root(usb.path()).unwrap();
+        let device = crate::device::this_device();
+        let mut list = DataFolderList::default();
+        list.devices.0.insert(
+            device.id.clone().expect("tests need this device's ID"),
+            DeviceGroup {
+                rows: vec![Row {
+                    number: 1,
+                    name: String::new(),
+                    path: usb.path().display().to_string(),
+                }],
+                selected: Selection::Row(1),
+                next_number: 2,
+                ..DeviceGroup::for_device(device)
+            },
+        );
+        save_data_folder_list(home.path(), &list).unwrap();
+        log_vault_root_ready("test", usb.path().to_str().unwrap_or(""));
 
-        crate::host_fs::remove_dir_all(home.path().join(".upriv")).unwrap();
+        crate::host_fs::remove_dir_all(usb.path().join(".upriv")).unwrap();
 
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: None,
-        })
-        .unwrap();
-        let err = map_needs_setup_after_ready(resolved).unwrap_err();
+        let err = list_session_log_files().unwrap_err();
         assert!(
             matches!(err, UprivError::VaultRootNotFound(_)),
             "expected VaultRootNotFound after deleting .upriv, got {err:?}"
         );
+        let kept = load_data_folder_list(home.path()).unwrap();
+        assert!(
+            matches!(selected_place(&kept, device), DataFolderPlace::Row(row) if row.number == 1)
+        );
+        assert!(matches!(
+            resolve_vault_root(ResolveVaultRootOptions::default()).unwrap(),
+            ResolveVaultRoot::SelectedFailed { .. }
+        ));
 
         reset_vault_root_ready();
         clear_logging_session();
@@ -408,29 +394,35 @@ mod tests {
     }
 
     #[test]
-    fn resolve_needs_setup_before_ready_stays_soft() {
-        use crate::paths::{
-            resolve_vault_root, ResolveVaultRoot, ResolveVaultRootOptions, VaultRootMode,
-        };
-
+    fn the_ready_line_of_a_data_folder_names_this_device() {
         let _guard = ENV_LOCK.lock().unwrap();
         reset_vault_root_ready();
         clear_logging_session();
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+        initialize_vault_root(home.path()).unwrap();
+        let logs = home.path().join(".upriv").join("logs");
+        let settings = crate::config::AppSettings::default().logging;
+        install_logging_at(&logs, &settings).unwrap();
 
-        let resolved = resolve_vault_root(ResolveVaultRootOptions {
-            explicit: None,
-            mode: VaultRootMode::DefaultRoot,
-            binary_dir: None,
-        })
-        .unwrap();
-        let mapped = map_needs_setup_after_ready(resolved).unwrap();
-        assert!(
-            matches!(mapped, ResolveVaultRoot::NeedsSetup { .. }),
-            "true first-run must stay NeedsSetup, got {mapped:?}"
-        );
+        log_vault_root_ready("test", home.path().to_str().unwrap_or(""));
+        flush_logging_session();
+
+        let device = crate::device::this_device();
+        let text: String = std::fs::read_dir(&logs)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        let ready = text
+            .lines()
+            .find(|line| line.contains("vault_root_ready"))
+            .expect("a ready line");
+        let id = device.id.as_ref().map_or("unknown", |id| id.as_str());
+        assert!(ready.contains(&format!("device={id}")), "{ready}");
+        assert!(ready.contains(&format!("system={}", device.system.as_str())));
+        // The computer's name is never logged.
+        assert!(!ready.contains("host="), "{ready}");
 
         reset_vault_root_ready();
         clear_logging_session();

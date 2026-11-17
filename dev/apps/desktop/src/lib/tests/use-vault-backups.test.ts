@@ -1,8 +1,13 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { BackupService, VaultBackupEntry, VaultBackupListing } from "@upriv/shared";
+import type { VaultBackupEntry, VaultBackupListing } from "@upriv/shared";
 import { useVaultBackups } from "@upriv/shared/react";
+import {
+  backupEntry as entry,
+  backupServiceStub as serviceWith,
+  dataFolderListing as listing,
+} from "./backupStubs";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -12,25 +17,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function entry(stamp: string): VaultBackupEntry {
-  return { stamp, createdAt: "2026-01-01T00:00:00.000Z" };
-}
-
-function listing(backups: VaultBackupEntry[]): VaultBackupListing {
-  return { backups, chosen: null };
-}
-
-function serviceWith(overrides: Partial<BackupService>): BackupService {
-  return {
-    listBackups: async () => listing([]),
-    deleteBackups: async () => undefined,
-    promoteToSave: async () => undefined,
-    saveNow: async () => ({ backup: { ...entry("saved"), saved: true }, fallback: null }),
-    exportTo: async (_vaultId, _keys, destDir) => ({ path: destDir, size: 0 }),
-    checkFolder: async () => "ok",
-    reuseFolder: async () => undefined,
-    ...overrides,
-  };
+/** The stamps the hook lists, every section together. */
+function stamps(sections: readonly { entries: VaultBackupEntry[] }[]): string[] {
+  return sections.flatMap((section) => section.entries.map((row) => row.stamp));
 }
 
 describe("useVaultBackups", () => {
@@ -53,7 +42,7 @@ describe("useVaultBackups", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.backups.map((row) => row.stamp)).toEqual(["from-b"]);
+      expect(stamps(result.current.sections)).toEqual(["from-b"]);
     });
   });
 
@@ -71,12 +60,12 @@ describe("useVaultBackups", () => {
     );
 
     await waitFor(() => {
-      expect(result.current.backups.map((row) => row.stamp)).toEqual(["s1"]);
+      expect(stamps(result.current.sections)).toEqual(["s1"]);
     });
 
     let deleteDone: Promise<void> | undefined;
     act(() => {
-      deleteDone = result.current.deleteBackups(["s1-vault-a.zip"]);
+      deleteDone = result.current.deleteBackups([entry("s1").key]);
     });
     expect(result.current.isBusy).toBe(true);
 
@@ -88,6 +77,47 @@ describe("useVaultBackups", () => {
       await deleteDone;
     });
     expect(result.current.isBusy).toBe(false);
+  });
+
+  it("forgets a folder and reads the list again", async () => {
+    let forgotten: string | null = null;
+    let calls = 0;
+    const backupService = serviceWith({
+      listBackups: async () => {
+        calls += 1;
+        return listing(calls === 1 ? [entry("s1")] : []);
+      },
+      forgetFolder: async (_vaultId, folder) => {
+        forgotten = folder;
+      },
+    });
+    const { result } = renderHook(() => useVaultBackups(backupService, "vault-a", true));
+    await waitFor(() => expect(stamps(result.current.sections)).toEqual(["s1"]));
+
+    await act(async () => {
+      await result.current.forgetFolder("f2");
+    });
+    expect(forgotten).toBe("f2");
+    expect(stamps(result.current.sections)).toEqual([]);
+  });
+
+  it("names only a backup the list shows", async () => {
+    const renamed: string[] = [];
+    const backupService = serviceWith({
+      listBackups: async () => listing([entry("s1")]),
+      renameBackup: async (_vaultId, key, name) => {
+        renamed.push(`${key}=${name}`);
+        return entry("s1");
+      },
+    });
+    const { result } = renderHook(() => useVaultBackups(backupService, "vault-a", true));
+    await waitFor(() => expect(stamps(result.current.sections)).toEqual(["s1"]));
+
+    await act(async () => {
+      await result.current.renameBackup("data/unknown.zip", "Trip");
+      await result.current.renameBackup(entry("s1").key, "Trip");
+    });
+    expect(renamed).toEqual([`${entry("s1").key}=Trip`]);
   });
 
   it("reloads an open list when refreshToken changes", async () => {
@@ -105,12 +135,12 @@ describe("useVaultBackups", () => {
     );
 
     await waitFor(() => {
-      expect(result.current.backups.map((row) => row.stamp)).toEqual(["first"]);
+      expect(stamps(result.current.sections)).toEqual(["first"]);
     });
 
     rerender({ token: 1 });
     await waitFor(() => {
-      expect(result.current.backups.map((row) => row.stamp)).toEqual(["second"]);
+      expect(stamps(result.current.sections)).toEqual(["second"]);
     });
   });
 });

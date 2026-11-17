@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RpcError, VAULT_ERROR_CODES } from "../../../domain";
+import { RpcError, VAULT_ERROR_CODES, type OsFolderAnswer } from "../../../domain";
 import {
   createLiveVaultFileSystemService,
   FilePreviewTooLargeError,
@@ -34,7 +34,7 @@ function rpcStub(overrides: Partial<LiveVaultFileSystemRpc> = {}): LiveVaultFile
     delete: async () => 1,
     rename: async () => ({ path: "/renamed", revision: 1 }),
     move: async () => ({ path: "/moved", revision: 1 }),
-    osPath: async () => ({ osPath: "/tmp/mount" }),
+    osPath: async (): Promise<OsFolderAnswer> => ({ state: "ready", osPath: "/tmp/mount" }),
     plainSend: async () => ({ files: 0 }),
     plainUnsend: async () => ({ removed: 0, kept: 0 }),
     held: async () => ({ items: [] }),
@@ -303,16 +303,22 @@ describe("createLiveVaultFileSystemService", () => {
     expect(previewFits).toHaveBeenCalledWith("v", "/big.png");
   });
 
-  it("forwards osPath to the live RPC", async () => {
-    const osPath = vi.fn(async () => ({ osPath: "/mnt/Notes/a.txt" }));
+  it("answers where a path is in the OS", async () => {
+    const osPath = vi.fn(async (): Promise<OsFolderAnswer> => ({
+      state: "ready",
+      osPath: "/mnt/Notes/a.txt",
+    }));
     const fs = createLiveVaultFileSystemService(rpcStub({ osPath }));
-    await expect(fs.osPath("v", "/a.txt")).resolves.toBe("/mnt/Notes/a.txt");
+    await expect(fs.osPath("v", "/a.txt")).resolves.toEqual({
+      state: "ready",
+      osPath: "/mnt/Notes/a.txt",
+    });
     expect(osPath).toHaveBeenCalledWith("v", "/a.txt");
   });
 
-  it("treats a missing OS folder as no path", async () => {
-    const osPath = vi.fn(async () => ({ osPath: null }));
+  it("answers that a vault has no OS folder", async () => {
+    const osPath = vi.fn(async (): Promise<OsFolderAnswer> => ({ state: "none" }));
     const fs = createLiveVaultFileSystemService(rpcStub({ osPath }));
-    await expect(fs.osPath("v", "/")).resolves.toBeNull();
+    await expect(fs.osPath("v", "/")).resolves.toEqual({ state: "none" });
   });
 });

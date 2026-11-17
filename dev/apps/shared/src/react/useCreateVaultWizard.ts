@@ -21,6 +21,7 @@ import {
   isRpcError,
   MODAL_OPEN_MS,
   newJobId,
+  NO_CREATE_VAULT_LISTS,
   NO_VAULT_GROUPS,
   ROW_ROLE_GUARD_MS,
   resolveCreateVaultCloseIntent,
@@ -34,6 +35,7 @@ import {
   VAULT_ERROR_CODES,
   vaultPublicText,
   type CreateVaultDraft,
+  type CreateVaultLists,
   type EmbeddedSettingsSnapshot,
   type EmbeddedVaultSettings,
   type ImportZipClassification,
@@ -68,8 +70,8 @@ export interface UseCreateVaultWizardOptions {
   /** Display names already on the vault list, for ` N` and ` backup` suggestions. */
   existingDisplayNames?: readonly string[];
   groups?: readonly VaultGroup[];
-  /** Active vault-root path for reserved-mount checks on custom workspace paths. */
-  vaultRootPath?: string | null;
+  /** The folder lists the new vault joins, as this device sees them. Keep it stable between renders. */
+  lists?: CreateVaultLists;
   initialDraft?: CreateVaultDraft | null;
   initialStep?: CreateVaultStepId | null;
   /**
@@ -104,7 +106,7 @@ export function useCreateVaultWizard<
   existingOrders,
   existingDisplayNames = [],
   groups = NO_VAULT_GROUPS,
-  vaultRootPath = null,
+  lists = NO_CREATE_VAULT_LISTS,
   initialDraft = null,
   initialStep = null,
   onCreate,
@@ -124,9 +126,9 @@ export function useCreateVaultWizard<
     () => ({
       existingVaultIds,
       knownGroupIds: groups.map((group) => group.id),
-      vaultRootPath,
+      lists,
     }),
-    [existingVaultIds, groups, vaultRootPath],
+    [existingVaultIds, groups, lists],
   );
   const view = useMemo(() => selectCreateVaultWizardView(state, context), [state, context]);
 
@@ -379,12 +381,7 @@ export function useCreateVaultWizard<
     // Decided from the draft, not from `view`: the render that produced `view`
     // predates this dispatch, so reading it would couple submit to render order.
     if (
-      !canSubmitCreateVault(
-        state.draft,
-        existingVaultIds,
-        context.knownGroupIds,
-        context.vaultRootPath,
-      )
+      !canSubmitCreateVault(state.draft, existingVaultIds, context.knownGroupIds, context.lists)
     ) {
       return;
     }
@@ -405,7 +402,7 @@ export function useCreateVaultWizard<
     passwordWeakness,
     existingVaultIds,
     context.knownGroupIds,
-    context.vaultRootPath,
+    context.lists,
     onCreate,
     handleClose,
   ]);
@@ -457,7 +454,7 @@ export function useCreateVaultWizard<
           state.draft,
           context.existingVaultIds,
           context.knownGroupIds,
-          context.vaultRootPath,
+          context.lists,
         );
       const step = state.currentStep;
       const errors = validate(step);

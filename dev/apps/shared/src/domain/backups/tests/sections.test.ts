@@ -1,73 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { backupListSections, backupSectionSelection, toggleBackupSection } from "../sections";
-import type { VaultBackupEntry } from "../types";
+import type { VaultBackupEntry, VaultBackupSection } from "../types";
 
-function entry(
-  stamp: string,
-  patch: Partial<VaultBackupEntry> = {},
-  dir = "/data/.upriv/vaults/notes/backups",
-): VaultBackupEntry {
-  const fileName = `${stamp}-notes.zip`;
-  const folder = patch.saved ? `${dir}/saves` : dir;
-  return { stamp, fileName, createdAt: "", path: `${folder}/${fileName}`, ...patch };
+function entry(key: string, saved = false): VaultBackupEntry {
+  return {
+    key,
+    stamp: "20260101000000",
+    fileName: key.slice(key.lastIndexOf("/") + 1),
+    name: "",
+    createdAt: "",
+    sizeBytes: 1,
+    saved,
+    path: `/x/${key}`,
+  };
+}
+
+function section(
+  folder: string,
+  entries: VaultBackupEntry[],
+  status: VaultBackupSection["status"] = "ok",
+): VaultBackupSection {
+  return {
+    folder,
+    kind: folder === "data" ? "data_folder" : "other",
+    path: `/x/${folder}`,
+    device: null,
+    status,
+    entries,
+  };
 }
 
 describe("backupListSections", () => {
-  it("lists the data folder, then the chosen folder, each with its Saves first", () => {
-    const sections = backupListSections(
-      [
-        entry("1", { location: "chosen" }, "/mnt/usb/upriv-notes-backups"),
-        entry("2"),
-        entry("3", { saved: true, location: "chosen" }, "/mnt/usb/upriv-notes-backups"),
-        entry("4", { saved: true }),
+  it("lists Saves before Standard in each folder, in core's order", () => {
+    const sections = backupListSections({
+      sections: [
+        section("data", [entry("data/a.zip"), entry("data/saves/b.zip", true)]),
+        section("f1", [entry("f1/c.zip")]),
       ],
-      "notes",
-    );
-    expect(sections.map((section) => section.id)).toEqual(["data_folder", "chosen"]);
-    expect(sections[1].groups.map((group) => group.saved)).toEqual([true, false]);
-    expect(sections[1].keys).toEqual(["chosen/saves/3-notes.zip", "chosen/1-notes.zip"]);
-    expect(sections[1].folder).toBe("/mnt/usb/upriv-notes-backups");
+    });
+    expect(sections.map((one) => one.id)).toEqual(["data", "f1"]);
+    expect(sections[0].groups.map((group) => group.saved)).toEqual([true, false]);
+    expect(sections[0].keys).toEqual(["data/saves/b.zip", "data/a.zip"]);
   });
 
-  it("leaves out a folder or a tier with nothing in it", () => {
-    const sections = backupListSections([entry("1"), entry("2")], "notes");
-    expect(sections.map((section) => section.id)).toEqual(["data_folder"]);
-    expect(sections[0].groups.map((group) => group.saved)).toEqual([false]);
-    expect(sections[0].keys).toEqual(["1-notes.zip", "2-notes.zip"]);
-    expect(backupListSections([], "notes")).toEqual([]);
-  });
-
-  it("finds the folder above saves when it holds only pins", () => {
-    const [section] = backupListSections([entry("1", { saved: true })], "notes");
-    expect(section.folder).toBe("/data/.upriv/vaults/notes/backups");
-  });
-
-  it("has no folder when the list gave no path", () => {
-    const [section] = backupListSections([{ stamp: "1", createdAt: "" }], "notes");
-    expect(section.folder).toBeNull();
-  });
-
-  it("finds the folder of a Windows path", () => {
-    const [section] = backupListSections(
-      [{ stamp: "1", createdAt: "", path: "D:\\Backups\\upriv-notes-backups\\1-notes.zip" }],
-      "notes",
-    );
-    expect(section.folder).toBe("D:\\Backups\\upriv-notes-backups");
+  it("shows an empty folder only while it cannot be reached", () => {
+    const sections = backupListSections({
+      sections: [section("data", []), section("f1", [], "missing")],
+    });
+    expect(sections.map((one) => one.id)).toEqual(["f1"]);
   });
 });
 
 describe("section selection", () => {
-  const keys = ["a", "b"];
-
-  it("says how much of the section is selected", () => {
-    expect(backupSectionSelection(keys, new Set())).toBe("none");
-    expect(backupSectionSelection(keys, new Set(["a", "other"]))).toBe("some");
-    expect(backupSectionSelection(keys, new Set(["a", "b"]))).toBe("all");
-  });
-
-  it("selects the whole section, then clears it, and leaves other sections alone", () => {
-    const some = toggleBackupSection(new Set(["a", "other"]), keys);
-    expect([...some].sort()).toEqual(["a", "b", "other"]);
-    expect([...toggleBackupSection(some, keys)]).toEqual(["other"]);
+  it("selects a whole section and clears it again", () => {
+    const keys = ["data/a.zip", "data/b.zip"];
+    const all = toggleBackupSection(new Set(), keys);
+    expect(backupSectionSelection(keys, all)).toBe("all");
+    expect(backupSectionSelection(keys, new Set(["data/a.zip"]))).toBe("some");
+    expect(backupSectionSelection(keys, toggleBackupSection(all, keys))).toBe("none");
   });
 });

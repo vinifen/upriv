@@ -4,7 +4,7 @@
 
 > **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). `store/` at rest; lock = close; FUSE/WinFsp (desktop) or in-app file manager (mobile) while open.
 
-> **Workspace mount:** app folder → `{place}/workspace/{display_name}/`. A vault's own folder → `{path}/{display_name}/`. Not created at init. See `.agent/AGENT.md`.
+> **Folder lists:** the data folder, the unlocked folders, and the backup folders are per-device lists (§3.5). An open vault's files appear in its unlocked folder, `{row}/upriv-unlocked/{display_name}/` or `{data folder}/upriv-unlocked/{display_name}/`. Not created at init. See `.agent/AGENT.md`.
 
 **Software Design Document**  
 **Version:** 0.2  
@@ -20,8 +20,8 @@
 | ID | Rust module | Disk | Session |
 |----|-------------|------|---------|
 | `store` | `upriv_core::store` | `vaults/<id>/store/` (ciphertext) | — |
-| `session` | `upriv_core::session` | — | mount + RAM (`encrypted_dir`). App folder: `{place}/workspace/{display_name}/`. Own folder: `{path}/{display_name}/` |
-| `plain` | `upriv_core::vault::plain` | `{parent}/{display_name}/` while open | only when `storage.mode = upriv_plain` |
+| `session` | `upriv_core::session` | — | RAM (`encrypted_dir`), plus the unlocked folder mount once the attach made one |
+| `plain` | `upriv_core::vault::plain` | the unlocked folder, `{folder}/upriv-unlocked/{display_name}/`, while open | only when `storage.mode = upriv_plain` |
 
 Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and SECURITY-CRYPTO.
 
@@ -38,7 +38,8 @@ Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and
 8. **Close = flush session into `store/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
 9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` folder → recovery until the user wipes it. The leftover is not the open session. Dead header → create from backup / store zip (Backups or New vault). Both index files dead → rebuild from the vault's own data, or create from backup (§7.4). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
 10. **Unified states** — `open` (runtime) | `closed` (rest).
-11. **Virtual mount** — in `encrypted_dir`, `workspace/` is not a data folder; I/O goes to encrypted `store/`.
+11. **Virtual mount** — in `encrypted_dir`, the unlocked folder is not a data folder; I/O goes to encrypted `store/`.
+14. **Folder lists per device** — the data folder, the unlocked folders, and the backup folders are lists kept per device; a failing selection hands over for good to the next choice that works, with a toast (§3.5).
 12. **Lockfile** — one open per vault at a time.
 13. **Crypto standard** — Argon2id + XChaCha20-Poly1305 in `store/`; optional `.7z` export for interoperability (weaker guessing). Do not claim “more secure than 7-Zip.”
 
@@ -56,11 +57,11 @@ Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and
 └─────────────────────────────┬───────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
-│  encrypted_dir (RAM/FUSE)  or  upriv_plain (workspace/)      │
+│  encrypted_dir (RAM/FUSE)  or  upriv_plain (unlocked folder) │
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
-│  vaults/<id>/store/  +  file manager folder while open (virtual or plain) │
+│  vaults/<id>/store/  +  unlocked folder while open (virtual or plain) │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,14 +75,14 @@ Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and
 
 | `persistence` | UI (i18n) | Disk | Modes |
 |---------------|-----------|------|-------|
-| `open` | `vault.status.open` | session + `store/` | both (`upriv_plain`: plaintext workspace + `store/`) |
+| `open` | `vault.status.open` | session + `store/` | both (`upriv_plain`: plaintext unlocked folder + `store/`) |
 | `closed` | `vault.status.closed` | encrypted `store/` | `encrypted_dir`, `upriv_plain` |
 
 ```text
 encrypted_dir / upriv_plain:
   closed ──open──► open ──close()──► closed
   # never writes a rest .7z
-  # upriv_plain open: plaintext workspace (wipe on close)
+  # upriv_plain open: plaintext unlocked folder (wipe on close)
 ```
 
 **Close actions (do not confuse with state):**
@@ -125,14 +126,14 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 ### Critical transitions
 
 **open (v1):**
-1. Resolve `<vault-root>` (`UPRIV_VAULT_ROOT`, the active `.upriv-data-folder`, or `default_root`; the Gate asks when none is found).
+1. Resolve `<vault-root>` (`UPRIV_VAULT_ROOT`, or this device's choice in the data folder list; the Gate shows Setup or the list when there is none, §3.5.3).
 2. Load `vaults/<id>/config.toml`.
 3. Wait for another process to let go of `runtime/<id>.lock` (§2.5), then acquire it — failure → `vault_locked`.
 4. Read `header/vault.header` (or `vault.header.copy` when the primary cannot be used); derive master key (Argon2id from header params) — failure → abort.
 5. Verify index / chunk tags needed for the session.
 6. If dirty close: **recovery** → unlock the encrypted vault. If a leftover `upriv_plain` folder is still there: wipe it. If header/index dead: create from backup / store zip (not a dirty-close peer).
-7. `encrypted_dir`: mount the file manager folder when it is on — FUSE (Linux) + WinFsp (Windows); mobile uses the in-app file manager (no FUSE).
-8. `upriv_plain`: after the place is confirmed, stream `store/` into that folder. No FUSE/WinFsp.
+7. `encrypted_dir`: the vault opens in the in-app file manager at once. The open never waits for a folder: the desktop then calls `vault_unlocked_folder_attach`, which mounts the unlocked folder — FUSE (Linux) + WinFsp (Windows) — when the vault's switch says so (§3.5.2). Mobile uses the in-app file manager only.
+8. `upriv_plain`: walk the vault's unlocked folder chain, write the plain-text record (§7.1), and stream `store/` into the folder it names on this device; a folder that fails hands over to the next choice with a toast (the app asks where before the password while nothing is selected). No FUSE/WinFsp.
 9. Update `.upriv/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
@@ -140,8 +141,8 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
 3. Decide on the backup, then remove the entry in `state.json` and take the vault lock.
 4. `upriv_plain`: save the folder into `store/`, wipe the files, and remove the folder. Lock starts immediately.
-5. `zeroize` password/keys in RAM; unmount the file manager folder.
-6. If `[backup] enabled`: write a Stored zip of `store/` as `<stamp>-<id>.zip` to the vault's backup folder (§2.9, no zip password). `skip_unchanged` (default on) skips that zip when vault files match the last backup still on disk. `.upriv-workspace.json` is not a change. Off writes a zip on every close. A slow drive waits here with no key in RAM.
+5. `zeroize` password/keys in RAM; stop a running attach and unmount the unlocked folder.
+6. If `[backup] enabled`: write a Stored zip of `store/` as `<stamp>-<id>.zip` to the vault's backup folder in use (§2.9, no zip password), handing over to the next folder of the chain when it fails. `skip_unchanged` (default on) skips that zip when vault files match this device's last backup and that zip is still in the folder in use. `.upriv-workspace.json` is not a change. Off writes a zip on every close. A slow drive waits here with no key in RAM.
 7. Record the backup; release `runtime/<id>.lock`.
 
 **Reopen after reboot:** `open` against `store/`; edits from the last successful close are in the ciphertext tree.
@@ -165,7 +166,7 @@ Related: PRD **RF-05**, **RF-39**; checklist §12. Close does not take a passwor
 
 File: `.upriv/vaults/<id>/persistence.json` beside `config.toml` (outside `store/`).
 
-Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the record of the vault's backups: `backup_folder_id` (the id that names its chosen folder, kept across a rename), `backups_written` (the zips Upriv wrote, oldest first, the only ones automatic deletion touches), and `backup_hosts`, one record per host name with the chosen folder it last wrote to (`chosen_dir`) and its last finished backup (`index_hash`, `stamp`) for `skip_unchanged`. Canonical detail: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
+Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), `files_bytes` (about what the vault's files hold, from the index in RAM at each close), and the record of the vault's backups: `backup_folder_id` (the id that names its folder in a row, kept across a rename), `backup_folders` (one reference per folder outside the data folder that holds its zips: `ref`, `device`, `system`, `dir`, `reuse`; `data` names the data folder), `backups_written` (the zips Upriv wrote, oldest first, each with its folder's reference, the only ones automatic deletion touches), and `backup_devices`, one record per device ID with its last finished backup (`index_hash`, `stamp`, its folder) for `skip_unchanged`. A device with no ID records none. Canonical detail: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
 ```json
 {
@@ -173,13 +174,21 @@ Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the record o
   "vault_id": "my-encrypted-notes",
   "display_name": "My encrypted notes",
   "content_hash": "sha256:…",
+  "files_bytes": 1234567,
   "backup_folder_id": "my-encrypted-notes",
-  "backups_written": ["20260528140000-my-encrypted-notes.zip"],
-  "backup_hosts": {
-    "desk": {
-      "chosen_dir": "/mnt/usb/upriv-my-encrypted-notes-backups",
+  "backup_folders": [
+    { "ref": "f1", "device": "3e301fc022fc5185e12822bc2a251f64", "system": "linux",
+      "dir": "/mnt/usb/upriv-my-encrypted-notes-backups" }
+  ],
+  "backups_written": [
+    { "name": "20260528120000-my-encrypted-notes.zip", "folder": "data" },
+    { "name": "20260528140000-my-encrypted-notes.zip", "folder": "f1" }
+  ],
+  "backup_devices": {
+    "3e301fc022fc5185e12822bc2a251f64": {
       "index_hash": "sha256:…",
-      "stamp": "20260528140000"
+      "stamp": "20260528140000",
+      "folder": "f1"
     }
   },
   "last_close_ok_at": "2026-05-28T14:00:00.000Z",
@@ -193,7 +202,7 @@ Sync metadata: `content_hash`, `last_close_ok_at` (recovery A), and the record o
 
 | Condition | Action |
 |-----------|--------|
-| Dirty close / leftover `upriv_plain` workspace | `recovery` |
+| Dirty close / leftover `upriv_plain` folder | `recovery` |
 | `content_hash` differs from header + sealed index | `recovery` (same session). Unlock still opens that `store/`; close records its hash. Both index files gone under a header that is there counts as a difference. A missing hash or any other read error while hashing does not select recovery |
 | Header unreadable | Create new vault from backup only |
 | Both index files unreadable, header opens | `recovery`; the unlock offers the rebuild (§7.4), or a new vault from backup |
@@ -208,19 +217,21 @@ Lock is always **close** (flush the session into `store/`).
 
 | Action | `encrypted_dir` | `upriv_plain` |
 |--------|-----------------|---------------|
-| `close` | `closed` | `closed` (wipe plaintext workspace) |
+| `close` | `closed` | `closed` (wipe the plaintext unlocked folder) |
 
 Related: PRD **RF-53**, **RF-53b**.
 
-### 2.4 Virtual mount (`workspace/`)
+### 2.4 Virtual mount (the unlocked folder)
 
 **v1:** mount implementation **Linux (FUSE) + Windows (WinFsp)**. DocumentProvider (Android) in later phases (PRD §3.5).
 
-**Invariant:** in `encrypted_dir`, **never** create persistent regular files in the file manager folder on the vault volume.
+**Invariant:** in `encrypted_dir`, **never** create persistent regular files in the unlocked folder on the vault volume.
+
+**Attach.** The open never waits for the folder. After `vault_open` succeeds, the desktop calls `vault_unlocked_folder_attach` for that vault, outside the one-at-a-time open/close queue (`useVaultPipelineRun`): a job (`newJobId()`, no time limit, the folder lane) that walks the vault's unlocked folder chain (§3.5.2), makes `upriv-unlocked` with its `.upriv-unlocked-id` when needed, mounts, saves a switch when the selected folder failed, and answers `mounted`, `switched` (with the switches, shown as a toast), `off` (the vault's switch is off, or this device mounts no folder), `driver_missing`, `unset`, `unavailable` (no folder of the chain works; the selection stays), or `failed` (the mount failed for a reason that is not the folder's). Core alone decides whether a folder is wanted. Meanwhile `vault_fs_os_path` answers `attaching`, and Open unlocked folder shows once the folder is there. A close stops the attach first (`job_cancel`), none starts once a close has begun, and a quit stops it at once. When `[unlocked_folders] encrypted_vaults` turns on, the desktop also calls it for every open encrypted vault (`useAttachWhenFoldersTurnOn`); a vault whose attach runs already is left to that one. Phones never call it.
 
 **Linux mount:** the FUSE root exposes an empty `.nomedia` that is not a vault file, so Tracker does not index the tree while it is open. A real `.nomedia` in the vault is that file instead. While that folder is mounted, on `OPEN_PURGE_INTERVAL` in the thumbnail module, and again when the mount is detached, Upriv overwrites freedesktop thumbnail-cache PNGs whose `Thumb::URI` is under the mount, syncs that write, then unlinks them (one random pass, the same wipe as §2.10; flash is best-effort). Detaching a leftover Upriv mount does the same purge once, so a killed session does not keep those previews. The cache is outside `store/`. The scan starts and returns at once, with a file-count and time budget, so a bad cache cannot hold close, open, or unmount. A finished wipe of one or more previews writes one info line (`vault_thumbnail_wiped`, with the count and no path). A problem is one warning (`vault_thumbnail_purge_failed`). Neither fails the close or the unmount. A vault with no OS folder does not run this sweep.
 
-**Windows mount.** The volume is `WinFsp.Disk` on the directory the user chose. `WinFsp.Net` cannot mount on a directory: Windows only allows a drive letter for a network file system. A disk folder would normally let Explorer build content thumbnails, so each file reports `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`. That tells the shell that reading the bytes is a fetch, and Explorer does not open the file to draw a preview. The mount refuses `Thumbs.db` in any case, and it refuses Windows device names (`CON`, `NUL`, `COM1`, and the same with an extension). `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` is not opened or deleted. Entries there are hash keys, Explorer keeps the databases open, and removing them would wipe every thumbnail on the machine. The Linux freedesktop scanner does not run on Windows, and the periodic sweep is a no-op there, so it does not log `vault_thumbnail_purge_failed` on each interval. WinFsp creates that directory and returns `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) when the name already exists. An existing empty directory is removed first; a directory that already has files is left in place and the mount fails. A canonical `\\?\` path is passed as a plain directory, because WinFsp treats `\\?\C:` as a Mount Manager path. The Windows setup and the portable exe carry the official unmodified WinFsp installer. Upriv asks to install it when the file manager folder is turned on, and again when a vault that already wants that folder is opened. Declining leaves the switch unchanged and shows a notice with a button to try again. A missing DLL fails the mount and leaves the vault open for the in-app file manager. The folder is a directory junction (`FSCTL_SET_REPARSE_POINT`). exFAT and FAT return `STATUS_NOT_IMPLEMENTED` (`0xC0000002`), so the mount fails with `vault_mount_filesystem` and Open in file manager asks for a different folder on an NTFS or ReFS disk. The vault still opens in the in-app file manager. Ciphertext can stay on the original disk; only the file manager folder needs the other location. A WinFsp drive letter would not need the junction. That fallback is not implemented. Uninstalling Upriv leaves WinFsp installed. Case-insensitive lookup keeps the stored spelling. Explorer extra-large-icon behavior still needs a machine that has WinFsp installed; it was not confirmed here.
+**Windows mount.** The volume is `WinFsp.Disk` on the directory the user chose. `WinFsp.Net` cannot mount on a directory: Windows only allows a drive letter for a network file system. A disk folder would normally let Explorer build content thumbnails, so each file reports `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`. That tells the shell that reading the bytes is a fetch, and Explorer does not open the file to draw a preview. The mount refuses `Thumbs.db` in any case, and it refuses Windows device names (`CON`, `NUL`, `COM1`, and the same with an extension). `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` is not opened or deleted. Entries there are hash keys, Explorer keeps the databases open, and removing them would wipe every thumbnail on the machine. The Linux freedesktop scanner does not run on Windows, and the periodic sweep is a no-op there, so it does not log `vault_thumbnail_purge_failed` on each interval. WinFsp creates that directory and returns `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) when the name already exists. An existing empty directory is removed first; a directory that already has files is left in place and the mount fails. A canonical `\\?\` path is passed as a plain directory, because WinFsp treats `\\?\C:` as a Mount Manager path. The Windows setup and the portable exe carry the official unmodified WinFsp installer. Upriv asks to install it when encrypted vaults' unlocked folders are turned on, and when an attach answers `driver_missing`, then attaches again once it is installed. Declining leaves the switch unchanged, or the vault in the in-app file manager, with a notice and a button to try again. A missing DLL is `driver_missing`, never a folder failure, so it switches nothing. The folder is a directory junction (`FSCTL_SET_REPARSE_POINT`). exFAT and FAT return `STATUS_NOT_IMPLEMENTED` (`0xC0000002`): the mount fails with `vault_mount_filesystem`, which is the folder's failure (`unsupported`), so the attach hands over to the next folder of the chain; with none left the vault stays in the in-app file manager. A row on such a drive shows a warning in its status. Ciphertext can stay on the original disk; only the unlocked folder needs the other location. A WinFsp drive letter would not need the junction. That fallback is not implemented. Uninstalling Upriv leaves WinFsp installed. Case-insensitive lookup keeps the stored spelling. Explorer extra-large-icon behavior still needs a machine that has WinFsp installed; it was not confirmed here.
 
 **macOS mount (not built yet).** Shipping that mount includes thumbnail cleanup for that OS. Do not reuse the freedesktop PNG scanner. Do not wipe a global cache. The same rules apply: only while that vault's OS folder is mounted, on `OPEN_PURGE_INTERVAL`, and once more when the folder is detached; the work returns immediately; one info line with a count and no path when something was removed; one warning when the cleanup cannot finish; close and open still succeed. One overwrite plus sync plus unlink where the cache is a normal file. Flash stays best-effort.
 
@@ -238,7 +249,7 @@ Steps for the macOS mount:
 **RAM:** session serves decrypted bytes from RAM; the full unlocked vault working set must fit available memory (see **`warning.encrypted_dir_ram`** and §3.2.2).
 
 ```
-App / Explorer  →  file manager folder/nota.txt  (logical path)
+App / Explorer  →  unlocked folder/nota.txt  (logical path)
                         ↓ FUSE / WinFsp / DocumentProvider
                    CryptoLayer::read/write
                         ↓
@@ -247,7 +258,7 @@ App / Explorer  →  file manager folder/nota.txt  (logical path)
 
 - Read: decrypt stream → RAM → caller.
 - Write: caller → encrypt stream → chunk in `store/` (**write-through**).
-- `workspace/` is empty mountpoint until `open()`; after `close()`, unmounted (directory may exist empty).
+- The vault's folder under `upriv-unlocked` is the mount point while attached; after `close()` it is unmounted and removed, and `upriv-unlocked` goes with its ID file when its last vault folder goes.
 
 **Write-through invariant (RF-49b):** each `write()` on the mount puts its encrypted chunk in `store/` before it returns; plaintext never waits in RAM for close. The sealed index that names those chunks is written on the handle's flush/`close`, on `fsync`, with any other committed change, after 64 MiB of pending writes, and at the latest about 2 s after the first pending write. Until then the sealed index still names the previous bytes, and no later write overwrites them, so a crash loses at most that batch and never a sealed file. Batching keeps a large copy from resealing the whole index on every write.
 
@@ -270,7 +281,7 @@ Creating a store needs a flushed index, and a password or unlock-RAM commit that
 
 **Do not confuse:** read cache in RAM ≠ authoritative copy; on-disk authority is always `store/` after committed write.
 
-**Required tests:** write via mount → no plaintext in real `workspace/` → ciphertext present in `store/` before vault close.
+**Required tests:** write via mount → no plaintext in the real unlocked folder → ciphertext present in `store/` before vault close.
 
 Related: PRD **RF-49**.
 
@@ -312,7 +323,7 @@ Related: PRD §3.3.1, **RF-45**, **RF-49**, **RF-49b**.
 
 ### 2.5 Lockfile
 
-- Path: `.upriv/runtime/<id>.lock` (PID + hostname + timestamp).
+- Path: `.upriv/runtime/<id>.lock` (PID + device + timestamp). The device is this device's ID, or the run's while the ID is unknown; only the file lock decides whether a holder is live.
 - Acquire at start of `open()`; release on `close()` and in crash recovery (optional stale TTL).
 - A second `open` while another process holds the lock waits for it (below). Work on a closed vault refuses instead (below).
 - The app can always close. When it goes away without `app_shutdown` (a crash, a kill, or closing it again during a quit), the daemon sees stdin end or a write fail, closes every open vault the way `app_shutdown` does, and exits.
@@ -331,7 +342,7 @@ Related: PRD **RF-54**.
 - Close flushes `store/`. It does not pack a `.7z`.
 - Portable `.7z` export is a separate action. `upriv-core` packs it in process with `sevenz-rust2` (logical content in RAM, streamed from `store/` one chunk at a time; ciphertext only on disk). No `7zz` binary, no `-p` on a command line, no plaintext temp directory. Detail in §5.1.
 - If RAM is not enough for that pack, return `InsufficientRamExport` and do not spill a decrypted tree.
-- Never use the file manager folder as export staging.
+- Never use an unlocked folder as export staging.
 
 Related: PRD **RF-45**, **RF-50**.
 
@@ -345,32 +356,33 @@ Related: PRD **RF-51**.
 
 ### 2.8 Who can open the files
 
-The file manager folder is the switch. Off keeps the open vault in Upriv. On places a folder on this computer while the vault is open, and any app that can see that path can read the files. There is no second policy for “only Upriv” on top of an open folder, and no mount-layer block on copies to Desktop, USB, or temp.
+For an encrypted vault, its unlocked folder switch decides (`[unlocked_folder] encrypted`, following `[unlocked_folders] encrypted_vaults` while `inherit`). Off keeps the open vault in Upriv. On places a folder on this computer while the vault is open, and any app that can see that path can read the files. A plain-text vault always writes real files into its unlocked folder. There is no second policy for “only Upriv” on top of an open folder, and no mount-layer block on copies to Desktop, USB, or temp.
 
 Related: PRD **RF-52**.
 
 ### 2.9 Backups (UI)
 
 - Entry: **`action.backups`** button on vault row (PRD §3.7.2) → **modal** (not separate page).
-- **Backup folder** (`paths/backup_place.rs`, `vault/backup_folder.rs`): the data folder (`.upriv/vaults/<id>/backups/`) is the default and the fallback. `[backups.<os>]` in `settings.toml` is the app default (`data_folder` / `custom`); `[backup.<os>]` in `config.toml` follows it, picks the data folder, or names a folder of its own (`inherit` / `data_folder` / `custom`). Rows exist for Linux, Windows, and macOS, and a phone save carries them through unchanged. `path` stays when `place` changes. A vault's own folder resolves to `<path>/upriv-<folder id>-backups`, the app default to `<path>/upriv-backups/<folder id>`, and a path already ending in that name is not nested. Paths are validated on save (`save_vault_config_checked`, `refuse_unusable_backup_defaults`) only when they changed, and never on load.
+- **Backup folders** (`folder_list/backup.rs`, `vault/backup_folder.rs`): per-device lists (§3.5). The app's list (`[backups.devices.<id>]` in `settings.toml`) is rows, then Data folder; a vault's (`[backup.devices.<id>]` in `config.toml`) is rows, then Use the app's, then Data folder. Data folder is `.upriv/vaults/<id>/backups/`. A vault row resolves to `<row>/upriv-<folder id>-backups`, an app row to `<row>/upriv-backups/<folder id>`, and a row already ending in that name is not nested. `<folder id>` is the vault id at the first backup there (`backup_folder_id`).
 - **Where each zip goes:**
 
   | Zip | First place | If that fails | Afterwards |
   |-----|-------------|---------------|------------|
-  | Close | The resolved folder | The data folder, with a toast | Retention |
-  | Back up now | `saves/` of the resolved folder | `saves/` of the data folder, with a toast | Kept until the person deletes it |
-  | Password or unlock-RAM safety zip | The data folder | The chosen folder, only when the data folder has no room | Removed after the commit. A failed change keeps it, a stop removes it |
-  | Rebuild copy | `saves/` of the data folder | `saves/` of the chosen folder, only when the data folder has no room | Kept as a Save until the person deletes it |
+  | Close | The folder in use | The next choice of the chain that works, saved as the selection, with a toast | Retention, in the folder in use only |
+  | Back up now | `saves/` of the folder in use | The same handover, into `saves/` | Kept until the person deletes it |
+  | Password or unlock-RAM safety zip | The data folder | The folder in use, only when the data folder has no room | Removed after the commit. A failed change keeps it, a stop removes it |
+  | Rebuild copy | `saves/` of the data folder | `saves/` of the folder in use, only when the data folder has no room | Kept as a Save until the person deletes it |
 
-  Close now and Stop write no zip and never fall back.
-- **Folder check** (`check_chosen_folder`): a helper thread with `BACKUP_FOLDER_CHECK_LIMIT` (5 s) on the check only, one probe per folder at a time. Status `ok`, `missing`, `no_permission`, `no_room`, `file_too_large`, `not_responding`, `reserved`, or `other`. It runs when a path is typed, when settings, Backups, or Info open, and before each backup to a chosen folder; a write to the data folder runs none. Only Upriv's own subfolders are created: an unplugged drive never becomes a new folder on the local disk, and a subfolder this machine used that is gone is `missing` until `backup_folder_reuse`. A chosen folder never overlaps a vault's file manager or plain-text folder, either way round (`refuse_vault_backup_overlap`, `refuse_app_backup_overlap`).
-- **Writing:** a zip counts once it is read back in full, renamed with `rename_no_replace` (the next stamp on `AlreadyExists`), and its folder flushed; a flush the file system does not support (`ENOSYS`, `EINVAL`, `ENOTSUP`) counts as done. Cleanup comes after that point, and a failed delete is only logged and retried by the next backup.
-- **Retention:** `backups_written` in `persistence.json` lists the zips Upriv wrote, in write order, and is saved before each zip is written. Retention, listed-partial cleanup, and the delete switch touch only those names, so a person's files and zips from a restored copy are safe. A zip that cannot be checked does not count toward `keep_last`, and a name that is gone from a reachable folder leaves the list.
-- **Machines:** `persistence.json` holds one `BackupHostRecord` per host (`chosen_dir`, `index_hash`, `stamp`), so skip-unchanged and the unplugged-drive guard hold when a data folder moves between computers. An unchanged vault writes nothing while its drive is away.
-- **Listing** (`backup_listing`): every zip in the data folder and every zip in the chosen folder whose cleartext `store/header/vault.header` carries this vault's content identity. While this vault's header is dead, every zip there is listed.
-- **A backup stays where it was written.** Changing the folder moves nothing, and `toast.backup_folder_changed` says the older ones stay there.
-- Row: **name**, **date** (the stamp in the file name), and size.
-- Each modal row: **`action.delete`** (confirm with vault `id`), **`action.create_vault_from_backup`** (+ → create-vault wizard with backup path pre-filled), **`modal.backup.export`**.
+  Close now and Stop write no zip and switch nothing. With no folder of the chain working, the backup fails with a toast and the selection stays.
+- **Folder check:** each folder of the chain is checked on the folder lane within `FOLDER_SWITCH_CHECK_LIMIT` (30 s), a limit on the check only, one thread per stuck folder shared by every caller (`folder_probe.rs`). Missing, not answering, no permission, no room for the next zip, and a zip too large for the file system are the folder's failures; a vault read error or a stop switches nothing. Only Upriv's own subfolders are created: an unplugged drive never becomes a new folder on the local disk, and a vault folder this device wrote to that is gone reads as a drive that is away until the person selects that row again (`reuse` on its reference). A backup row never sits inside an `upriv-unlocked` folder of this device's unlocked folder rows, nor the other way round (`folder_overlap`).
+- **Writing:** a zip counts once it is read back in full, renamed with `rename_no_replace` (the next stamp on `AlreadyExists`), and its folder flushed; a flush the file system does not support (`ENOSYS`, `EINVAL`, `ENOTSUP`) counts as done. Cleanup comes after that point, and a failed delete is only logged and retried by the next backup. A `.zip.partial` Upriv left is removed when Upriv next reaches its folder.
+- **References:** every zip gets a reference to its folder in `persistence.json` (`backup_folders`; `data` names the data folder), and a backup key names its folder by reference: `<ref>/<file>` or `<ref>/saves/<file>`. References go once their zips are gone: deleted by the person, or missing from a folder whose vault folder is there.
+- **Retention:** `backups_written` in `persistence.json` lists the zips Upriv wrote, in write order, each with its folder's reference, and is saved before each zip is written. Retention, listed-partial cleanup, and the delete switch touch only those names, and rotation only in the folder in use, so a person's files, zips from a restored copy, and zips in a folder no longer in use are safe. A reference counts as the folder in use when its `dir` is that folder on this device and the zip is there, whichever device wrote it. A zip that cannot be checked does not count toward `keep_last`, and a name that is gone from a reachable folder leaves the list.
+- **Devices:** `persistence.json` holds one `BackupDeviceRecord` per device ID (`index_hash`, `stamp`, `folder`), so skip-unchanged holds per device when a data folder moves between computers: a close skips its zip only while the vault matches that device's last backup, that zip's folder is the folder in use, and the zip is there (or that folder cannot be reached to tell). After a switch, the next close writes a zip.
+- **Listing** (`backup_listing`, RPC `backup_list`): one section per folder: the data folder, the folder in use, then every other referenced folder, each checked with its own limit (`FOLDER_STATUS_CHECK_LIMIT`), so one stuck drive never hides another. Each lists the zips whose cleartext `store/header/vault.header` carries this vault's content identity (every zip while this vault's header is dead). A folder no longer in use is dimmed, with a line saying Upriv no longer writes or deletes there; what is reachable can still be deleted, named, pinned, or exported. A folder that cannot be reached shows its status, Retry, and Forget (`backup_folder_forget`, the files stay). A phone shows the same sections; its folders show their tree's name, and the open button opens the tree in the Files app.
+- **Naming** (`backup_rename`): the name follows the vault id in the file name, `<stamp>-<id> <name>.zip` (a vault id has no spaces and a stamp is 14 digits, so the time and the vault still read from it). Up to 80 characters; characters a system refuses become `_`; an empty name removes it. Naming pins the backup: one rename into `saves/` under the vault's directory lock, refused while that backup is being exported. The reference follows in the same step; if the step is cut short, that zip only stops being deleted automatically. The name is readable without the password, like the vault's note, and an exported copy keeps it.
+- Row: **name** (the person's, else the file name), **date** (the stamp in the file name), and size.
+- Each modal row: **`action.delete`** (confirm with vault `id`), **`action.create_vault_from_backup`** (+ → create-vault wizard with backup path pre-filled), **`modal.backup.rename`**, **`modal.backup.export`**.
 - **Export** (`backup_export`, § RPC surface): the row's export, or Export selected in the selection bar, opens the folder step in place. One backup grows its own row; several show in the window's footer, above the selection bar, and stay put while the list scrolls. With no folder kept the picker opens at once, and a folder from the picker starts the export (desktop: a cancelled pick leaves the field to type in). A kept or typed folder waits for Export (Enter on desktop), so the person sees where the file goes. The same place then shows the persistent progress bar (`useJobProgress`), the budget, and Stop export. `useBackupExportJob` is owned by the vault list: the export survives closing the window, which shows it again when it reopens, and the toast names the saved file. One backup export runs at a time; a second press answers `toast.backup_export_busy`. While it runs, the backups it reads cannot be deleted or saved (pinned).
 - **No in-place restore** — backups are snapshots for export or seeding a **new** vault import; the source vault is unchanged.
 
@@ -378,17 +390,17 @@ Related: PRD **RF-56**, **RF-UI-05**.
 
 ### 2.10 Secure deletion (`secure_wipe`)
 
-> **`encrypted_dir` + virtual mount:** wipe on `workspace/` normally **not applicable** (no plaintext on disk).  
-> **`upriv_plain`:** wipe the plaintext file manager folder on close (and before delete).
+> **`encrypted_dir` + virtual mount:** wipe on the unlocked folder normally **not applicable** (no plaintext on disk).  
+> **`upriv_plain`:** wipe the plaintext unlocked folder on close (and before delete).
 
 **Problem:** on HDD, `remove_file` / `rm -rf` **do not** erase bytes — only mark clusters free. On SSD, per-file wipe is best effort.
 
-**Requirement:** before removing a plaintext `upriv_plain` workspace, overwrite + `fsync` + `unlink`. Close now alone removes with `unlink`, because the person chose speed behind that warning (RF-42b).
+**Requirement:** before removing a plaintext `upriv_plain` folder, overwrite + `fsync` + `unlink`. Close now alone removes with `unlink`, because the person chose speed behind that warning (RF-42b).
 
 **Algorithm (per file, order: deepest files first):**
 
 ```text
-for each regular file in the file manager folder (do not follow symlinks outside):
+for each regular file in the plaintext unlocked folder (do not follow symlinks outside):
   1. open O_RDWR
   2. repeat wipe_passes times:
        write wipe_pattern (zeros or random) from offset 0 to file_size
@@ -402,7 +414,7 @@ when the batch is full, before entering a subfolder, and when the folder ends:
        Windows and other systems: fsync each file, as it is overwritten
   5. close and remove_file each one; a failed flush keeps the whole batch
 delete empty directories bottom-up
-optional: fsync on workspace parent directory
+optional: fsync on the folder's parent directory
 ```
 
 **Suggested implementation (`upriv-core`):**
@@ -449,7 +461,7 @@ wipe_pattern = "random"        # "random" | "zeros"
 | Auto-close | Same as `close()` |
 | Close now, on one vault, on a running close, or from the quit dialog | **No** — the files are removed with no overwrite (RF-42b) |
 | Close fails before the folder is read back into `store/` | **No** — folder intact, session stays open |
-| Interruption during wipe | Workspace may be partial; recovery on next open |
+| Interruption during wipe | The folder may be partial; its record keeps it tracked, and recovery runs on the next open |
 
 **Limits (document to user)**
 
@@ -460,7 +472,7 @@ wipe_pattern = "random"        # "random" | "zeros"
 | Unallocated volume space | Out of scope — does not wipe entire disk |
 | External copies | Not affected |
 
-**Do not:** `rm -rf workspace` without overwriting the plaintext folder first, on any path but Close now.
+**Do not:** `rm -rf` a plaintext unlocked folder without overwriting it first, on any path but Close now.
 
 Related: PRD **RF-41–RF-44**; tests §13.2 (`secure_wipe` mock verifies overwrite before unlink).
 
@@ -470,7 +482,7 @@ Related: PRD **RF-41–RF-44**; tests §13.2 (`secure_wipe` mock verifies overwr
 
 ### 3.1 `.upriv/settings.toml` (marker + app settings)
 
-Single file at `.upriv/settings.toml`: format version, UI, logging, app, workspace, and backup folder preferences. The layout under `.upriv/` is fixed in code (§3.4).
+Single file at `.upriv/settings.toml`: format version, UI, logging, app, and the app's unlocked folder and backup folder lists (§3.5). The layout under `.upriv/` is fixed in code (§3.4).
 
 ```toml
 [package]
@@ -502,19 +514,38 @@ level = "info"
 entries_per_file = 1000
 keep_last_entries = 10000
 
-[backups.linux]          # also [backups.windows], [backups.macos]; phones have none
-place = "data_folder"    # or "custom"
-path = ""                # kept while place points elsewhere
-
 [app]
 last_opened_vault = "my-encrypted-notes"
-# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-data-folder`, not here.
-# Missing/inactive → default_root; active + path → custom_root.
+
+[unlocked_folders]
+encrypted_vaults = false      # every device: encrypted vaults get an unlocked folder
+
+[unlocked_folders.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1                  # a row number or "beside"; absent: nothing selected
+next_number = 2
+
+[[unlocked_folders.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
+name = ""
+path = "/mnt/ssd"
+
+[backups.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1                  # a row number; absent: "data_folder"
+next_number = 2
+
+[[backups.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
+name = "Backup disk"
+path = "/media/vini/Backup"
 ```
+
+Only what differs from the defaults is written: a device group exists only while it holds something, and a selection equal to the list's default is left out.
 
 **Upriv marker:** folder is `<vault-root>` if it contains `.upriv/settings.toml` with `[package] version = 1`. Any other version, or a file that does not parse, is an incomplete data folder (`vault_root_incomplete` → Repair).
 
-**Vault-root location:** `vault_root_mode` / custom path are **not** `[app]` keys in TOML and are never written there. They are derived from the app-home `.upriv-data-folder` file and exposed on the settings RPC wire as `app.*` fields for the UI only.
+**Data folder location:** not in `settings.toml`. The data folder list is `.upriv-data-folder` in the app home (§3.5.3), because a data folder cannot name itself.
 
 #### `[ui]` — fields and where they are saved (v1 desktop)
 
@@ -568,8 +599,10 @@ Plain **`.log`** text. Keep Rust `logging/format.rs` and `@upriv/shared` `domain
 **Line format:** `{index:04} {iso8601_utc_ms} {LEVEL} {event} key=value …` — `LEVEL` is `DEBUG`, `INFO`, `WARN`, or `ERROR`; `event` is snake_case; fields never carry passwords, vault names, or paths the UI allowlist forbids.
 
 ```text
-0001 2026-05-29T12:00:00.010Z INFO  app_start          version=0.2.2-beta source=vault_root_resolve
+0001 2026-05-29T12:00:00.010Z INFO  app_start          version=0.2.2-beta source=vault_root_resolve device=3e301fc022fc5185e12822bc2a251f64 system=linux host=vini-desktop
 ```
+
+**The device in the log.** `app_start`, and the first line the process writes into each data folder's log (`vault_root_ready`, or `vault_root_entered` after a switch), name the device that started the process: `device` (its ID, or `unknown` followed by `run=<run id>` while it has none) and `system`. No name of the computer or phone is read or logged. `app_start` is written once per process and a switch moves the log to another data folder, so a data folder that moves between machines still says which machine wrote which lines.
 
 **`[logging]`:**
 
@@ -592,9 +625,10 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 ├── persistence.json            # closed (+ vault_id, display_name)
 ├── store/                   # rest — header/ + index + chunks
 ├── held/                       # blobs no file names, set aside (§7.1); not in backups
-├── backups/                    # Stored zips of store/ (`<stamp>-<id>.zip`), the default place and the fallback
-└── (optional) workspace leftovers only for dirty upriv_plain
+└── backups/                    # Stored zips of store/ (`<stamp>-<id>.zip`): the Data folder choice of every backup list
 ```
+
+A plain-text vault's leftover after a dirty close is not here: it is in its unlocked folder, tracked by its record in `.upriv/state.json` (§7.1).
 
 **Discovery:** scan `vaults/*/config.toml` on app start.
 
@@ -608,7 +642,7 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 |-------|-------------|---------|
 | `vault_id` / folder name | Yes | `my-encrypted-notes` |
 | `display_name` (UI, main `.7z` stem) | No — user input | `My Encrypted Notes` |
-| `workspace/{display_name}/` while open | No | `workspace/My Encrypted Notes/` |
+| `upriv-unlocked/{display_name}/` while open | No | `upriv-unlocked/My Encrypted Notes/` |
 | `backups/<stamp>-<id>.zip` | Yes | Stored zip of `store/` |
 
 #### 3.2.1 `display_name` validation and export/import
@@ -635,11 +669,30 @@ note = ""            # optional; max 10000 chars; user annotation
 enabled = true
 mode = "keep_last"
 keep_last = 1
-skip_unchanged = true   # default; off writes a zip on every close. Layout file is not a change.
+skip_unchanged = true   # default; off writes a zip on every close. Workspace file is not a change.
 
-[backup.linux]          # also [backup.windows], [backup.macos]; phones have none
-place = "inherit"       # or "data_folder", "custom"
-path = ""               # kept while place points elsewhere
+[backup.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1            # a row number or "data_folder"; absent: "inherit" (use the app's)
+next_number = 2
+
+[[backup.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
+name = ""
+path = "/media/vini/Backup"
+
+[unlocked_folder]
+encrypted = "inherit"   # every device, whichever choice is in use: inherit | on | off
+
+[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1            # a row number; absent: "inherit" (use the app's)
+next_number = 2
+
+[[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
+name = "SSD"
+path = "/mnt/ssd"
 
 [security]
 wipe_passes = 1                   # hidden default
@@ -678,13 +731,13 @@ solid = false             # blocks of up to 64 MiB; true = one block
 [storage]
 mode = "encrypted_dir"   # encrypted_dir | upriv_plain
 # encrypted_dir — rest = store/; open: decrypt in RAM (FUSE / in-app FM)
-# upriv_plain  — rest = store/; open: plaintext workspace; lock closes + wipe
+# upriv_plain  — rest = store/; open: plaintext unlocked folder; lock closes + wipe
 plain_files = "chosen"   # chosen | whole — what a plaintext folder holds
 # chosen — starts empty; the file manager sends files (vault_plain_send)
 # whole  — every open writes the whole vault to the folder
 ```
 
-**RAM capacity (`encrypted_dir`):** decrypted logical content is held in **RAM** while the vault is **open**. **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in `encrypted_dir` (RF-49). UI: **`warning.encrypted_dir_ram`**, **`warning.upriv_plain`**. When RAM cannot fit the vault, split vaults or choose **`upriv_plain`**.
+**RAM capacity (`encrypted_dir`):** decrypted logical content is held in **RAM** while the vault is **open**. **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext to disk in `encrypted_dir` (RF-49). UI: **`warning.encrypted_dir_ram`**, **`warning.upriv_plain`**. When RAM cannot fit the vault, split vaults or choose **`upriv_plain`**.
 
 | Value | `sevenz-rust2` coder | Use |
 |-------|----------------------|-----|
@@ -735,7 +788,7 @@ Available in vault settings (**Security** / password area in UI; stored fields s
 | 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current; bytes exactly as typed). One line under the new password says when it is objectively poor (§3.2.3b) |
 | 2 | UI shows **`warning.password_change_backups`** — existing backup zips keep the password from when each snapshot was created |
 | 3 | **`upriv-core`:** vault closed; verify the current password (same 5/60s unlock throttle as open). Same password is rejected |
-| 4 | Write one safety zip of the current body **before** any header byte changes, in the data folder (the chosen backup folder only when the data folder has no room). If that zip fails, leave `store/` unchanged |
+| 4 | Write one safety zip of the current body **before** any header byte changes, in the data folder (the backup folder in use only when the data folder has no room). If that zip fails, leave `store/` unchanged |
 | 5 | New salt, same master key. Reseal the header wrap and the name index (both bind salt/`m`/`t`/`p`). Do not rewrite file blobs |
 | 6 | Commit order: new index copy, new header primary, new header copy, new index primary. A crash in the middle still opens with one of the two passwords |
 | 7 | Update `persistence` content hash. Set `[security] password_changed_at` (ISO 8601 UTC, millisecond precision) |
@@ -809,7 +862,7 @@ Related: PRD **RF-60**; i18n `password_weakness.*`.
 
 Configuration **is not immutable** after vault creation. User can change `[seven_zip]`, `[backup]`, `[auto_close]`, `[file_manager]`, `[security]` in `vaults/<id>/config.toml`, and `[ui]` in `.upriv/settings.toml`, **anytime** — via UI or by editing TOML.
 
-**Reading and saving:** each operation loads the TOML it needs from disk; there is no config cache. A save is an atomic write (temp + rename). `settings.toml` ignores keys and sections it does not define, except under `[workspace]`: an unknown key there makes the file unreadable (`vault_root_incomplete`). A save writes only the keys it defines. A vault `config.toml` with a key it does not define fails to load (`vault_config_invalid`) and stays as it is on disk.
+**Reading and saving:** each operation loads the TOML it needs from disk; there is no config cache. A save is an atomic write (temp + rename). `settings.toml` refuses a section it does not define and an unknown key in its folder lists (`[unlocked_folders]`, `[backups]`, their device groups and rows): the file is then unreadable (`vault_root_incomplete`). Unknown keys under `[ui]`, `[logging]`, and `[app]` are ignored. A save writes only the keys it defines. A vault `config.toml` with a key it does not define fails to load (`vault_config_invalid`) and stays as it is on disk.
 
 **When changes take effect**
 
@@ -851,7 +904,7 @@ Configuration **is not immutable** after vault creation. User can change `[seven
 | `vaults/<id>/held/` | Ciphertext no file of the tree names, set aside by an unlock (§7.1). Removed once empty: after the last put back or delete, or by the unlock. A folder that still holds anything, such as a file another app left, stays |
 | `vaults/<id>/backups/<stamp>-<id>.zip` | Stored zip of `store/` (`[backup]`) |
 
-**Open workspaces:** the file manager folder exists only while open; `.upriv/state.json` lists open vaults (several at once).
+**Open vaults:** an unlocked folder exists only while its vault is open (or as a plain-text leftover with its record); `.upriv/state.json` lists open vaults (several at once).
 
 #### 3.2.5 Auto-close on inactivity
 
@@ -898,7 +951,7 @@ impl VaultRoot {
 }
 ```
 
-**Rule:** paths under `.upriv/` come from code (§3.4), never from TOML. The only paths in `settings.toml` and `config.toml` are folders the user chose, stored absolute. Use `std::path` — never concatenate strings with `\`.
+**Rule:** paths under `.upriv/` come from code (§3.4), never from TOML. The only paths in `settings.toml`, `config.toml`, and the data folder list are the rows the user added (§3.5), stored absolute, or as `content://` trees for a phone. Use `std::path` for this machine's paths — never concatenate strings with `\` — and string rules for a row of another device's system (`folder_list/path_rules.rs`).
 
 ### 3.4 Fixed layout
 
@@ -911,6 +964,67 @@ const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 ```
 
 `.upriv/` without a readable `settings.toml` is an incomplete data folder (`vault_root_incomplete`): the Gate offers Repair.
+
+### 3.5 Folder lists
+
+The data folder, the unlocked folders, and the backup folders each keep a saved list of folders, kept per device (core `folder_list/`, shared `domain/folder-lists/`). On the current device one choice is selected; the order of a list is its priority (rows top to bottom, then the fixed choices, which the screen shows above the rows with Add folder at the bottom), and a selected folder that fails hands over to the next one that works. A data folder carried between machines finds each machine's own folders again, with no setup.
+
+#### 3.5.1 Model
+
+- **Device.** One machine or phone, named by its device ID: 32 lowercase hex characters, the first 16 bytes of HMAC-SHA256 keyed by the OS machine ID over `upriv-device-v1` (`device.rs`; Linux `/etc/machine-id` or `/var/lib/dbus/machine-id`, Windows `MachineGuid`, macOS `gethostuuid`, Android `ANDROID_ID` through `device_identity_set`). Only the ID is stored. When the OS gives none, 16 random bytes in a `device-id` file in the per-user app folder stand in; with neither, the device is unknown that run: the lists cannot change and are not used, the defaults apply, and a plain-text vault does not open (`device_unknown`). There is no central store of devices: each list keeps its own group per device. No name of the computer or phone is read or stored: the screen names a device by its system and the first 5 characters of its ID, "Linux · 3f2a1" (shared `deviceName`), built each time, so it is the same in every list, never goes stale, and needs no renaming.
+- **Device group:** `system` (`linux` / `windows` / `macos` / `android` / `ios`, `DeviceSystem`), `selected`, `next_number`, `rows`. Only what differs from the defaults is stored; a group exists only while it holds something.
+- **Row:** `number` (given when made, never reused while its group exists), `name` (up to 80 characters; empty shows "Folder N"), `path`. Names may repeat; paths may not.
+- **Lists:**
+
+  | List | Where | Choices, in priority order | A device with no group |
+  |------|-------|----------------------------|------------------------|
+  | Data folder | `.upriv-data-folder` in the app home, `[devices.<id>]` | rows, `default` | `default` |
+  | Unlocked folders, app | `settings.toml` `[unlocked_folders.devices.<id>]` | rows, `beside` | nothing selected (`none`) |
+  | Unlocked folder, vault | `config.toml` `[unlocked_folder.devices.<id>]` | rows, `inherit` | `inherit` |
+  | Backups, app | `settings.toml` `[backups.devices.<id>]` | rows, `data_folder` | `data_folder` |
+  | Backups, vault | `config.toml` `[backup.devices.<id>]` | rows, `inherit`, `data_folder` | `inherit` |
+
+- **Paths** (`path_rules.rs`, contract `folder-path-cases.json` shared with TypeScript): valid for the group's system with string rules (absolute on Linux and macOS, a drive or UNC path on Windows, a `content://` tree on a phone); the same path compared after trimming and dropping trailing separators, ignoring case on Windows and macOS (`folder_path_duplicate`, also against a fixed choice's folder); nothing inside any `.upriv`, also after percent-decoding a storage-access address (`folder_path_reserved`); and no overlap (`folder_overlap`): a backup row never inside or equal to an `upriv-unlocked` of this device's unlocked folder rows (or `{data folder}/upriv-unlocked`), an unlocked folder row never inside a backups folder Upriv makes in this device's backup rows. The same row in both lists is allowed.
+- **Chains** (`chain.rs`, pure): the order Upriv tries choices in when the selection fails, skipping the one that failed. Data folder: rows, then Default (only a valid data folder that already exists counts). App unlocked folders: rows only (Beside the data folder only when the person selects it). Vault unlocked folders: the vault's rows, then the app's chain. App backups: rows, then the data folder. Vault backups: the vault's rows, then the app's chain. A vault that walks into Use the app's sets its own selection to it; a switch inside the app's chain changes the app's selection.
+- **Failover.** Only the folder itself failing switches (missing, not answering, no permission, no room, a file too large for it, a file system that cannot hold an encrypted vault's unlocked folder, a path the rules refuse). The switch is saved at its level under that file's lock; if the write fails, it holds for that run and the toast says so. The toast names the list, the vault, the choice left, the choice taken, and the reason; the log line is `folder_switched` (`list`, `level`, `id` for a vault, `from`, `to`, `reason`; paths only for the data folder). Nothing selected never hands over.
+- **Editing.** Every edit is a draft until Save (System settings, Vault settings), Apply (Data folder window), or Continue (Setup). A row that save would write (new, or with another name or path once trimmed; a move is not) carries Not saved beside its name (`rowUnsaved`), in every device's group; the create wizard shows none, since nothing is saved yet. A save sends what changed per group (`ListChanges`: rows with `next_number`, the selection, a removal); core reads the file again under its lock and applies it, and the person's edit wins over a switch made meanwhile. Gates (`edit-policy.json`): data folder `root_idle`; app unlocked folders on this device `no_open_session`; a vault's unlocked folder group on this device `vault_quiet`; other devices' groups and both backup lists `anytime`. Each window checks its draft as core will (`rowProblems`: a new or changed path against its group's system, and once a group's rows change, every row against the others and the fixed choices' folders); a refused row says why under it, wears the attention border, and the window's Save, Apply, Continue, or Create waits. The create wizard checks every device's rows, since core writes a new vault's lists as they are. A removal of a device group from System settings writes `settings.toml` and every vault's `config.toml`, each atomically; the save names the files that did not change, and reopening the window shows them with Retry.
+- **On screen** (`components/folder-list`, the same parts on desktop and mobile). Every choice is a card: its radio, its name with its badges (In use, Not saved), and its folder, a phone's tree read as where it is (`folderShownName`: `Documents/Upriv`, or `1234-5678/Upriv` on a memory card; the address on hover on desktop). A row's actions sit in one ⋯ menu at its end, outside the radio: Edit, Open folder, Move up, Move down, Delete from the list, with the reason under one that waits. Edit opens the name and the folder under the row, and closes them again (checked in the menu while they are open); the window's own Save, Apply, or Continue writes them, with no button of their own. A delete that asks opens its question there. Both open and close at the group timing (`Collapse`). Add folder sits on the right at the bottom.
+- **Other devices.** Shown only when another device has a group in that list, each a collapsed card whose header names the device and what it selects there; its chevron turns as it opens. Opened, its rows show as row cards, a badge on the one selected there, each with the same ⋯ menu (Copy into this device first, on a computer, for a computer's row) and text edits checked against that group's system; no radio, no status. The card ends with Remove its folders, then Copy all and Add folder on the right. A copy lands in this device's group with the next number and is selected (Copy all selects what that device had selected); a path already here is skipped; only a path valid here can be copied: nothing copies into a phone, and a phone's row copies nowhere, so neither shows a copy.
+- **Deleting** a row or a device group removes references only. An unlocked folder row is refused only while a vault is open there (`folder_in_use`), and so is a change of its path; the list knows it from the row's status (`openVaults`) and keeps that row's delete and path locked meanwhile, with why. Otherwise Upriv removes its `upriv-unlocked` when that holds nothing but its ID file, never the row folder, and says when the folder stayed. A deleted selected row moves the selection to the first row left, or to the list's choice for a device with no group when none is. Removing a backup group also drops that device's last-backup state.
+- **Status** (`folder_status`, folder lane, one call per row, `FOLDER_STATUS_CHECK_LIMIT` 5 s): rows come from the files with no disk access, then each row's check: exists, writable (a `.upriv-check-*` probe file), and for a data folder `valid` / `incomplete` / `empty` / `unreadable` (a phone also `unreachable`); then details: a data folder's vault count (hidden ones not counted) and size (`files_bytes` plus its backup zips), an unlocked folder's free space, open vaults, plain-text folders left there, and on Windows the exFAT/FAT warning, a backup folder's free space against the next zip and its zips. Other devices' rows have no status. A check that decides a switch waits up to `FOLDER_SWITCH_CHECK_LIMIT` (30 s).
+
+#### 3.5.2 Unlocked folders
+
+`{row}/upriv-unlocked/{display_name}/`, or `{data folder}/upriv-unlocked/{display_name}/` for Beside the data folder; a row that already ends in `upriv-unlocked` is used as it is. Upriv writes `.upriv-unlocked-id` (32 random hex characters) the first time it uses an `upriv-unlocked`, never rewrites an ID there, and replaces a file that holds none (a crash between its creation and its write; no record can name it). It removes the folder with its ID file when its last vault folder goes (records of plain-text folders under it that are proven gone are dropped first); when the folder cannot go after all, its ID goes back. `[unlocked_folders] encrypted_vaults` (every device, off by default) and `[unlocked_folder] encrypted` (`inherit` / `on` / `off`, one switch for every device, whichever choice is in use) decide whether an encrypted vault gets one; a phone shows both switches unavailable. A plain-text vault always uses its folder; with nothing selected, "Where should the files go?" asks before the password (§8.2.2). An encrypted vault gets its folder from the attach (§2.4). Sessions keep the folders they opened with; a change applies from the next open or close, except the app's switch turning on, which attaches every open encrypted vault at once (a mounted folder stays until its vault closes when the switch turns off). When a vault should get a folder on this device and neither its list nor the app's chooses one, the settings window's list says so and wears attention; Save waits only when that window's draft creates the state, and the create wizard reports it as `unlocked_folder_unchosen`.
+
+#### 3.5.3 Data folder list
+
+`.upriv-data-folder` in the app home (TOML), written only while some device group in it differs from the defaults; Upriv runs one instance per machine, so it is the only writer.
+
+```toml
+# Upriv data folder list. Not a vault; holds no secrets.
+
+[devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 2            # a row number, "none"; absent: "default"
+next_number = 3
+
+[[devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
+name = "USB drive"
+path = "/media/vini/USB"
+
+[[devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 2
+name = ""
+path = "/home/vini/Upriv"
+```
+
+A row names the folder that holds `.upriv`; on a phone, the `content://` tree of its grant, mounted at `/upriv-saf-root` while it is the data folder. `UPRIV_VAULT_ROOT` wins over the list and nothing is written for it. Launch (`resolve_vault_root`): Default with a `.upriv` opens; Default without one is the first run (`needs_setup`: Setup with Default preselected) while this device has no row, and `selected_failed` while it has rows to try; a row that answers opens, one that does not is `selected_failed`. On `selected_failed` (it names the `choice` and the `reason`) the Gate shows the list while `data_folder_search` (a job) looks through the chain for a valid data folder, which becomes the selection with a toast naming both choices; the person may pick meanwhile, which stops the search. A search that finds none leaves the selection as it was, with each row's Retry. The data folder list always has a choice: nothing selected is not a state it holds. An incomplete selected folder goes to Repair and never hands over. A file that cannot be read is `data_folder_list_invalid`: a screen with Retry and Start a new list (`data_folder_apply` with `newList`). Case B (the data folder in use lost while Upriv runs) keeps the selection: in-memory preferences reset, and the Gate resolves again, so it lands on `selected_failed` and the search as at launch (or on the first run when Default lost its `.upriv` and this device has no row). Vaults still open there cannot be saved. Core keeps the data folder in use (`data_folder_entered`, when a resolve finds one or an apply switches), and the resolve that finds it lost ends every session still open in it (`leave_lost_data_folder`), as after a crash: nothing written, keys wiped, mounts released; plain-text folders and their records stay. That happens before a phone's data folder root serves another tree. Each vault recovers once that data folder is back. Their names stay in core until a data folder is in use again: the `ended` of that resolve answer, of `data_folder_search`, and of `data_folder_apply` lists them, so the window shows them at once and the toast after the switch repeats them. The search and the Gate's apply also end a session an open inserted after that resolve; the search waits for a close or an open still running there before it switches. While a data folder is in use (the Data folder window), an apply ends nothing. `data_folder_apply` saves the list's change and opens the selected folder, making a data folder only where the person chose (a row's folder that exists, or Default) or replacing an incomplete one by the chosen policy; it needs every vault idle (`vault_root_busy`). Deleting the row in use asks first; Apply then switches to the first row left, or Default when none is.
+
+#### 3.5.4 Phone folders
+
+Every phone row is a storage-access tree picked with a persistable grant. Rust reaches the data folder at `/upriv-saf-root` and every other mounted tree at `/upriv-saf-tree/<key>` (`key`: the first 16 bytes of SHA-256 of the trimmed tree URI, in hex), each through its own `SafTreeFs` bridge (`host_fs` tree table). A mount registers the bridge and does no I/O. At module start and after each save the UI asks core for the trees this device's rows name (`device_trees`), and Kotlin mounts them; an export field mounts the tree it holds. A tree nothing names is unmounted and its grant released. A tree that is not mounted, or whose bridge answers `unavailable`, is a folder failure, so failover applies. The bridge's `space` operation gives free space (unknown when the provider does not say). Other devices' groups are edited as text on a phone, but nothing copies into a phone: its rows must be picked, for their grants.
 
 ---
 
@@ -932,14 +1046,18 @@ const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 
 ```
 upriv-core/src/
-├── config/          # settings.toml, vaults/*/config.toml, vault groups, edit policy
+├── config/          # settings.toml, vaults/*/config.toml, vault groups, edit policy, list saves
+├── device.rs        # this device's ID and system
+├── folder_list/     # per-device lists: model, path rules, chains, data folder list, layouts
+├── folder_probe.rs  # time-limited folder checks and statuses
 ├── logging/         # Logger / log_event → `.upriv/logs/`
-├── vault/           # list, create, open/close, fs, export, import, backup, rename, rewrap
-│   ├── plain/       # upriv_plain folder open/close + wipe
+├── vault/           # list, create, open/close, fs, export, import, backup, rename, rewrap,
+│   │                #   unlocked folder attach, data folder apply/search, folder status
+│   ├── plain/       # upriv_plain folder open/close + wipe, plain-text records
 │   └── seven_zip*   # in-process .7z via sevenz-rust2
 ├── session/         # open session keys in RAM, unlock throttle
 ├── store/           # header, index, chunks
-├── paths/           # VaultRoot, vault-root discovery, workspace paths
+├── paths/           # VaultRoot, launch resolution of the data folder, reserved paths
 ├── mount/           # FUSE host (Linux), WinFsp (Windows)
 ├── runtime_state.rs # .upriv/state.json open records (dirty-close recovery)
 └── host_fs.rs       # filesystem access, incl. Android storage-access trees
@@ -964,9 +1082,9 @@ Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via the `upri
 - The RAM check runs once the index is unlocked, before any file is decrypted or the archive is created: the decrypt queue, the write buffer, the archive header (a fixed part per member plus its name), and the coder. A copy-only archive has no coder cost. One LZMA2 worker streams with one encoder (window, match finder, coder state, as `lzma-rust2` 0.16 allocates them). Several workers each keep an encoder and share a queue that takes a whole block of plaintext ahead of them, so the largest block counts twice. LZMA2 gets as many workers as fit in free RAM (at most 8), and one when no more fit; export fails with `InsufficientRamExport` when even one does not. The workers and that check read free RAM once, so a refused export could not have run on fewer workers. Import picks its decoder threads the same way, at 64 MiB each.
 - Export progress counts the logical bytes the encoder has taken (`job_status`).
 - Every file goes in. A file whose data is missing or damaged keeps its readable chunks, with zeros of the same length for the rest, so its size and place stay; `vault_export` names it in `unreadable` (UI paths), and the toast lists it (`vaultExportToast`). The log counts them (`vault_export_kept_unreadable`) without names.
-- Members are decoded in RAM and written into `store/` through the logical file API. The archive file is read through a 1 MiB buffer. Never extract a decrypted tree under `workspace/` or OS temp.
+- Members are decoded in RAM and written into `store/` through the logical file API. The archive file is read through a 1 MiB buffer. Never extract a decrypted tree into an unlocked folder or OS temp.
 - The package: one folder named like the file, holding the vault folder (sanitized display name). Vault files sit directly in the vault folder, including a user `config.toml`. Anything outside it breaks the package and fails the import (`PackageWalk`). The seed file and `.upriv-workspace.json` are skipped as vault files. The password test answers the vault folder's name (`vaultName`).
-- `.upriv-config/` in the package folder, beside the vault folder, carries `config.toml` and `workspace.json`, each only when its export toggle is on (both start on), with a `README.md` while either is there. It is the archive's first block, with its own salt and IV, also in a solid archive. The password test (`vault_import_probe`) reads only the first member: `config.toml` to its end, which also checks the password when file names are not encrypted, or else one byte. Import keeps `workspace.json` when `keepWorkspace` asks for it and sinks the rest of the folder. Any of it may be missing; a `config.toml` that cannot be parsed counts as missing.
+- `.upriv-config/` in the package folder, beside the vault folder, carries `config.toml` and `.upriv-workspace.json` (the file manager workspace, under its name in the vault), each only when its export toggle is on (both start on), with a `README.md` while either is there. It is the archive's first block, with its own salt and IV, also in a solid archive. The password test (`vault_import_probe`) reads only the first member: `config.toml` to its end, which also checks the password when file names are not encrypted, or else one byte. Import keeps `.upriv-workspace.json` when `keepWorkspace` asks for it and sinks the rest of the folder. Any of it may be missing; a `config.toml` that cannot be parsed counts as missing.
 - In the create wizard a `.7z` shows a switch for the layout and one for the settings, both on, because its contents are unknown before the password. While the settings switch is on and the password test has not passed, `createVaultSettingsLocked` locks the input fields a file can fill (name, note, hint, unlock RAM, backup, auto-close, order, hidden, storage, mount), with a notice to test the password and come back. Steps and sections stay open, the group fields stay usable, and Next walks past the locked name. The test fills those fields, and they can still be edited. Turning the switch off takes the file's values back out, and so does choosing another file (`revertEmbeddedVaultSettings`), keeping any edit made since.
 - The same import option examines a `.zip`. `store/header/vault.header` at the zip root (a backup) or in an export package's vault folder is the store-zip copy (`StoreEnvelope`; `README.md` and `config.toml` sit beside `store/` and are not copied into the new vault); a `store/` in one folder is neither and is refused as documents. Any other `.zip` streams readable files into a new `store/`: a plain-text export, whose package's vault folder is the vault root (the zip comment, or a `.upriv-config/` beside it, marks it whatever else it holds), or ordinary documents, which lose one shared top folder and carry no settings. The probe reads the export's `config.toml` and answers `settings`, `unlockPreset`, `carriesWorkspace`, and `vaultName` (the name those settings hold, or else the package's vault folder; for a backup zip, the name its settings hold). A symlink inside a `.zip` or a folder is not stored and not followed. A symlink chosen as the source path is refused. The rest of the import continues. Files are sealed in waves, so a crash keeps the last finished wave in `store/`.
 
@@ -974,7 +1092,7 @@ Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via the `upri
 
 - `vault_export` with `format: "plain_zip"` runs `export_plain_zip` (`vault/plain_zip.rs`): the same closed-vault hold, password check, and unlock limit as `.7z`, the same `.upriv-config/`, the same package (its two folders are written first, so an empty vault is still one, and the comment `PLAIN_ZIP_COMMENT` tells import the vault folder is the vault root), and no RAM check, because each file is decrypted one chunk at a time straight into a Stored zip. Progress counts the logical bytes written. A file whose data is missing or damaged goes in with zeros in those parts and is named in `unreadable`, as in §5.1.
 - The file is owner-only on Linux and macOS and named `{display_name}-plain-text.zip`, so unpacking gives `{display_name}-plain-text/{vault_id}/` with the files directly inside.
-- Before its first byte, `.upriv/state.json` records the `.upriv-part` (`unfinished_files`: what wrote it, vault id, host, path, job, and the `content://` tree on a phone). A stop or a failure answers at once: the file is overwritten with the vault's `[security]` settings and removed on a thread of its own (`wipe_partial_behind`), and its record goes once the file is gone. A normal quit's `app_shutdown` waits for that wipe before it answers, as it waits for a close already running, and the desktop core waits again before it exits; Close now does not wait, and what the wipe has not reached keeps its record for the next launch. A panic in the export clears the file the same way. A file in a picked phone folder is wiped before the export ends, while that folder is mounted. A crash leaves the record. `vault_unfinished_sweep`, which each vault list sends once per data folder, wipes every plain-text record of this host whose job is not running, whose wipe is not already running, and whose path is a `.upriv-part`, on a thread of its own too. It answers `folders`, the picked trees not mounted now: a phone mounts each one through `SafExportMount`, sweeps again, and lets the grant go. A file that cannot be reached keeps its record for the next launch.
+- Before its first byte, `.upriv/state.json` records the `.upriv-part` (`unfinished_files`: what wrote it, vault id, the device, path, job, and the `content://` tree on a phone). A stop or a failure answers at once: the file is overwritten with the vault's `[security]` settings and removed on a thread of its own (`wipe_partial_behind`), and its record goes once the file is gone. A normal quit's `app_shutdown` waits for that wipe before it answers, as it waits for a close already running, and the desktop core waits again before it exits; Close now does not wait, and what the wipe has not reached keeps its record for the next launch. A panic in the export clears the file the same way. A file in a picked phone folder is wiped before the export ends, while that folder is mounted. A crash leaves the record. `vault_unfinished_sweep`, which each vault list sends once per data folder, wipes every plain-text record of this device whose job is not running, whose wipe is not already running, and whose path is a `.upriv-part`, on a thread of its own too. It answers `folders`, the picked trees not mounted now: a phone mounts each one through `SafExportMount`, sweeps again, and lets the grant go. A file that cannot be reached keeps its record for the next launch.
 - A successful export logs `vault_exported_plain_text` (`id`; no name or path).
 
 ### 5.2 What not to run
@@ -984,8 +1102,8 @@ Do not shell out to 7-Zip. These commands are not the implementation (they put t
 | Do not run | Why |
 |---|---|
 | `7zz t -p{pass}` | Password appears in the process list |
-| `7zz x -p{pass} -o{workspace}` | Writes a decrypted tree on disk |
-| `7zz a -p{pass} … <file manager folder>/*` | Reads a decrypted tree and puts the password on `argv` |
+| `7zz x -p{pass} -o{folder}` | Writes a decrypted tree on disk |
+| `7zz a -p{pass} … <unlocked folder>/*` | Reads a decrypted tree and puts the password on `argv` |
 
 ### 5.3 Password
 
@@ -1033,7 +1151,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 | Case | Detected by |
 |------|-------------|
 | Dirty close (A) | `.upriv/state.json` records the session as open and no live process holds `runtime/<id>.lock` (`dirty_close_ids`) |
-| Leftover `upriv_plain` folder (D) | `state.json` records a plaintext folder this computer can reach that was never wiped |
+| Leftover `upriv_plain` folder (D) | `state.json` records a plaintext folder this device can reach that was never wiped (`leftover`). Each record, written before the folder's first byte, names the device that wrote it (its ID and system), the path, a token, and the ID in the `.upriv-unlocked-id` of its `upriv-unlocked`. A record goes only when wiped, on proof (that `upriv-unlocked` answers with the record's ID and nothing of the session is in it: the vault's folder is gone or holds no marker of that session, `gone`; a folder or marker that does not read proves nothing), or by Forget (`plain_record_forget`, the files stay). While nothing proves where its folder is (`away`; `elsewhere` for another device's record out of reach) the vault does not open on this device (`plain_folder_unreachable`), its unlocked folder group, mode, name, and id stay locked, and the row names the device and the folder with Retry and Forget. A folder that merely answers proves nothing: a mount point stays as an empty folder while its drive is away, and another drive can take the same letter. A record follows its folder to this device when that folder answers here with the vault's marker and token (the list checks other devices' records, one time-limited check each on the folder lane). A vault is not deleted while another device's record of it remains (`vault_plain_elsewhere`) |
 | Different `store/` (A) | `persistence.json` `content_hash` differs from the header + sealed index on disk. A missing hash or a read error is not a mismatch |
 
 A file whose data is missing or damaged (B) fails only that file, with `vault_file_unreadable` (`details.problem`: `missing` or `damaged`); the vault still opens. The file's index node carries the mark (`problem`), sealed with the index and not counted as vault content:
@@ -1071,7 +1189,7 @@ A dead header: the vault does not open, and a new vault comes from a backup. Bot
 
 ### 7.3 Reopen after crash (no RAM session, `store/` still on disk)
 
-**Typical case:** app quit, crash, or reboot — `state.json` is empty (`vaults: {}`), but `vaults/<id>/store/` still holds the last flushed ciphertext (and recovery may need dirty-close / leftover `upriv_plain` workspace handling).
+**Typical case:** app quit, crash, or reboot — `state.json` is empty (`vaults: {}`), but `vaults/<id>/store/` still holds the last flushed ciphertext (and recovery may need dirty-close / leftover `upriv_plain` folder handling).
 
 ```text
 vaults/<id>/store/ exists
@@ -1083,8 +1201,8 @@ User Unlock → password
         ▼
 Validate header + index (§2.2)
         │
-        ├─ dirty close / leftover workspace → recovery UI first
-        └─ OK → mount the file manager folder (session in RAM only)
+        ├─ dirty close / leftover plain-text folder → recovery UI first
+        └─ OK → session in RAM; the attach mounts the unlocked folder after
                     │
                     ▼
               User works / chooses Close
@@ -1119,10 +1237,10 @@ A record that cannot be written is logged (`vault_blob_record_failed`, counts on
 **Rebuild (`vault_rebuild`).** A job on the rewrap lane (`upriv-rewrap`, desktop and Android), started only from the unlock window after `vault_index_unreadable`, with the password typed there (`useVaultRebuildJob`, owned by the vault list; the window closes and the row shows `recovering` with its elapsed time and Stop). On a closed vault with no plain-text leftover:
 
 1. Unlock the header under the open throttle; refuse with `vault_index_readable` when an index file opens.
-2. Pin a Stored copy of `store/` in `saves/` of the data folder, or of the chosen backup folder when the data folder has no room (`pin_before_rebuild`), after checking the drive has room (`vault_rebuild_space_short`, `details.needed` / `details.available`, shown in the toast). Its index files do not open, so the pair check of a backup is left out. Any other failure is `vault_backup_failed`.
+2. Pin a Stored copy of `store/` in `saves/` of the data folder, or of the backup folder in use when the data folder has no room (`pin_before_rebuild`), after checking the drive has room (`vault_rebuild_space_short`, `details.needed` / `details.available`, shown in the toast). Its index files do not open, so the pair check of a backup is left out. Any other failure is `vault_backup_failed`.
 3. Name every blob in `data/` (`store::record::rebuild_tree`) from the newer of its own newest record (a blob whose last bytes are no record is searched whole) and the newest backup zip with the same content identity whose tree names it and whose first chunk opens from it (`held::name_from_backups`). The higher save number wins, the backup on a tie: a file renamed since its record takes its name from the backup, and a blob with no record still comes back. Order them by save number, then time, newest first.
 4. Place each file at its path with the folders above it; a path a newer file took, or one under a file, is left. Empty folders and empty files have no blob and do not come back.
-5. Seal both index files (the save count goes on from the highest one read), record the new content hash in `persistence.json` and drop each machine's backup record, and log `vault_rebuilt` with counts (`files`, `from_backups`, `left`, `unnamed`).
+5. Seal both index files (the save count goes on from the highest one read), record the new content hash in `persistence.json` and drop each device's last backup, and log `vault_rebuilt` with counts (`files`, `from_backups`, `left`, `unnamed`).
 
 No blob is moved, rewritten, or deleted. A blob nothing places stays in `data/`, and the next open sets it aside, named by its own record or a backup when one names it. A stop before the seal removes the pinned copy; the seal refuses a stop. The result (`VaultRebuild`: `files`, `setAside`) drives the toast (`toast.vault_rebuilt` / `toast.vault_rebuilt_set_aside`). Once the rebuild lands, the vault list opens the vault with the password the rebuild used (`openWithPassword`), so it is ready at once; the job holds that password only until it ends, and a failed open shows as any open's error. A rebuilt file holds what its record or backup names: as the last close, or the seal that made it, left it.
 
@@ -1250,21 +1368,28 @@ click(Backups|Config)      → stopPropagation; open respective modal
 
 No separate Welcome screen in v1; on first run the Gate asks for the data folder.
 
+**Where should the files go?** Before the password of a plain-text vault, when this device has nothing selected for it (its group uses the app's, and the app's has nothing), `vault_plain_destination` answers `unlocked_folder_unset` and this window offers Beside the data folder (chosen first), a folder added to the app's list, or one added to this vault's own list. A typed or picked folder is checked as it changes by the rules of the row it becomes (`plainPlaceProblem`: the path, a folder already in that list, and for the app's list the data folder or Beside the data folder), and on desktop then on the disk once the path settles (`folder_status`, as a list row); Continue waits until it passes, then saves the choice as a selected fixed choice or a new selected row of that list and goes to the password. A folder on a removable, network, or cloud drive (`PlainFolderClass`) gets a warning in the same window and Use this folder. While another vault is open only this vault's own list can change (`no_open_session` on the app's list). A phone picks the folder (a grant).
+
+**Unlocked folder of an open vault.** After an encrypted open the desktop calls `vault_unlocked_folder_attach` (§2.4) and shows its answer as a toast; `driver_missing` offers the installer (`UnlockedFolderDriverModal`) and attaches again once it is installed. The row's Open unlocked folder and the file manager's Show in unlocked folder and Open in terminal show only while the folder is in the OS (`useOsFolderReady`, asked again each second while the attach runs and each time More options opens); a vault with none offers none of them, and nothing is said.
+
+**Plain-text record on another drive.** A vault whose plain-text record cannot be proven gone shows one line on its row naming the device and the folder, with Retry (a list refresh) and Forget (`plain_record_forget`, after a confirmation that the files stay on that drive as they are).
+
 #### 8.2.3 Modal — backups
 
 - Title: `modal.backup.title` — `<id>`
-- Back up now and its status sit above the sections. Each folder is one collapsible section, the same card as the settings sections (`VaultSettingsSection` / `SettingsAccordionSection` with `aside`): the **Data folder**, then the **Chosen folder** (`backupListSections`). Inside it, under small headings, come its **Saves** (`saves/<stamp>-<id>.zip`, never auto-deleted) and then its **Standard** backups (`<stamp>-<id>.zip`, rotated per `[backup]`). A folder or a tier shows only when it holds a backup, and `modal.backup.empty` says so when none does. The section header holds its count and a select-all box that selects or clears every backup in that folder, pins included (`toggleBackupSection`, shown partly checked when some are chosen), outside the expand button; on desktop the section shows its folder with a button to open it. Selection spans sections: while anything is chosen, the window's footer shows the count with Save, Export, and Delete, so choosing a row never moves the rows. A chosen folder that fails is one status line (with Use this folder again for `missing`), not a section. **Save** on a standard row → `backup_promote`.
-- A phone lists the data folder's section only, with the same headings, empty rule, select-all, and footer, and no folder or open button.
+- Back up now and its status sit above the sections. Each folder is one collapsible section, the same card as the settings sections (`VaultSettingsSection` / `SettingsAccordionSection` with `aside`): the **Data folder**, then the **Backup folder in use**, then each **Earlier backup folder** (`backupListSections`, in core's order), each with the name of the device that wrote there. Inside it, under small headings, come its **Saves** (`saves/<stamp>-<id>.zip`, and named backups, never auto-deleted) and then its **Standard** backups (`<stamp>-<id>.zip`, rotated per `[backup]` in the folder in use only). A folder shows while it holds a backup or cannot be reached, a tier only when it holds one, and `modal.backup.empty` says so when nothing shows. The section header holds its count and a select-all box that selects or clears every backup in that folder, pins included (`toggleBackupSection`, shown partly checked when some are chosen), outside the expand button; the section shows its folder with a button to open it while it can be reached. A folder no longer in use is dimmed, with a line saying Upriv no longer writes or deletes there. A folder that cannot be reached shows its status with Retry and Forget (`backup_folder_forget`). Selection spans sections: while anything is chosen, the window's footer shows the count with Save, Export, and Delete, so choosing a row never moves the rows. A row keeps **Save** (a standard row → `backup_promote`) and one ⋯ menu, as a folder list's row: Create vault from backup, Rename (`backup_rename`, which pins it; checked while its field is open), Export, Open folder (while the folder answers: desktop shows the zip in its folder, a phone opens the folder, since the Files app would open the zip itself), and Delete. The footer's actions on what is selected stay as they are.
+- A phone lists the same sections; a folder there shows its tree's name, and its open button opens the tree in the Files app.
 - Table/list: columns **Name**, **Date**, **Actions**
 - **Delete:** inline confirmation with `<input>`, under a sentence naming each backup it removes (`modal.backup.delete_list_one` / `modal.backup.delete_list`) — prompt `modal.backup.delete_confirm_one` for one backup, `modal.backup.delete_confirm` for more; phrase = the vault's **current** display name (`Notes`), then a space and the count when two or more are chosen (`Notes 2`), even when backup file names carry an older id; button disabled until the trimmed input matches.
-- RPC methods: `backup_list`, `backup_delete`, `backup_promote`, `backup_folder_check`, `backup_folder_reuse`. A row is addressed by its key (`backupEntryKey`): the file name, under `saves/` for a pin and `chosen/` for the chosen folder. A key is never a path.
+- RPC methods: `backup_list`, `backup_delete`, `backup_promote`, `backup_rename`, `backup_folder_forget`. A row is addressed by its key (`VaultBackupEntry.key`, from core): its folder's reference and the file name, `<ref>/<file>` or `<ref>/saves/<file>`, with `data` for the data folder. A key is never a path.
 
 #### 8.2.4 Modal — vault settings
 
 - Form generated from the `vaults/<id>/config.toml` schema (collapsible sections).
 - **`[vault]` section** includes **`order`** (integer) — same semantics as list sort; user may set position manually when not using drag-and-drop.
 - **Save (preferences):** if `display_name` changed vs baseline → **`vault_rename`** first (folder/`[vault].id` migration when the slug changes; remaps groups + `last_opened` + leftover closed mount leaf). List/modal identity updates immediately after a successful rename, even if a later `vault_config_save` of other prefs fails. Other dirty preference fields → **`vault_config_save`** against the **effective** id.
-- Footer **`modal.settings.danger_zone`:** **`modal.settings.delete_vault`** button (red) → confirmation with `input === id` → `vault_delete(id, confirm_id)`.
+- **Unlocked folder** and **Backups** sections edit the vault's lists for this device (`FolderList`; other devices below, collapsed, once one has a group). The unlocked folder group is quiet-gated (`vault_quiet`); the encrypted switch shows only for an encrypted vault, unavailable on a phone. A save sends the lists' change (`vaultListChanges`), never whole lists.
+- Footer **`modal.settings.danger_zone`:** **`modal.settings.delete_vault`** button (red) → confirmation with `input === id` → `vault_delete(id, outsideBackups)`. The switch to also delete the backups outside the data folder shows only when the vault has some (`outsideBackups`) and starts off.
 
 #### 8.2.5 Front-end components (suggestion)
 
@@ -1304,26 +1429,29 @@ ui/
 
 | Area | Methods |
 |------|---------|
-| App | `app_version`, `app_settings_get`, `app_settings_save` |
-| Data folder | `vault_root_resolve`, `vault_root_setup_default_root`, `vault_root_setup_path`, `vault_root_deactivate_alias`, `vault_root_read_alias`, `vault_root_default_root_status`, `vault_root_inspect_path`, `vault_root_suggested_custom_path`, `data_folder_export` |
+| App | `app_version`, `device_info`, `app_settings_get`, `app_settings_save` |
+| Data folder | `vault_root_resolve`, `vault_root_suggested_custom_path`, `data_folder_list`, `data_folder_apply`, `data_folder_search`, `data_folder_export` |
+| Folder lists | `folder_status`, `vault_unlocked_folder_attach`, `vault_unlocked_folder_info`, `plain_record_forget` |
 | Logs | `log_list`, `log_get`, `log_delete`, `log_event` |
 | Groups | `vault_group_list`, `vault_group_create`, `vault_group_update`, `vault_group_delete`, `vault_group_set_collapsed`, `vault_group_reorder`, `vault_group_reorder_grouped_vaults`, `vault_group_repair` |
 | Vaults | `vault_list`, `vault_create`, `vault_config_get`, `vault_config_save`, `vault_rename`, `vault_delete`, `vault_disk_usage`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild` |
-| Open / close | `vault_open`, `vault_close`, `vault_close_phase`, `vault_close_hurry`, `vault_plain_confirm`, `vault_plain_destination`, `vault_plain_leftover`, `vault_plain_remove`, `vault_plain_sync`, `vault_plain_status`, `vault_plain_deletions`, `vault_plain_send`, `vault_plain_unsend` |
+| Open / close | `vault_open`, `vault_close`, `vault_close_phase`, `vault_close_hurry`, `vault_plain_destination`, `vault_plain_leftover`, `vault_plain_remove`, `vault_plain_sync`, `vault_plain_status`, `vault_plain_deletions`, `vault_plain_send`, `vault_plain_unsend` |
 | File manager | `vault_fs_list`, `vault_fs_held`, `vault_fs_held_restore`, `vault_fs_held_delete`, `vault_fs_revision`, `vault_fs_preview_fits`, `vault_fs_read`, `vault_fs_read_range`, `vault_fs_write`, `vault_fs_write_range`, `vault_fs_import_os_file`, `vault_fs_truncate`, `vault_fs_create_file`, `vault_fs_create_folder`, `vault_fs_ensure_folder`, `vault_fs_delete`, `vault_fs_rename`, `vault_fs_move`, `vault_fs_os_path` |
 | Export / import | `vault_export`, `vault_export_capabilities`, `vault_unfinished_sweep`, `vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, `vault_import_probe` |
-| Backups | `backup_list`, `backup_export`, `backup_save`, `backup_delete`, `backup_promote`, `backup_folder_check`, `backup_folder_reuse` |
+| Backups | `backup_list`, `backup_rename`, `backup_folder_forget`, `backup_export`, `backup_save`, `backup_delete`, `backup_promote` |
 | Jobs | `job_status`, `job_cancel` |
-| Mobile only | `app_settings_parse_toml`, `vault_root_remember_custom`, `vault_ingest_open`, `vault_ingest_directory`, `vault_discard_import` |
+| Mobile only | `device_identity_set`, `device_trees`, `vault_ingest_open`, `vault_ingest_directory`, `vault_discard_import` |
 | Electron main | `app_exit`, `pick_directory`, `pick_file`, `reveal_in_file_manager`, `reveal_os_path`, `open_in_terminal`, `winfsp_status`, `winfsp_install`, `fuse_status`, `fuse_install`; main sends `app_shutdown` to the daemon itself |
 
 **Vault export.** `vault_export` takes the folder chosen in the export option (`destDir`) and writes `{display_name}-upriv.zip`, `{display_name}-sevenzip.7z`, or `{display_name}-plain-text.zip` there (`export_stem`), holding its package (`{display_name}-upriv/{vault_id}/…`). `includeWorkspace` and `includeSettings` choose what `.upriv-config/` carries in the last two. It never replaces a file, or a partial one, already using that name: it takes the next free number (`{display_name}-upriv-2.zip`, `{display_name}-upriv-3.zip`, …), and its package folder the same name; a file that arrives under the name while it writes moves only the file to the next number and logs `vault_export_numbered` (`format`, `id`, `number`; no name or path). It refuses a folder inside a `.upriv` (`export_destination_reserved`). The answer is the written `path`, its `size`, and `unreadable`: the files a `.7z` or plain-text `.zip` kept with zeros (§5.1), as UI paths. The UI toast names a numbered file and those files (`vaultExportToast`). A `.7z` export unlocks the vault with its password inside this call, through the same unlock limit as open: `wrong_password` or `vault_unlock_blocked` comes back before any file is written, and the Export window marks its password field (a toast when the window is closed). While the export runs, the window's one footer button is **Stop export**: it sends `job_cancel` (`by=user`), shows Stopping… until the call settles, and a stopped export ends with `toast.vault_export_cancelled` and no file left. Once every byte is in, the flush and the rename are the job's last step: Stop is disabled and a late `job_cancel` gets `job_not_stoppable`.
 
-**Backup folders.** `backup_list` answers `{ backups, chosen }`: each entry carries `location` (`data_folder` / `chosen`) and `path`, and `chosen` is the folder with its status, or null. `backup_save` answers `{ backup, fallback }`, and a close's outcome carries `backupFallback`: the status of the chosen folder when the zip went to the data folder, or null. `backup_folder_check` takes `path` and an optional `vault`, and answers `{ status }`. `backup_folder_reuse` lets the next backup make a subfolder this machine used. `vault_delete` takes `{ id, outsideBackups }` and answers `{ outside, folder }` (`none`, `kept`, `removed`, `failed`). `data_folder_export` takes `includeBackups`. `backup_list`, `backup_delete`, `backup_promote`, `backup_folder_check`, and `backup_folder_reuse` run on `HeavyLane::BackupFolder`, so a drive that stops answering holds nothing else up.
+**Folder lists.** `device_info` answers this device's `id` (or null) and its `system`. `device_identity_set` (phones) takes `machineId` alone. `folder_status` takes `list` (`data_folder`, `unlocked`, `backup`), a `path` (absent for Default), and an optional `vault`, and answers the row's state and details (§3.5.1). `app_settings_save` and `vault_config_save` take `lists`, the change each list made per device group, and answer `{ unchangedVaults, keptFolders }`. `vault_root_resolve` answers `found`, `needs_setup` (`reason`), or `selected_failed` (`row`, `reason`). `data_folder_list` answers every device's group and where Default is; `data_folder_apply` takes the list's `changes`, `bootstrap`, `replaceIncomplete` / `replacePolicy`, `newList`, and on a phone `adoptPrivateRoot` with its `job`; `data_folder_search` is a job. `vault_open` answers the `switches` a plain-text unlock made. `vault_unlocked_folder_attach` (a job) answers the attach (§2.4); `vault_unlocked_folder_info` gives Vault Info the vault's choice, its folder there, and whether it is mounted. `vault_fs_os_path` answers `ready` with the path, `attaching`, or `none`. `plain_record_forget` takes `id` and the record's `token`. `device_trees` (phones) answers the tree URIs this device's rows name.
 
-**Backup export.** `backup_export` takes the backups' keys (`stamps`, each `backupEntryKey`), the folder chosen in the Backups window (`destDir`), and a `job`. One backup is copied under its own name; several go into one Stored zip, `upriv-backups-<id>.zip`, whose entries are those files (names shared between places are told apart: `saves-<file name>` for a pin, `chosen-<file name>` for the chosen folder, `chosen-saves-<file name>` for a pin there). Like a vault export it never replaces a file or a partial already using the name: it takes the next free number (`upriv-backups-<id>-2.zip`, `<stamp>-<id>-2.zip`) and logs `backup_export_numbered` (`id`, `number`). A backup zip is no package: its envelope stays at the zip root, and the copy's bytes are the backup's. It refuses a folder inside a `.upriv`. Progress counts the bytes of the backups copied. Backups are frozen files, so the vault may be open and every other export stays free; delete and rename of that vault refuse with `vault_config_busy` until the export ends, and the settings window locks both with copy naming the export (`backupExportVaultIds`, edit-policy `backupExportLocked`, `vaultDeleteHold`). The export holds the zips it reads (`BackupExportGuard`): `backup_delete` and `backup_promote` of one of them refuse with `backup_exporting`, and close retention leaves it for a later close. It runs on the same lane as `vault_export`.
+**Backup folders.** `backup_list` answers `{ sections }`: one per folder (`folder` reference, `kind`: `data_folder` / `in_use` / `other`, `path`, `device` (`{ id, system }`, null for the data folder), `status`, `entries`), each entry with its `key`, `stamp`, `fileName`, `name`, `createdAt`, `sizeBytes`, `saved`, and `path`. `backup_save` answers `{ backup, switches }`, and a close's outcome carries `backupSwitches`: the selections its backup switched. `backup_rename` takes `id`, `key`, `name` and answers the renamed entry. `backup_folder_forget` takes `id` and a folder reference. `vault_delete` takes `{ id, outsideBackups }` and answers `{ outside, folder }` (`none`, `kept`, `removed`, `failed`). `data_folder_export` takes `includeBackups`. `folder_status`, `data_folder_search`, `vault_unlocked_folder_attach`, `backup_list`, `backup_delete`, `backup_promote`, `backup_rename`, and `backup_folder_forget` run on the folder lane (`HeavyLane::Folder`, several slots, `spawn_worker_pool`), so rows check in parallel and a drive that stops answering holds nothing else up. Android's `CoreLanes` lists the same names on a pool of its own.
 
-**Jobs.** Work the person can stop is a job: `vault_open` (and `vault_plain_confirm`), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild`, and `vault_root_setup_path` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done and whether it can still stop, and stays `null` while the job waits for its lane, which the UI shows as Queued. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password or unlock-RAM change removes its safety zip and leaves the header as it was, a stopped rebuild removes its pinned copy and leaves both index files as they were, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
+**Backup export.** `backup_export` takes the backups' `keys`, the folder chosen in the Backups window (`destDir`), and a `job`. One backup is copied under its own name; several go into one Stored zip, `upriv-backups-<id>.zip`, whose entries are those files (names shared between folders are told apart: `saves-<file name>` for a pin, `<ref>-<file name>` for a zip outside the data folder, `<ref>-saves-<file name>` for a pin there). Like a vault export it never replaces a file or a partial already using the name: it takes the next free number (`upriv-backups-<id>-2.zip`, `<stamp>-<id>-2.zip`) and logs `backup_export_numbered` (`id`, `number`). A backup zip is no package: its envelope stays at the zip root, and the copy's bytes are the backup's. It refuses a folder inside a `.upriv`. Progress counts the bytes of the backups copied. Backups are frozen files, so the vault may be open and every other export stays free; delete and rename of that vault refuse with `vault_config_busy` until the export ends, and the settings window locks both with copy naming the export (`backupExportVaultIds`, edit-policy `backupExportLocked`, `vaultDeleteHold`). The export holds the zips it reads (`BackupExportGuard`): `backup_delete` and `backup_promote` of one of them refuse with `backup_exporting`, and close retention leaves it for a later close. It runs on the same lane as `vault_export`.
+
+**Jobs.** Work the person can stop is a job: `vault_open` (with the fill of a plain-text folder), `vault_create`, every import (`vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, the `.7z` probe of the password test), the file manager's `vault_fs_import_os_file` and the phone's `importContentUri`, `vault_export`, `backup_save`, `backup_export`, `data_folder_export`, `vault_plain_remove`, `vault_change_password`, `vault_change_kdf`, `vault_rebuild`, `vault_unlocked_folder_attach`, `data_folder_search`, and `data_folder_apply` with `adoptPrivateRoot` (the phone's copy of its private data folder). Each request carries a `job` id the UI makes with `newJobId`; the phone's import of a picked folder reuses one id for its create and every file. A job has no time limit (`NO_DEADLINE_MS`, docs rule `operation-durations.md`): `job_status` reports the bytes it has done and whether it can still stop, and stays `null` while the job waits for its lane, which the UI shows as Queued. `job_cancel` (`by`: `user`, or `auto_close` for an auto-close with `when_busy = "close"`) stops it; a stop for a job still waiting is kept, so it ends as soon as it starts, and a job in its last step refuses with `job_not_stoppable`. A stopped job fails with `job_cancelled` and leaves nothing: the export's `.upriv-part`, the save's `.partial`, the data folder's `.zip.upriv-part`, and the copy's `.upriv.upriv-part` are removed, a plain-text export's is overwritten first, a stopped create or import deletes its new vault, a stopped password or unlock-RAM change removes its safety zip and leaves the header as it was, a stopped rebuild removes its pinned copy and leaves both index files as they were, and a stopped file manager import leaves no file. A stopped `vault_plain_remove` leaves the leftover files it did not reach. A normal quit waits for the jobs; `app_shutdown` then stops any left, and any that starts after it. The log records each stop (`job_cancel` with `by=user|auto_close`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `backup_export_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
 
 ### 8.4 Launch
 
@@ -1351,11 +1479,11 @@ No command-line argument picks the data folder. `UPRIV_VAULT_ROOT` overrides the
 Android **does not** run HD binaries like desktop. Model is:
 
 1. **APK** distributed in `app/Android/Upriv.apk` (HD bundle) or outside → user **installs** once.
-2. Installed app **binds** vault via **SAF** (persistent URI of HD root folder).
-3. Vault layout **identical** to desktop: `.upriv/…` + `workspace/` at HD root.
+2. Installed app **binds** the data folder via **SAF** (a persistable grant on a picked tree, or Default's Documents grant).
+3. Vault layout **identical** to desktop: `.upriv/…` at the data folder's root. A plain-text vault's unlocked folder is `upriv-unlocked/{vault name}` inside a row's tree, or beside the data folder.
 4. File editing is the **in-app file manager** (RAM only for `encrypted_dir`). **Open in system files** is an extra action, not the editor.
 
-**Decision (ADR):** `workspace/` folder stays **on vault volume (OTG)**, not internal-only cache, for desktop parity and folder Intents.
+**Decision (ADR):** a plain-text vault's unlocked folder stays **on a picked tree (OTG, SD card, another app's folder)**, not an internal-only cache, for desktop parity and folder Intents.
 
 ### 9.3 Android — installation and HD package
 
@@ -1372,44 +1500,44 @@ Android **does not** run HD binaries like desktop. Model is:
 
 ```text
 Upriv (installed)
-  → data-folder setup
-  → app folder, or ACTION_OPEN_DOCUMENT_TREE
+  → Setup with the data folder list (Default: Documents/Upriv)
+  → Default: confirm Documents once, or Add folder: ACTION_OPEN_DOCUMENT_TREE
   → takePersistableUriPermission(uri, READ|WRITE)
-  → Rust addresses that folder as /upriv-saf-root
-  → app-home alias .upriv-data-folder stores that logical path, not the content:// URI
+  → the selected tree is mounted; Rust addresses it as /upriv-saf-root
+  → the list in the app home (.upriv-data-folder) stores the row's content:// tree
 ```
 
-**Discovery:** vaults live under the chosen data folder's `.upriv/vaults/`. Do not use absolute path `/storage/XXXX-XXXX/...` as source of truth. Do not store the `content://` URI in `settings.toml`.
+**Discovery:** vaults live under the data folder's `.upriv/vaults/`. Do not use absolute path `/storage/XXXX-XXXX/...` as source of truth. A row's `content://` tree lives in the list file or a list in `settings.toml` / `config.toml`, and is read only on this phone.
 
-**Abstraction in `upriv-core`:** `host_fs`. Desktop paths use `std::fs`. A picked Android folder is a `content://` tree. Rust addresses it as `/upriv-saf-root`. `host_fs` sends that prefix to the mounted `SafFs` bridge, which opens documents on the grant and returns detached file descriptors. The logical path is not created on disk. Do not copy a vault into `filesDir` or OS temp to fake a mount.
+**Abstraction in `upriv-core`:** `host_fs`. Desktop paths use `std::fs`. A picked Android folder is a `content://` tree. Rust addresses the data folder as `/upriv-saf-root` and every other mounted tree as `/upriv-saf-tree/<key>` (§3.5.4). `host_fs` sends each prefix to its mounted `SafTreeFs` bridge, which opens documents on the grant and returns detached file descriptors. The logical path is not created on disk. Do not copy a vault into `filesDir` or OS temp to fake a mount.
 
 **Writes on the bridge:** every rewrite of an existing file (settings, configs, `state.json`, persistence) is a temp file, `fsync`, then rename onto the name — the live file is never truncated in place. DocumentsContract cannot rename onto an existing name, so `SafFs` renames the old document to `<name>.<unix-ms>.replacing`, renames the temp onto `<name>`, then deletes the aside copy. If the drive is pulled between those renames, the next lookup of `<name>` renames the newest aside copy back. Directory `fsync` is not available through the bridge.
 
-**Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, `SafFs` reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker, and RPC returns `vault_root_unreachable` (not `vault_root_not_found`). `mountSafRoot` throws `saf_unreachable` before probing. The grant, the active-URI pref, and `.upriv-data-folder` are kept: settings load from `.upriv-data-folder` (custom_root, not on disk). The Gate opens Setup with Custom still selected, shows the error in that screen and in a toast above it, and keeps the grant. Opening the app again with the drive connected continues straight in while that Custom choice is unchanged. Switching to the Documents default keeps that custom grant on the `android_custom_folder=` line of `.upriv-data-folder` and still shows the folder on the Custom option. If checking that folder finds the volume gone, inspect reports `unreachable` (the reconnect copy, not a writable-location failure) and Retry tries again. A later vault list while that grant is unmounted returns `vault_root_unreachable`, not `vault_root_not_found`. Choosing a different custom folder replaces `android_custom_folder=` and releases the previous custom grant.
+**Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, the bridge reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker: for the data folder RPC returns `vault_root_unreachable` (not `vault_root_not_found`), and for any other tree it is that folder's failure, so failover applies. A data folder row whose tree cannot be mounted at launch (its drive is away, or its grant is gone) is `selected_failed`, and the Gate shows the list while the search runs (§3.5.3). The grant and the list are kept, so the row works again once its drive is back.
 
-**Export folders:** Export data folder, the vault export, and the backup export write straight into a folder the user picks with `ACTION_OPEN_DOCUMENT_TREE`. `mountSafExport` binds `SafExportFs` (the same bridge as `SafFs`, without the Documents → `Upriv` step) and Rust addresses that tree as `/upriv-saf-export`, beside the data folder mount. `host_fs` keeps the two trees apart: a rename between them is refused. Core refuses a picked tree whose address has a `.upriv` segment. One mobile adapter (`SafExportMount`) serves all three, one at a time (a second export into a picked folder is refused with `vault_busy`): it keeps the tree mounted until `job_status` reports that export's job ended, so a timed-out call still lets core remove its `.upriv-part`, then unmounts it. Each field that keeps a picked folder (Export a copy, the vault `.zip`, the vault `.7z`, the backup export) holds its grant (`ExportFolderGrants`, never the data folder's), so the folder stays for the next export, also after its window closes. The grant is released once no field holds that folder (another pick replaced it, or the vault list went away) and no export is writing there. An export folder that stops answering fails the export as `io_error`; only the data folder answers `vault_root_unreachable`.
+**Export folders:** Export data folder, the vault export, and the backup export write straight into a folder the user picks with `ACTION_OPEN_DOCUMENT_TREE`, mounted on the same tree table as the rows (`exportTrees.ts`, `withExportFolder`) at its own root. `host_fs` keeps trees apart: a rename between two of them is refused. Core refuses a picked tree whose address has a `.upriv` segment. The tree stays mounted until `job_status` reports that export's job ended, so a timed-out call still lets core remove its `.upriv-part`. Each field that keeps a picked folder (Export a copy, the vault `.zip`, the vault `.7z`, the backup export) holds its grant (`ExportFolderGrants`, never the data folder's), so the folder stays for the next export, also after its window closes. A tree's mount and grant go once no field holds it, no export writes there, and no row of this phone names it. An export folder that stops answering fails the export as `io_error`; only the data folder answers `vault_root_unreachable`.
 
-**Who reports `unreachable`:** only Android inspect, when the persistable grant is held and the volume does not answer. The shared disk status and the reconnect copy are not Android-only. iOS security-scoped bookmarks (§9.11) return the same inspect status when the bookmark is still valid and the volume is gone. Do not add a second status. Desktop location, Repair, and Recovery already show that copy if inspect returns `unreachable`. Desktop Rust inspect does not return it. A missing filesystem path is not found. Resolve treats that as an invalid alias, and the Gate opens alias recovery. A deleted folder looks the same, so desktop must not map every missing path to `unreachable`.
+**Who reports `unreachable`:** only a phone's folder status, when the persistable grant is held and the volume does not answer. The shared status and the reconnect copy are not Android-only: iOS security-scoped bookmarks (§9.11) return the same status when the bookmark is still valid and the volume is gone. Desktop status does not return it: a missing path cannot be told from a deleted folder, so it is `missing`.
 
 ### 9.5 Android — open session (no FUSE)
 
-Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mount and **no** extract-to-workspace of ciphertext as plaintext tree.
+Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mount and **no** extract of ciphertext as a plaintext tree to a folder.
 
 | State | Plaintext | `store/` |
 |-------|-----------|-------------|
 | CLOSED | none | present |
 | OPEN | in-app file manager buffers (RAM) only | live ciphertext |
-| `upriv_plain` OPEN | real file manager folder via SAF (warned) | live ciphertext; wipe that folder on close |
+| `upriv_plain` OPEN | real unlocked folder in a picked tree via SAF (warned) | live ciphertext; wipe that folder on close |
 
-**open (Android):** unlock session against `vault.header`; browse/edit via in-app file manager (or `upriv_plain` workspace). Never copy the vault into `filesDir` / OS temp to fake a mount (SECURITY-PLAINTEXT).
+**open (Android):** unlock session against `vault.header`; browse/edit via in-app file manager (or the `upriv_plain` unlocked folder). Never copy the vault into `filesDir` / OS temp to fake a mount (SECURITY-PLAINTEXT).
 
-**In-app file manager context menu (mobile vs desktop):** row ⋯ on mobile / right-click on desktop share the same actions (new file/folder, rename, copy path, open in system files, delete last in red) except **Open in terminal** — **desktop only**. Phones have no useful “open folder in terminal” target; keep the action off the React Native menu. Open in system files and Open in terminal show only when the vault has a real OS folder: when the file manager opens it calls `vault_fs_os_path` on `/`, and a `vault_mount_failed` there or on a later click hides both items. That covers mount disabled, mount failed, and mobile without a mount.
+**In-app file manager context menu (mobile vs desktop):** row ⋯ on mobile / right-click on desktop share the same actions (new file/folder, rename, copy path, open in system files, delete last in red) except **Open in terminal** — **desktop only**. Phones have no useful “open folder in terminal” target; keep the action off the React Native menu. Show in unlocked folder and Open in terminal show only when the vault has a real OS folder: when the file manager opens it calls `vault_fs_os_path` on `/`, which answers `ready`, `attaching` (desktop asks again until the attach ends), or `none` with why, which hides both items. That covers the switch off, a mount that failed, and a phone's encrypted vault.
 
 **Plain-text folder in the file manager:** with `plain_files = "chosen"`, `vault_fs_list` marks each node `inFolder`, and `treeFolderPresence` turns the marks into `all` / `some` / `none` by path (a folder counts the files under it). The menu offers **Send to folder** (`vault_plain_send`) while something is missing there and **Remove from folder** (`vault_plain_unsend`) while something is there, and hides the open-in-OS items for a path the folder does not hold. Rows the folder holds carry the `plaintext` mark. The sync thread writes sent files after the call returns and other apps change the folder, so `useTreeFolderPresence` reads `vault_fs_revision` every 2 s for such a vault only. A file changed in the last moments stays in the folder and is reported as `kept`. A whole-vault tree has no marks, no folder actions, and no poll.
 
 **Files that cannot be read in the file manager:** `vault_fs_list` gives a file whose data is missing or damaged its `problem` (§7.1), and `treeFileProblems` collects those files and the folders above them. Their rows carry the `warning` mark, in the recovery color; a folder above one carries it dimmed. While any exists, a bar above the tree counts them and **Show** turns the explorer into those files and their folders (`fileProblemRows`, which opens the folders in the saved layout so they stay easy to find); **Show all files** or opening the search bar ends it, and so does the last mark going away (`useExplorerProblems`). The editor shows such a file as a notice, not a failed read: what is wrong, a hint that a backup from before may still hold it (a new vault from it, in Backups), and **Delete**; a tab that read the file in full shows it, and the tree is fetched again since core cleared the mark (`editorFileProblem`, `treeMarkBehindRead`). A read that finds a new problem fetches the revision and shows no toast, so the mark appears at once.
 
-**Files the viewer cannot hold:** the first read of a tab asks `vault_fs_preview_fits`: core wants 4 bytes of free RAM per byte of the file plus 64 MiB left for the system (`/proc/meminfo` on Linux and Android, the system count on macOS and iOS, `GlobalMemoryStatusEx` on Windows; a system that reports nothing gets the read). No room, or a file over `VAULT_FS_PREVIEW_MAX_BYTES`, is the tab state `too_large`. A tab already showing text is not asked again, so low RAM cannot take its text away. Reading the same bytes from the folder would hold as much RAM, so the fallback is another app: `useFolderFallback` sends a file the person opened (not a restored tab) to the folder, and the notice offers **Send to folder** or **Open in file manager** by what the folder holds. `plain_send` still refuses a file the drive has no room for.
+**Files the viewer cannot hold:** the first read of a tab asks `vault_fs_preview_fits`: core wants 4 bytes of free RAM per byte of the file plus 64 MiB left for the system (`/proc/meminfo` on Linux and Android, the system count on macOS and iOS, `GlobalMemoryStatusEx` on Windows; a system that reports nothing gets the read). No room, or a file over `VAULT_FS_PREVIEW_MAX_BYTES`, is the tab state `too_large`. A tab already showing text is not asked again, so low RAM cannot take its text away. Reading the same bytes from the folder would hold as much RAM, so the fallback is another app: `useFolderFallback` sends a file the person opened (not a restored tab) to the folder, and the notice offers **Send to folder** or **Show in unlocked folder** by what the folder holds. `plain_send` still refuses a file the drive has no room for.
 
 **Explorer search (desktop + mobile, both storage modes):** the search button follows the Explorer label, apart from the four actions, and opens and closes the bar (`explorerSearchOpen`). The bar starts closed. Each vault's layout keeps the bar and the query (`explorerSearchQuery`), so both come back after the vault closes and reopens. Opening the bar from a button (this one, or Find files in the empty editor, which also shows a hidden explorer) puts the cursor in the field (`useExplorerSearch`); a bar restored with the layout leaves focus alone, so a phone keeps its keyboard down. `searchTreeRows` lists the entries whose name holds the query, in any case, under the folders that lead to them, open, plus the entry being renamed, so a new file that does not match can still be named. A folder in the results collapses and opens with a click, for that search only: `useSearchCollapsedFolders` holds it in the explorer's own memory, so it never touches `expandedPaths` or the layout file, and a new query, another vault, or a new mount opens every folder again. It runs on a deferred value, so a large vault does not hold up typing. The query filters the explorer whether the bar is open or closed: with the bar closed the button turns the accent color and its label says the search is on. Only clearing the text ends the search. On desktop Escape clears the query, then closes the bar.
 
@@ -1465,11 +1593,11 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 
 **Current stage:** layout persistence is live on `store/` via `vault_fs_*` (hidden reserved file; missing/corrupt → start clean). FUSE and the in-app explorer omit `.upriv-workspace.json` and the seed file. Portable `.7z` skips `.upriv-workspace.json` and the seed file; a `.zip` of `store/` keeps the ciphertext as-is.
 
-**close:** flush session into `store/`; wipe `upriv_plain` workspace if used.
+**close:** flush session into `store/`; wipe the `upriv_plain` unlocked folder if used.
 
-### 9.6 Android — Open in file manager (Intent)
+### 9.6 Android — Open in the Files app (Intent)
 
-PRD requirement **RF-A05**. `RevealInFileManager.kt` hands the system Files app a location the user already sees — the data folder, an export folder, an import file, `store/` ciphertext, or an `upriv_plain` folder: a `content://` URI, or `/upriv-saf-root/…` turned into a document on the grant, opened through `ACTION_VIEW`. The data folder's own grant opens the data folder (the `Upriv` child of a Documents grant). A folder goes to the Files app as its plain document URI with no grant flag: given a tree, or a document addressed through a tree, the Files app shows its own start screen. A file keeps the granted URI, which a viewer reads through. Info gives every path row an open button: a storage-access row shows the tree label and opens through `vaultRootUprivOpenPath` (`/upriv-saf-root/.upriv/…`). An encrypted vault has no plaintext folder to open.
+PRD requirement **RF-A05**. `RevealInFileManager.kt` hands the system Files app a location the user already sees — the data folder, an export folder, an import file, `store/` ciphertext, or an `upriv_plain` folder: a `content://` URI, or `/upriv-saf-root/…` and `/upriv-saf-tree/<key>/…` turned into a document on their grant (Kotlin keeps each mounted tree's root), opened through `ACTION_VIEW`. The data folder's own grant opens the data folder (the `Upriv` child of a Documents grant). A folder goes to the Files app as its plain document URI with no grant flag: given a tree, or a document addressed through a tree, the Files app shows its own start screen. A file keeps the granted URI, which a viewer reads through. Info gives every path row an open button: a storage-access row shows the tree label and opens through `vaultRootUprivOpenPath` (`/upriv-saf-root/.upriv/…`). An encrypted vault has no plaintext folder to open.
 
 The in-app explorer (copy, move, rename, delete) is the editor on Android. Opening the system file manager does not replace it.
 
@@ -1489,7 +1617,7 @@ The in-app explorer (copy, move, rename, delete) is the editor on Android. Openi
 
 ### 9.8 Android — app config (outside vault)
 
-The persistable grant is held by Android. Rust addresses the chosen folder as `/upriv-saf-root`. The app-home alias `.upriv-data-folder` stores that logical path, and its comments say it is not a real path. An `android_custom_folder=` line in the same file is the last Custom folder (`content://`); a desktop file has no Android lines. `settings.toml` does not store the grant. SharedPreferences keep only `active_uri` (the folder mounted now). Switching to Documents/Upriv keeps `android_custom_folder=` and that grant. Choosing a different custom folder replaces the line and releases the previous grant.
+The persistable grants are held by Android. The data folder list (`.upriv-data-folder`) lives in the private app folder, which is the phone's app home, and names each row by its `content://` tree; Default is found among the held grants (Documents, or Documents/Upriv). Rust addresses the data folder in use as `/upriv-saf-root`. There is no other store of grants: a row's grant goes when no row of this phone and no export field names its tree any more.
 
 **Do not** store password. Optional: `last_opened_vault = "vault-example-1"`.
 
@@ -1497,7 +1625,8 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 
 | Event | Detection | Action |
 |-------|-----------|--------|
-| Drive unplugged (app running or at launch) | `vault_root_unreachable` (see §9.4) | Gate opens Setup with Custom still selected. Reopen with the drive connected continues when that choice is unchanged. The grant stays. |
+| Drive unplugged at launch | `selected_failed` (see §9.4) | The Gate shows the list while the search looks for another data folder that answers; the grant stays, so the row works again once its drive is back |
+| Drive unplugged while running | `vault_root_unreachable` | Case B: the selection stays, the Gate resolves again to `selected_failed`, and the search runs as at launch; the vaults open there end as after a crash |
 | Drive pulled during a replace | `<name>.<unix-ms>.replacing` beside a missing `<name>` | Next lookup restores the newest aside copy |
 | `settings.toml` empty or unparseable | `.upriv/` is incomplete | Repair; default **Reset settings, keep vaults** writes a fresh `settings.toml` and keeps `vaults/`, backups, groups, logs. Rename / delete stay available |
 | Empty `state.json` | Torn write | Read as no open sessions; dirty close still uses lock files |
@@ -1506,11 +1635,13 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 ### 9.10 Android — manual E2E tests
 
 - [ ] Install APK from HD (OTG) → bind vault → open/close
-- [ ] “Open folder” button opens manager at `workspace/` (≥2 apps)
+- [ ] Open unlocked folder on a plain-text vault opens the Files app at that folder (≥2 apps)
 - [ ] Edit file in manager → close vault → reopen → change persisted in `store/`
 - [ ] Disconnect OTG with vault open → reconnect → recovery
-- [ ] Data folder on OTG → unplug → restart app → Setup with Custom still selected → reconnect → reopen opens the same folder when that choice was not changed
-- [ ] Switch that data folder to the Documents default → Custom still shows the previous folder → unplug that drive → select Custom → Retry → plug it back → Retry opens it
+- [ ] Data folder on OTG as a row, Default as the other choice → unplug → restart app → the list shows while the search finds Default → reconnect → select the row again → Apply opens it
+- [ ] A plain-text vault opens into a row picked on an SD card; with the card removed, the next unlock hands over to the next row with a toast
+- [ ] A backup row on an SD card: a close writes there; with the card removed, the next close hands over to the data folder with a toast, and the card's section shows it cannot be reached
+- [ ] A vault export still writes into its picked folder
 - [ ] Plan B: export `.7z` → ZArchiver opens it with the vault password
 
 ### 9.11 iOS (later phase, summary)
@@ -1519,13 +1650,13 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 - App **only** via App Store / TestFlight — **no** `app/iOS` binary on HD.
 - Folder access via **UIDocumentPicker** / security-scoped bookmarks (analogous to SAF).
 - A held bookmark whose volume is gone uses the same inspect status `unreachable` and reconnect copy as Android (§9.4). A revoked bookmark is `unauthorized`. Do not add an iOS-only status.
-- Workspace on accessible volume when permission allows; Intent/limitations differ from Android.
+- Unlocked folders on an accessible volume when permission allows; Intent/limitations differ from Android.
 
 ---
 
 ## 10. App home (outside the data folder)
 
-The app home holds one file, `.upriv-data-folder`: the data folder path chosen with "another folder" (`custom_root` mode). It is also where `default_root` creates `.upriv/`.
+The app home holds one file, `.upriv-data-folder`: the data folder list, every device's group (§3.5.3). It is also Default on desktop, where Setup makes `.upriv/` when Default is chosen. The device ID fallback file (`device-id`, §3.5.1) lives in the per-user app folder, never beside a portable copy.
 
 | Launch | App home |
 |--------|----------|
@@ -1535,16 +1666,7 @@ The app home holds one file, `.upriv-data-folder`: the data folder path chosen w
 | Installed, Windows | `%LOCALAPPDATA%\Upriv` |
 | Installed, macOS | `~/Library/Application Support/Upriv` |
 
-Content, one `key=value` per line after the comments:
-
-```text
-# Upriv data folder pointer. Not a vault; holds no secrets.
-# status=active: Upriv opens data_folder. status=inactive: Upriv opens the default data folder and keeps data_folder for later.
-status=active
-data_folder=/media/user/HD/my-vault
-```
-
-`status=inactive` keeps `data_folder` while `default_root` is in use. On Android `data_folder` is `/upriv-saf-root`, and an `android_custom_folder=` line holds the last Custom folder (`content://`); each Android line brings its own comment, so a desktop file has none. Any other line makes the file invalid (`vault_root_alias_invalid`). The file is written only after the user picks another folder. **Do not** store a password here.
+Content: TOML, one `[devices.<id>]` group per device that differs from the defaults (§3.5.3 shows an example). The file exists only while some group does. A file that cannot be read as that list is `data_folder_list_invalid`: Retry, or Start a new list. **Do not** store a password here.
 
 ---
 
@@ -1552,9 +1674,11 @@ data_folder=/media/user/HD/my-vault
 
 | Rule | Suggested value |
 |------|-----------------|
-| Workspace size before close | warn if > 3 GB |
+| Plain-text folder size before close | warn if > 3 GB |
 | Free disk space | `free >= size(session) + size(store/) + 512MB` |
-| Workspace name | block `..`, dangerous symlinks on extract |
+| Unlocked folder name | block `..`, dangerous symlinks on extract |
+| Folder list row name | up to 80 characters |
+| Folder status check | `FOLDER_STATUS_CHECK_LIMIT` (5 s); a check that decides a switch `FOLDER_SWITCH_CHECK_LIMIT` (30 s) |
 | One default vault | v1; multiple in v1.1 |
 
 ---
@@ -1583,9 +1707,12 @@ data_folder=/media/user/HD/my-vault
 
 - Create vault temp dir → open → touch file → close → reopen
 - Close without a password → `store/` holds the open session
-- Orphan workspace → recovery close
+- Orphan plain-text folder → recovery close
 - Kill during close → orphan `.new`, original vault intact
-- After close with wipe on HDD → forensic recovery **does not** restore workspace files (manual test with recovery tool)
+- After close with wipe on HDD → forensic recovery **does not** restore plain-text folder files (manual test with recovery tool)
+- Two unlocked folder rows: unplug the selected one → an encrypted vault's attach mounts in the other with a toast, and the selection stays there
+- A plain-text vault left by a crash on an unplugged drive stays blocked, opens after the drive returns, and Forget unblocks it
+- Two data folders: launch with the selected one unplugged → the other opens with a toast and stays selected; unplug the data folder in use while Upriv runs with a vault open → the search switches to the other with a toast naming the vault that closed, and that vault recovers once the drive is back
 
 ### 13.3 Manual E2E
 
@@ -1601,8 +1728,9 @@ data_folder=/media/user/HD/my-vault
 **Built:**
 
 - **`upriv-core`**: config, paths, `store/` crypto, in-process `.7z` (no plaintext temp).
-- **Virtual mount**: **FUSE** (Linux) and **WinFsp** (Windows) — the file manager folder writes through to `store/` (`encrypted_dir` only).
-- **`vault::plain`**: real file manager folder while open; close reads that folder and overwrites it before removal (no virtual mount). Close now does neither.
+- **Virtual mount**: **FUSE** (Linux) and **WinFsp** (Windows) — the unlocked folder writes through to `store/` (`encrypted_dir` only), attached after the open.
+- **`vault::plain`**: real unlocked folder while open; close reads that folder and overwrites it before removal (no virtual mount). Close now does neither.
+- **Folder lists**: per-device lists for the data folder, the unlocked folders, and the backup folders, with failover, other devices, and phone trees (§3.5).
 - **open/close** for both `encrypted_dir` and `upriv_plain` (Linux + Windows); unlock checks the password with Argon2id before any write.
 - **Recovery**: dirty close and leftover `upriv_plain` folder.
 - **Electron** UI: vault list (§8.2), Lock/Unlock, settings/backups modals, in-app file manager.
@@ -1626,11 +1754,14 @@ data_folder=/media/user/HD/my-vault
 | v1 platform | Linux + Windows desktop | Desktop parity from day one; shared `mount/` trait (FUSE / WinFsp); portable vault format |
 | Config | TOML + defaults | Readable, cross-platform |
 | Password on HD | Never | Session keys stay in RAM |
-| Data folder | `default_root` beside the app, or a chosen folder (`.upriv-data-folder` in the app home); `UPRIV_VAULT_ROOT` overrides | Portable first; HD or system folder |
+| Data folder | A per-device list in the app home (`.upriv-data-folder`): rows, then Default beside the app; `UPRIV_VAULT_ROOT` overrides | Portable first; a data folder carried between machines finds each machine's own folders again |
+| Folder lists | One group per device under each feature's table, no device store; order is priority; a failing selection hands over for good, with a toast | Settings fix themselves and say so; nothing deletes or forgets data the person may still need |
+| Device ID | HMAC-SHA256 keyed by the OS machine ID over `upriv-device-v1` | Survives an app reinstall and a roaming home; the stored ID cannot be matched to the machine ID |
+| Encrypted vault's unlocked folder | Attached by its own call after the open | The open never waits for a folder, and the open/close queue is never held behind one |
 | Android data folder | Storage-access grant on Documents/Upriv | Survives uninstall; no broad storage permission |
 | Android distribution | APK in `.upriv/app/Android/` | Mandatory install; not loose “folder app” |
 | Portable mode | Portable `.exe` (Windows) and AppImage (Linux): no install, data folder beside the file; a read-only folder falls back to user data; macOS is installed only | One file for users who do not want to install (PRD §3.5.1) |
-| Vault root | `.upriv/` groups system | UX: at the root only the portable app files, `workspace/` while a folder is open there, and `.upriv/` |
+| Vault root | `.upriv/` groups system | UX: at the root only the portable app files, `upriv-unlocked/` while a vault is open beside the data folder, and `.upriv/` |
 | Mobile file editing | In-app file manager | No FUSE on Android; plaintext stays in RAM |
 | Hint + note storage | `config.toml` `[vault]` | User metadata; readable without unlock; not sync manifest |
 | Change password | Closed vault only; current password required; backup zip first; same master key; header and name index resealed; file blobs stay | Snapshots keep the password from when they were written |

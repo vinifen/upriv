@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
-import { useCreateVaultService, useJobService, useVaultRootService } from "@/platform/services";
+import { useCreateVaultService, useDeviceService, useJobService } from "@/platform/services";
 import {
   NO_VAULT_GROUPS,
   PASSWORD_WEAKNESS_I18N_KEYS,
-  vaultRootPathForWorkspaceValidation,
   type CreateVaultDraft,
+  type CreateVaultLists,
   type CreateVaultResult,
   type CreateVaultStepId,
   type VaultGroup,
 } from "@upriv/shared";
-import { useCreateVaultWizard } from "@upriv/shared/react";
+import { hereDevice, useCreateVaultWizard, useDeviceInfo } from "@upriv/shared/react";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { invalidateImportPicks, renderCreateVaultStep } from "./createVaultSteps";
 
@@ -52,37 +52,13 @@ export function CreateVaultModal({
     showHiddenVaultsSession,
     reportVaultRootIntegrityFailure,
   } = useAppSettingsContext();
-  const vaultRootService = useVaultRootService();
-  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  const deviceInfo = useDeviceInfo(useDeviceService());
+  const here = useMemo(() => hereDevice(deviceInfo), [deviceInfo]);
+  const lists = useMemo<CreateVaultLists>(
+    () => ({ here, appUnlocked: appSettings.unlocked_folders }),
+    [here, appSettings.unlocked_folders],
+  );
   const [createError, setCreateError] = useState<string | null>(null);
-  const [driverAttention, setDriverAttention] = useState(false);
-  const [backupFolderBlocking, setBackupFolderBlocking] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      setResolvedRootPath(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: appSettings.app.vault_root_mode,
-        });
-        if (cancelled) return;
-        if (resolved.status === "found") {
-          setResolvedRootPath(resolved.rootPath);
-        } else {
-          setResolvedRootPath(resolved.defaultRootAnchor);
-        }
-      } catch {
-        if (!cancelled) setResolvedRootPath(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, appSettings.app.vault_root_mode, vaultRootService]);
 
   const reportImportVaultRootFailure = useCallback(
     (error: unknown) => {
@@ -91,11 +67,6 @@ export function CreateVaultModal({
     [reportVaultRootIntegrityFailure],
   );
 
-  const vaultRootPath = vaultRootPathForWorkspaceValidation(
-    appSettings.app.vault_root_mode,
-    appSettings.app.upriv_root_path,
-    resolvedRootPath,
-  );
   const includeHidden = appSettings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
 
   const wizard = useCreateVaultWizard({
@@ -104,7 +75,7 @@ export function CreateVaultModal({
     existingOrders,
     existingDisplayNames,
     groups,
-    vaultRootPath,
+    lists,
     initialDraft,
     initialStep,
     onCreate,
@@ -144,10 +115,7 @@ export function CreateVaultModal({
   } = wizard;
 
   useEffect(() => {
-    if (!open) {
-      setCreateError(null);
-      setDriverAttention(false);
-    }
+    if (!open) setCreateError(null);
     invalidateImportPicks();
   }, [open]);
 
@@ -189,9 +157,8 @@ export function CreateVaultModal({
               <Button
                 variant="primary"
                 size="md"
-                disabled={!canCreate || driverAttention || backupFolderBlocking}
+                disabled={!canCreate}
                 onClick={() => {
-                  if (driverAttention) return;
                   setCreateError(null);
                   try {
                     void handleCreate();
@@ -203,12 +170,7 @@ export function CreateVaultModal({
                 {t("vault.create.action.create")}
               </Button>
             ) : (
-              <Button
-                variant="primary"
-                size="md"
-                disabled={backupFolderBlocking}
-                onClick={handleNext}
-              >
+              <Button variant="primary" size="md" onClick={handleNext}>
                 {t("vault.create.action.next")}
               </Button>
             )}
@@ -247,11 +209,9 @@ export function CreateVaultModal({
             groups,
             includeHidden,
             existingDisplayNames,
-            vaultRootPath,
-            appWorkspace: appSettings.workspace,
+            here,
+            appUnlocked: appSettings.unlocked_folders,
             appBackups: appSettings.backups,
-            onDriverAttentionChange: setDriverAttention,
-            onBackupFolderBlockingChange: setBackupFolderBlocking,
             onTestImportPassword: handleTestImportPassword,
             onStopTestImportPassword: stopTestImportPassword,
             testingPassword,

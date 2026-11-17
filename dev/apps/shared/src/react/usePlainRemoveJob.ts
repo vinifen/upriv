@@ -1,10 +1,7 @@
 import { useCallback } from "react";
 import type { PlainWipe } from "../domain";
 import type { JobService } from "../services";
-import { useCoreJob, type CoreJob } from "./useCoreJob";
-
-/** One Remove the folder in flight. */
-export type PlainRemoveJob = CoreJob<{ vaultId: string }>;
+import { useCoreJob } from "./useCoreJob";
 
 export interface PlainRemoveJobEvents {
   /** The wipe ended. `wipe.kept` files could not be wiped: the vault stays in recovery. */

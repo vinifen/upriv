@@ -58,6 +58,7 @@ import {
   useExplorerSearch,
   useFolderFallback,
   useOpenTabContents,
+  useOsFolderReady,
   useToast,
   useTreeFolderPresence,
   useVaultFileTree,
@@ -274,40 +275,31 @@ export function useVaultFileManager({
     sendToFolder,
   );
 
-  /** Real OS folder for this vault — gates "Open in file manager". */
-  const [osFolderAvailable, setOsFolderAvailable] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    fs.osPath(vaultId, "/").then(
-      (osPath) => {
-        if (!cancelled) setOsFolderAvailable(Boolean(osPath));
-      },
-      () => {
-        if (!cancelled) setOsFolderAvailable(false);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [fs, vaultId]);
+  /**
+   * The vault's folder in the Files app — gates "Show in unlocked folder". A
+   * phone has one only for a plain-text vault, and attaches none.
+   */
+  const osFolder = useOsFolderReady((id, path) => fs.osPath(id, path), vaultId, true);
+  const osFolderAvailable = osFolder.ready;
+  const { lost: osFolderLost } = osFolder;
 
   const openInSystemFileManager = useCallback(
     async (logicalPath: string) => {
       try {
-        const osPath = await fs.osPath(vaultId, logicalPath);
-        if (!osPath) {
-          setOsFolderAvailable(false);
+        const answer = await fs.osPath(vaultId, logicalPath);
+        if (answer.state !== "ready") {
+          osFolderLost();
           showToast(t("error.vault_mount_failed"));
           return;
         }
-        await revealInOsFileManager(osPath);
+        await revealInOsFileManager(answer.osPath);
       } catch (error) {
         const key = mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed");
-        if (key === "error.vault_mount_failed") setOsFolderAvailable(false);
+        if (key === "error.vault_mount_failed") osFolderLost();
         showToast(t(key));
       }
     },
-    [fs, showToast, t, vaultId],
+    [fs, osFolderLost, showToast, t, vaultId],
   );
 
   const getEditorContent = useCallback(

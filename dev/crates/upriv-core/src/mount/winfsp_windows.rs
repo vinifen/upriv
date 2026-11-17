@@ -59,7 +59,6 @@ const UM_FILE_CONTEXT_IS_USER_CONTEXT2: u32 = 1 << 16;
 const SUPPORTS_POSIX_UNLINK_RENAME: u32 = 1 << 29;
 
 const USER_CONTEXT_OFFSET: usize = 8;
-const NOT_INSTALLED: &str = "WinFsp is not installed; use the in-app file manager";
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -1507,7 +1506,7 @@ pub(super) fn spawn(
     mount_point: PathBuf,
 ) -> Result<MountedVault> {
     let Some(api) = ensure_api() else {
-        return Err(UprivError::VaultMountFailed(NOT_INSTALLED.into()));
+        return Err(UprivError::MountDriverMissing);
     };
     let fs = EncryptedFs {
         root,
@@ -1545,9 +1544,7 @@ pub(super) fn spawn(
         unsafe { (api.delete)(file_system) };
         drop(unsafe { Box::from_raw(context) });
         if status == STATUS_NOT_IMPLEMENTED && !volume_allows_directory_mount(&mount_point) {
-            return Err(UprivError::VaultMountFailed(
-                "unsupported_filesystem".into(),
-            ));
+            return Err(UprivError::MountFilesystemUnsupported(mount_point));
         }
         return Err(mount_failed(&mount_point, status));
     }

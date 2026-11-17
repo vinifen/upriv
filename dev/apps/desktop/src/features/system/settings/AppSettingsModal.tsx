@@ -4,26 +4,32 @@ import { useTranslation } from "@/i18n";
 import { VaultSettingsSection } from "@/components/settings";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
-import { useOperationLimit, useVaultRootIntegrityClose } from "@upriv/shared/react";
-import { useVaultRootService } from "@/platform/services";
+import {
+  hereDevice,
+  useDeviceInfo,
+  useOperationLimit,
+  useVaultRootIntegrityClose,
+} from "@upriv/shared/react";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import {
+  APP_BACKUP_LIST,
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
+  APP_UNLOCKED_LIST,
+  appListChanges,
   appSettingsEqual,
-  backupFolderLeftBehind,
-  backupFolderSystem,
-  vaultBackupFolders,
+  appUnlockedFixedFolders,
   isRpcError,
+  encryptedFolderUnchosen,
+  listDraftBlocks,
   shouldBumpVaultRootEpoch,
   normalizeAppSettings,
-  validateWorkspaceTable,
-  currentWorkspaceSystem,
-  workspaceTablesEqual,
   vaultRootGoneRpcError,
-  vaultRootPathForWorkspaceValidation,
   type AppSettingsConfig,
   type AppSettingsSectionId,
+  type HereDevice,
+  type ListsSaved,
 } from "@upriv/shared";
 import {
   AppSettingsBackupsSection,
@@ -32,8 +38,8 @@ import {
   AppSettingsHiddenVaultsSection,
   AppSettingsLanguageSection,
   AppSettingsLoggingSection,
+  AppSettingsUnlockedFoldersSection,
   AppSettingsVaultListSection,
-  AppSettingsWorkspaceSection,
 } from "./appSettingsForm";
 
 const SAVED_INDICATOR_MS = 1500;
@@ -43,10 +49,12 @@ interface AppSettingsModalProps {
   onClose: () => void;
   /** Report unsaved draft so the list shell can refuse opening Data folder. */
   onDirtyChange?: (dirty: boolean) => void;
-  /** Disable Clear on workspace path while any vault session is open. */
+  /** A vault is open: this device's unlocked folders keep their rows and choice. */
   hasOpenVault?: boolean;
   /** List toast. A save keeps running after the window closes and reports here. */
   onNotice?: (message: string) => void;
+  /** A vault's display name, by id, for the save's toasts. */
+  vaultName?: (vaultId: string) => string;
 }
 
 /** A save in flight, or one that failed, shown again when the window reopens. */
@@ -67,12 +75,14 @@ export function AppSettingsModal({
   onDirtyChange,
   hasOpenVault = false,
   onNotice,
+  vaultName = (vaultId) => vaultId,
 }: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
   const openRef = useRef(open);
   openRef.current = open;
   const vaultRootService = useVaultRootService();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
   const {
     settings,
     replaceSettings,
@@ -88,13 +98,15 @@ export function AppSettingsModal({
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [backupFolderBlocking, setBackupFolderBlocking] = useState(false);
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [resolveFailure, setResolveFailure] = useState<unknown>(null);
+  /**
+   * The settings as the window opened, or as the last save left them. A save
+   * sends the lists' change from here, so a switch core made meanwhile stays.
+   */
+  const [baseline, setBaseline] = useState<AppSettingsConfig | null>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
-  /** True after the user patches workspace this modal session — skip live Context sync. */
-  const workspaceTouchedRef = useRef(false);
   const commitSaveLock = useRef(false);
   /** Bumped only when a save runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const saveBusyGen = useRef(0);
@@ -105,9 +117,9 @@ export function AppSettingsModal({
 
   const isDirty = useMemo(
     () =>
-      Boolean(draft && !appSettingsEqual(draft, settings)) ||
+      Boolean(draft && !appSettingsEqual(draft, baseline ?? settings)) ||
       draftShowHiddenVaultsSession !== showHiddenVaultsSession,
-    [draft, draftShowHiddenVaultsSession, settings, showHiddenVaultsSession],
+    [baseline, draft, draftShowHiddenVaultsSession, settings, showHiddenVaultsSession],
   );
 
   useEffect(() => {
@@ -121,37 +133,20 @@ export function AppSettingsModal({
     openedSessionRef.current = true;
     // A save still running, or one that failed, shows its values again.
     const pending = pendingSaveRef.current;
-    workspaceTouchedRef.current = pending !== null;
+    setBaseline(settings);
     setDraft(pending?.config ?? settings);
     setDraftShowHiddenVaultsSession(pending?.showHidden ?? showHiddenVaultsSession);
   }, [open, settings, showHiddenVaultsSession]);
 
-  // Keep draft.app aligned with live Context so Save never sends a stale vault-root.
+  // `[app]` is core's: keep the draft on the live value.
   useEffect(() => {
     if (!open) return;
     setDraft((current) => {
       if (!current) return current;
-      if (
-        current.app.vault_root_mode === settings.app.vault_root_mode &&
-        current.app.upriv_root_path === settings.app.upriv_root_path &&
-        current.app.last_opened_vault === settings.app.last_opened_vault
-      ) {
-        return current;
-      }
+      if (current.app.last_opened_vault === settings.app.last_opened_vault) return current;
       return { ...current, app: { ...settings.app } };
     });
-  }, [open, settings.app, settings.app.upriv_root_path, settings.app.vault_root_mode]);
-
-  // Keep draft.workspace aligned unless the user edited Workspace this session.
-  useEffect(() => {
-    if (!open) return;
-    if (workspaceTouchedRef.current) return;
-    setDraft((current) => {
-      if (!current) return current;
-      if (workspaceTablesEqual(current.workspace, settings.workspace)) return current;
-      return { ...current, workspace: { ...settings.workspace } };
-    });
-  }, [open, settings.workspace]);
+  }, [open, settings.app]);
 
   useEffect(() => {
     if (!open) {
@@ -162,9 +157,7 @@ export function AppSettingsModal({
     let cancelled = false;
     void (async () => {
       try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: settings.app.vault_root_mode,
-        });
+        const resolved = await vaultRootService.resolve();
         if (cancelled) return;
         setResolveFailure(null);
         if (resolved.status === "found") {
@@ -183,14 +176,14 @@ export function AppSettingsModal({
     return () => {
       cancelled = true;
     };
-  }, [open, settings.app.vault_root_mode, vaultRootService]);
+  }, [open, vaultRootService]);
 
   useEffect(() => {
     if (!open) {
       // A save in flight keeps running; its outcome comes back as a list toast.
       openedSessionRef.current = false;
-      workspaceTouchedRef.current = false;
       setDraft(null);
+      setBaseline(null);
       setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
@@ -225,9 +218,6 @@ export function AppSettingsModal({
 
   const patchDraft = useCallback(
     <S extends keyof AppSettingsConfig>(section: S, patch: Partial<AppSettingsConfig[S]>) => {
-      if (section === "workspace") {
-        workspaceTouchedRef.current = true;
-      }
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) =>
@@ -299,72 +289,53 @@ export function AppSettingsModal({
   };
 
   const formConfig = draft ?? settings;
-  const workspaceRootForValidation = vaultRootPathForWorkspaceValidation(
-    formConfig.app.vault_root_mode,
-    formConfig.app.upriv_root_path,
-    resolvedRootPath,
-  );
-  const workspaceSystem = currentWorkspaceSystem();
-  const workspacePathInvalid = Boolean(
-    validateWorkspaceTable(formConfig.workspace, workspaceRootForValidation),
-  );
-  /** Open vault + emptied draft must not wipe a configured path for this system. */
-  const workspaceClearWhileOpen =
-    hasOpenVault &&
-    !formConfig.workspace[workspaceSystem].path.trim() &&
-    Boolean(settings.workspace[workspaceSystem].path.trim());
+  const listBase = baseline ?? settings;
+  const hereId = here?.id ?? null;
+  // Save waits only when this draft leaves encrypted vaults with no folder here, so
+  // a switch another device turned on never holds an unrelated save.
+  const unlockedUnchosen =
+    encryptedFolderUnchosen(formConfig.unlocked_folders, null, here) &&
+    !encryptedFolderUnchosen(listBase.unlocked_folders, null, here);
+  const listsBlocked =
+    unlockedUnchosen ||
+    // The same rows the list marks: a row may not repeat Beside the data folder.
+    listDraftBlocks(
+      listBase.unlocked_folders.devices,
+      formConfig.unlocked_folders.devices,
+      APP_UNLOCKED_LIST,
+      hereId,
+      here ? appUnlockedFixedFolders(here.system, resolvedRootPath) : [],
+    ) ||
+    listDraftBlocks(listBase.backups.devices, formConfig.backups.devices, APP_BACKUP_LIST, hereId);
 
   const handleSaveClick = () => {
-    if (!isDirty || saveBusy || backupFolderBlocking) return;
-    if (workspaceClearWhileOpen) return;
-    const workspaceForCheck = workspaceTouchedRef.current
-      ? (draft ?? settings).workspace
-      : settings.workspace;
-    if (validateWorkspaceTable(workspaceForCheck, workspaceRootForValidation)) {
-      return;
-    }
+    if (!isDirty || saveBusy || listsBlocked) return;
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
 
   const commitSave = () => {
-    if (!isDirty || saveBusy || backupFolderBlocking) return;
-    if (workspaceClearWhileOpen) return;
-    const workspaceForSave = workspaceTouchedRef.current
-      ? (draft ?? settings).workspace
-      : { ...settings.workspace };
-    if (validateWorkspaceTable(workspaceForSave, workspaceRootForValidation)) {
-      return;
-    }
+    if (!isDirty || saveBusy || listsBlocked) return;
     if (commitSaveLock.current) return;
     const generation = ++saveBusyGen.current;
     commitSaveLock.current = true;
-    // Never persist draft vault-root wire fields — Data folder owns those mutations.
-    // If Workspace was not edited this session, prefer live Context so Save cannot wipe a newer path.
-    const normalized = normalizeAppSettings({
-      ...(draft ?? settings),
-      app: { ...settings.app },
-      workspace: workspaceForSave,
-    });
+    const normalized = normalizeAppSettings({ ...(draft ?? settings), app: { ...settings.app } });
+    // This device's unlocked folders keep their rows while a vault is open (`no_open_session`).
+    const lists = appListChanges(listBase, normalized, hereId, { unlockedHere: hasOpenVault });
     const showHidden = draftShowHiddenVaultsSession;
     setSaveBusy(true);
     setPendingSave({ config: normalized, showHidden, failure: null });
     let failure: string | null = null;
     void (async () => {
       try {
-        if (!appSettingsEqual(normalized, settings)) {
-          await replaceSettings(normalized);
-          const backupSystem = backupFolderSystem(currentWorkspaceSystem());
-          if (backupSystem) {
-            const vault = vaultBackupFolders()[backupSystem];
-            const leftBehind = backupFolderLeftBehind(
-              { app: settings.backups[backupSystem], vault },
-              { app: normalized.backups[backupSystem], vault },
-            );
-            if (leftBehind) onNotice?.(t("toast.backup_folder_changed"));
-          }
+        if (!appSettingsEqual(normalized, listBase)) {
+          const saved = await replaceSettings(normalized, { lists });
+          reportListsSaved(saved);
           if (generation !== saveBusyGen.current) return;
-          if (openRef.current) setDraft(normalized);
+          if (openRef.current) {
+            setDraft(normalized);
+            setBaseline(normalized);
+          }
         }
         if (generation !== saveBusyGen.current) return;
         setShowHiddenVaultsSession(showHidden);
@@ -402,13 +373,21 @@ export function AppSettingsModal({
     })();
   };
 
-  const saveBlocked =
-    !isDirty ||
-    saveBusy ||
-    saveConfirmOpen ||
-    workspacePathInvalid ||
-    workspaceClearWhileOpen ||
-    backupFolderBlocking;
+  /** What a save left beyond `settings.toml`: folders that stayed, vaults that kept a device name. */
+  function reportListsSaved(saved: ListsSaved) {
+    for (const folder of saved.keptFolders) {
+      onNotice?.(t("folder_list.toast.folder_kept", { path: folder }));
+    }
+    if (saved.unchangedVaults.length > 0) {
+      onNotice?.(
+        t("folder_list.toast.vaults_unchanged", {
+          names: saved.unchangedVaults.map(vaultName).join(", "),
+        }),
+      );
+    }
+  }
+
+  const saveBlocked = !isDirty || saveBusy || saveConfirmOpen || listsBlocked;
 
   if (!open || !formConfig) return null;
 
@@ -489,22 +468,31 @@ export function AppSettingsModal({
             key={sectionId}
             title={t(`modal.app_settings.section.${sectionId}`)}
           >
-            {renderAppSettingsSection(
-              sectionId,
-              formConfig,
-              patchDraft,
-              draftShowHiddenVaultsSession,
-              setDraftHiddenSession,
-              workspaceRootForValidation,
-              hasOpenVault,
-              settings.backups,
-              setBackupFolderBlocking,
-            )}
+            {renderAppSettingsSection(sectionId, formConfig, patchDraft, {
+              showHiddenVaultsSession: draftShowHiddenVaultsSession,
+              onShowHiddenVaultsSessionChange: setDraftHiddenSession,
+              saved: listBase,
+              here,
+              vaultRootPath: resolvedRootPath,
+              unlockedLockedHint: hasOpenVault
+                ? t("modal.app_settings.field.unlocked_folders.locked")
+                : null,
+            })}
           </VaultSettingsSection>
         ))}
       </div>
     </Modal>
   );
+}
+
+interface SectionContext {
+  showHiddenVaultsSession: boolean;
+  onShowHiddenVaultsSessionChange: (value: boolean) => void;
+  /** The settings the lists' change is sent from. */
+  saved: AppSettingsConfig;
+  here: HereDevice | null;
+  vaultRootPath: string | null;
+  unlockedLockedHint: string | null;
 }
 
 function renderAppSettingsSection(
@@ -514,12 +502,7 @@ function renderAppSettingsSection(
     section: S,
     patch: Partial<AppSettingsConfig[S]>,
   ) => void,
-  showHiddenVaultsSession: boolean,
-  onShowHiddenVaultsSessionChange: (value: boolean) => void,
-  workspaceRootForValidation: string | null,
-  hasOpenVault: boolean,
-  savedBackups: AppSettingsConfig["backups"],
-  onBackupFolderBlocking: (blocking: boolean) => void,
+  context: SectionContext,
 ) {
   switch (sectionId) {
     case "language":
@@ -536,23 +519,24 @@ function renderAppSettingsSection(
           onChange={(patch) => patchDraft("ui", patch)}
         />
       );
-    case "workspace":
+    case "unlocked_folders":
       return (
-        <AppSettingsWorkspaceSection
-          config={draft.workspace}
-          vaultRootPath={workspaceRootForValidation}
-          clearDisabled={hasOpenVault}
-          onChange={(patch) => patchDraft("workspace", patch)}
+        <AppSettingsUnlockedFoldersSection
+          config={draft.unlocked_folders}
+          saved={context.saved.unlocked_folders}
+          here={context.here}
+          vaultRootPath={context.vaultRootPath}
+          lockedHint={context.unlockedLockedHint}
+          onChange={(patch) => patchDraft("unlocked_folders", patch)}
         />
       );
     case "backups":
       return (
         <AppSettingsBackupsSection
           config={draft.backups}
-          saved={savedBackups}
-          vaultRootPath={workspaceRootForValidation}
+          saved={context.saved.backups}
+          here={context.here}
           onChange={(patch) => patchDraft("backups", patch)}
-          onBlockingChange={onBackupFolderBlocking}
         />
       );
     case "vault_list":
@@ -583,8 +567,8 @@ function renderAppSettingsSection(
           onAlwaysShowHiddenVaultsChange={(always_show_hidden_vaults) =>
             patchDraft("ui", { always_show_hidden_vaults })
           }
-          showHiddenVaultsSession={showHiddenVaultsSession}
-          onShowHiddenVaultsSessionChange={onShowHiddenVaultsSessionChange}
+          showHiddenVaultsSession={context.showHiddenVaultsSession}
+          onShowHiddenVaultsSessionChange={context.onShowHiddenVaultsSessionChange}
         />
       );
     default:

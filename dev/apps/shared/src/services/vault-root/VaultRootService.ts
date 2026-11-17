@@ -1,98 +1,72 @@
+import type { DataFolderChoice, DataFolderStatus, ListChanges } from "../../domain/folder-lists";
 import type {
+  DataFolderApplied,
+  DataFolderListView,
+  DataFolderSearchResult,
   IncompleteReplacePolicy,
-  DefaultRootStatusResult,
-  VaultRootAliasInfo,
   VaultRootBootstrapPrefs,
-  VaultRootInspectResult,
-  VaultRootPrivateRoot,
   VaultRootResolveResult,
 } from "../../domain/vault-root";
-import type { VaultRootMode } from "../../domain/app-settings";
+
+/** What `apply` sends. */
+export interface DataFolderApplyRequest {
+  /** What the person changed in the list. Empty uses the selection as it is. */
+  changes: ListChanges<DataFolderChoice>;
+  /** Start from an empty list in place of one that cannot be read. */
+  newList?: boolean;
+  /** How to replace a broken `.upriv` in the folder the list selects. */
+  replacePolicy?: IncompleteReplacePolicy;
+  /** What a new data folder starts with. A folder that opens keeps its own. */
+  bootstrap: VaultRootBootstrapPrefs;
+  /**
+   * A phone: the copy of the private app-folder `.upriv` into the folder the
+   * list selects runs as this core job. It has no deadline; Stop leaves the
+   * original where it was (`job_cancelled`). Desktop leaves it out.
+   */
+  job?: string;
+}
 
 /**
- * Locate / create the Upriv vault-root (folder that contains `.upriv/`).
- * Desktop → daemon RPC; browser → mock.
+ * The data folder: which one this device uses (`resolve`), its list, and the
+ * apply that saves the list and opens the folder it selects. Desktop → daemon
+ * RPC; phone → in-process core, with the storage-access trees mounted first.
  *
- * Disk-mutating methods (`setupDefaultRoot`, `setupAtPath`) should only be called from
- * `VaultRootDataFolderModal`, `VaultRootSetupModal`, `VaultRootRepairModal`, or
- * `VaultRootAliasRecoveryModal` — not from arbitrary UI or `AppSettingsContext` — to
- * avoid duplicate side effects. After setup*, Context only reloads via
- * `vaultRootAlreadyApplied`.
- * Alias sync on settings save uses `app_settings_save` (`syncAlias`); there is no
- * separate rewrite/deactivate RPC on this service.
- *
- * **Bootstrap prefs bag:** pre-root UI prefs applied only when creating a new
- * `.upriv/` (absent init or incomplete→replace). Today the only such pref is
- * `locale` (Gate selector), but future entries (theme, high-contrast, etc.)
- * extend the same [`VaultRootBootstrapPrefs`] bag without renaming these
- * service methods again. Selecting an already-valid vault-root ignores
- * `bootstrap` entirely — the daemon never rewrites that folder's
- * `[ui]` / `settings.toml`.
+ * `apply` is the only call that changes the data folder in use. Setup, the
+ * Gate's screens, and the Data folder window call it; the settings context
+ * then reloads.
  */
 export interface VaultRootService {
-  /** Resolve using current app settings (`vault_root_mode` / custom path) + env/CLI when wired. */
   resolve(options?: {
-    vaultRootMode?: VaultRootMode;
     explicitPath?: string | null;
-    /** Debug-only; honored by daemon only when `UPRIV_DEV` is set. */
+    /** Debug-only; honored by the daemon only when `UPRIV_DEV` is set. */
     binaryDir?: string | null;
   }): Promise<VaultRootResolveResult>;
 
   /**
-   * Create default `.upriv/` at the default root (default_root anchor), deactivate `.upriv-data-folder`
-   * if it exists (path kept), and switch to default-root mode.
-   * When replacing incomplete: `delete` removes `.upriv/`; `rename` keeps it as
-   * `.upriv-invalidated-<timestamp>`.
-   * `bootstrap` seeds the new root's `settings.toml` (today `[ui].locale`).
-   * Required (non-empty `bootstrap.locale`) when the target does not yet
-   * contain a Valid `.upriv/`.
+   * Every device's group of the data folder list, and where Default is.
+   * `newList` leaves the file unread and answers an empty list: Start a new
+   * list, when the file cannot be read.
    */
-  setupDefaultRoot(options?: {
-    replaceIncomplete?: boolean;
-    replacePolicy?: IncompleteReplacePolicy;
-    bootstrap?: VaultRootBootstrapPrefs | null;
-  }): Promise<{ rootPath: string }>;
+  list(options?: { newList?: boolean }): Promise<DataFolderListView>;
+
+  /** The status of a folder of the list: `null` is Default. Each its own call and limit. */
+  status(path: string | null): Promise<DataFolderStatus>;
+
+  apply(request: DataFolderApplyRequest): Promise<DataFolderApplied>;
 
   /**
-   * Use `path` as vault-root (initialize if missing marker), write **active**
-   * `.upriv-data-folder` alias, and switch to custom-path mode (alias wins over local `.upriv`).
-   * `path` must be absolute.
-   * When replacing incomplete: same policies as `setupDefaultRoot`.
-   * `bootstrap` seeds the new root's `settings.toml` on create — see
-   * `setupDefaultRoot` for the same contract.
-   * `job`: on a phone, the copy of the private app-folder `.upriv` into the
-   * picked folder runs as this core job. It has no deadline, and Stop leaves
-   * the original where it was (`job_cancelled`). Desktop ignores it.
+   * After the selected folder did not answer at launch: look for one that
+   * does, as the job `job`. One that answers becomes the selection.
    */
-  setupAtPath(
-    path: string,
-    options?: {
-      replaceIncomplete?: boolean;
-      replacePolicy?: IncompleteReplacePolicy;
-      bootstrap?: VaultRootBootstrapPrefs | null;
-      job?: string;
-    },
-  ): Promise<{ rootPath: string; aliasPath: string; privateRoot?: VaultRootPrivateRoot }>;
+  search(job: string): Promise<DataFolderSearchResult>;
 
-  /** Read remembered `.upriv-data-folder` path (active or inactive). Missing file → `null`. */
-  readAlias(): Promise<VaultRootAliasInfo | null>;
-
-  /** Inspect `.upriv/` at the default-root anchor without creating or repairing it. */
-  defaultRootStatus(): Promise<DefaultRootStatusResult>;
-
-  /** Inspect `.upriv/` at an absolute path without creating or repairing it. */
-  inspectAtPath(path: string): Promise<VaultRootInspectResult>;
-
-  /**
-   * Suggested absolute path for the custom_root folder picker (`~/Documents/Upriv`).
-   * Aligns with Rust `suggested_vault_root` / daemon RPC.
-   */
+  /** Where Add folder's picker starts on desktop (`~/Documents/Upriv`). */
   suggestedCustomRootPath(): Promise<string>;
 
   /**
-   * Native folder picker when available; otherwise `null` (UI falls back to text path).
+   * Native folder picker when available; otherwise `null`.
    * `defaultPath` pre-selects that folder in the dialog when supported.
-   * `title` is best-effort: desktop usually honors it; Android SAF may ignore it.
+   * `title` is best-effort: desktop usually honors it; Android may ignore it.
    */
   pickFolder(defaultPath?: string | null, title?: string | null): Promise<string | null>;
 }

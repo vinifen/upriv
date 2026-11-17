@@ -6,6 +6,13 @@
  */
 export const CORE_RPC_COMMANDS = {
   APP_VERSION: "app_version",
+  /** This device's ID when it has one, its host or device name, and its system. */
+  DEVICE_INFO: "device_info",
+  /**
+   * The status of one row of a folder list: whether it answers and takes a
+   * write, then what it holds. Each row is its own call, with its own limit.
+   */
+  FOLDER_STATUS: "folder_status",
   APP_SETTINGS_GET: "app_settings_get",
   APP_SETTINGS_SAVE: "app_settings_save",
   LOG_LIST: "log_list",
@@ -16,19 +23,30 @@ export const CORE_RPC_COMMANDS = {
    * never send vault id, display name, paths, or stack traces.
    */
   LOG_EVENT: "log_event",
-  VAULT_ROOT_RESOLVE: "vault_root_resolve",
-  VAULT_ROOT_SETUP_DEFAULT_ROOT: "vault_root_setup_default_root",
-  VAULT_ROOT_SETUP_PATH: "vault_root_setup_path",
   /**
-   * Deactivate `.upriv-data-folder` aliases only — does not create or open a vault-root.
-   * Used by Android SAF custom-root setup so internal `filesDir` does not gain a
-   * second `.upriv/` from `vault_root_setup_default_root`.
+   * The data folder this device uses: `found`, `needs_setup` (the first run),
+   * or `selected_failed` (the selected choice did not answer, at launch or
+   * once the one in use was lost; `data_folder_search` looks for one that
+   * does). Finding the one in use lost ends the vaults still open there,
+   * and both answers name them (`ended`).
    */
-  VAULT_ROOT_DEACTIVATE_ALIAS: "vault_root_deactivate_alias",
-  VAULT_ROOT_READ_ALIAS: "vault_root_read_alias",
-  VAULT_ROOT_DEFAULT_ROOT_STATUS: "vault_root_default_root_status",
-  VAULT_ROOT_INSPECT_PATH: "vault_root_inspect_path",
+  VAULT_ROOT_RESOLVE: "vault_root_resolve",
+  /** The starting folder of Add folder's picker on desktop. */
   VAULT_ROOT_SUGGESTED_CUSTOM_PATH: "vault_root_suggested_custom_path",
+  /** The data folder list: every device's group, and where Default is. */
+  DATA_FOLDER_LIST: "data_folder_list",
+  /**
+   * Save the data folder list and open the folder it selects, making a data
+   * folder there when it has none. After the data folder in use was lost,
+   * it ends any vault still open there first; then it needs every vault idle.
+   */
+  DATA_FOLDER_APPLY: "data_folder_apply",
+  /**
+   * A job: look for a data folder that answers after the selected one did
+   * not (at launch, or once the one in use was lost). One that answers
+   * becomes the selection, once no close or open of the lost one runs.
+   */
+  DATA_FOLDER_SEARCH: "data_folder_search",
   VAULT_GROUP_LIST: "vault_group_list",
   VAULT_GROUP_CREATE: "vault_group_create",
   VAULT_GROUP_UPDATE: "vault_group_update",
@@ -40,8 +58,6 @@ export const CORE_RPC_COMMANDS = {
   VAULT_LIST: "vault_list",
   VAULT_CREATE: "vault_create",
   VAULT_OPEN: "vault_open",
-  /** Fill a plaintext folder after unlock, using the path the user confirmed. */
-  VAULT_PLAIN_CONFIRM: "vault_plain_confirm",
   /** The folder an unlock would write, and what kind of place it is. */
   VAULT_PLAIN_DESTINATION: "vault_plain_destination",
   /** Leftover plaintext folder for recovery, or null. */
@@ -108,15 +124,26 @@ export const CORE_RPC_COMMANDS = {
   VAULT_FS_RENAME: "vault_fs_rename",
   VAULT_FS_MOVE: "vault_fs_move",
   /**
-   * Absolute OS path of a logical item on the live FUSE/WinFsp mount.
-   * Missing mount (mobile, WinFsp not installed, FUSE failure) → `vault_mount_failed`.
+   * Where a logical item is in the OS: in a plain-text vault's folder or on
+   * an encrypted vault's mounted unlocked folder. While the attach runs it
+   * answers `attaching`; with no folder, why there is none.
    */
   VAULT_FS_OS_PATH: "vault_fs_os_path",
+  /**
+   * Mount an open encrypted vault's unlocked folder, walking its chain. A job:
+   * the desktop calls it after each encrypted open, a close stops it.
+   */
+  VAULT_UNLOCKED_FOLDER_ATTACH: "vault_unlocked_folder_attach",
+  /** A vault's unlocked folder on this device, for its Info window. */
+  VAULT_UNLOCKED_FOLDER_INFO: "vault_unlocked_folder_info",
+  /** Forget a plain-text folder on record; its files stay where they are. */
+  PLAIN_RECORD_FORGET: "plain_record_forget",
+  /** Every backup, one section per folder, each folder checked with its own limit. */
   BACKUP_LIST: "backup_list",
-  /** What a folder typed into the settings can do right now. */
-  BACKUP_FOLDER_CHECK: "backup_folder_check",
-  /** Use a vault's chosen folder again after its folder there went away. */
-  BACKUP_FOLDER_REUSE: "backup_folder_reuse",
+  /** Name a backup, which pins it, or take its name away. */
+  BACKUP_RENAME: "backup_rename",
+  /** Stop listing a folder of backups that cannot be reached; its files stay. */
+  BACKUP_FOLDER_FORGET: "backup_folder_forget",
   BACKUP_DELETE: "backup_delete",
   BACKUP_PROMOTE: "backup_promote",
   /** Zip the closed vault straight into `saves/` where its backups go. */
@@ -146,12 +173,12 @@ export const CORE_RPC_COMMANDS = {
  */
 export const MOBILE_ONLY_RPC_COMMANDS = {
   /**
-   * Pure `settings.toml` → `AppSettingsConfig` parse (no disk access). Kotlin reads
-   * `.upriv/settings.toml` from the storage-access tree; Rust owns the TOML → wire mapping.
+   * The phone's identity (`ANDROID_ID` and the device name). Kotlin sends it
+   * once when the module starts, before JavaScript can call anything else.
    */
-  APP_SETTINGS_PARSE_TOML: "app_settings_parse_toml",
-  /** Write `android_custom_folder=` on `.upriv-data-folder` — the last Android Custom folder. Does not switch mode. */
-  VAULT_ROOT_REMEMBER_CUSTOM: "vault_root_remember_custom",
+  DEVICE_IDENTITY_SET: "device_identity_set",
+  /** The storage-access trees this phone's rows name, for Kotlin to mount. */
+  DEVICE_TREES: "device_trees",
   /** Unlock a just-created vault for streaming. Does not mount a file manager. */
   VAULT_INGEST_OPEN: "vault_ingest_open",
   /** One folder inside an import session, including its parents. */

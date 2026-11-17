@@ -20,7 +20,7 @@ use super::seven_zip_pack::mem_available_bytes;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{with_open_session, DeferredWrites, Job, JobKind, OpenSession};
+use crate::session::{with_open_session, AttachState, DeferredWrites, Job, JobKind, OpenSession};
 use crate::store::{
     blobs_need_pack, build_file_tree, child_logical_path, delete_empty_directory, delete_held,
     delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path,
@@ -2001,47 +2001,6 @@ pub(super) fn read_store_range_keeping(
     Ok(bytes)
 }
 
-/// An internal store file (the plaintext policy). `None` when it is absent.
-pub(super) fn read_internal(session: &OpenSession, path: &str) -> Result<Option<Vec<u8>>> {
-    if session.index.find(path).is_none() {
-        return Ok(None);
-    }
-    read_logical_file(
-        store_dir(session),
-        &session.header,
-        &session.content_key,
-        &session.index,
-        path,
-    )
-    .map(Some)
-}
-
-/// Replace an internal store file and seal the index.
-pub(super) fn write_internal(session: &mut OpenSession, path: &str, bytes: &[u8]) -> Result<()> {
-    session.dirty = true;
-    let before = session.index.clone();
-    let (retired, mutation) = write_logical_file(
-        store_dir(session),
-        &session.header,
-        &session.content_key,
-        &mut session.index,
-        path,
-        bytes,
-    )?;
-    commit_mutation(session, before, mutation, retired)
-}
-
-/// Remove an internal store file when it exists, and seal the index.
-pub(super) fn remove_internal(session: &mut OpenSession, path: &str) -> Result<()> {
-    if session.index.find(path).is_none() {
-        return Ok(());
-    }
-    session.dirty = true;
-    let before = session.index.clone();
-    let retired = delete_logical_path(&mut session.index, path)?;
-    commit_then_unlink(session, before, retired)
-}
-
 /// Join a validated logical path (`notes/a.txt`, or `""` for the mount root)
 /// onto an OS mount point. Rejects `.` / `..` / empty components.
 pub(crate) fn join_logical_under_mount(mount: &Path, logical: &str) -> Result<PathBuf> {
@@ -2173,26 +2132,34 @@ pub fn fs_held_delete(root: &VaultRoot, vault_id: &str, names: &[String]) -> Res
     })
 }
 
-/// Absolute OS path of a logical item: in the plaintext folder of an open
-/// `upriv_plain` vault, or on the live FUSE/WinFsp mount.
-///
-/// Does not create files. Missing mount (mobile, WinFsp not installed, FUSE failure)
-/// returns [`UprivError::VaultMountFailed`] — never a plaintext extract.
-pub fn fs_os_path(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<PathBuf> {
+/// Where a logical item is in the OS, for Show in unlocked folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OsFolder {
+    /// In the plaintext folder of an open `upriv_plain` vault, or on the
+    /// vault's mounted unlocked folder.
+    Path(PathBuf),
+    /// The unlocked folder attach still runs.
+    Attaching,
+    /// The vault has no unlocked folder now: the UI offers none.
+    None,
+}
+
+/// [`OsFolder`] of a logical item of an open vault. Creates nothing, and
+/// never extracts plaintext.
+pub fn fs_os_path(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<OsFolder> {
     let dir = require_open(root, vault_id)?;
     let logical = logical(ui_path)?;
     with_open_session(&dir, |session| {
         if let Some(folder) = session.plain.as_ref().map(|plain| plain.folder()) {
-            return join_logical_under_mount(folder, &logical);
+            return join_logical_under_mount(folder, &logical).map(OsFolder::Path);
         }
-        let Some(mount) = session.mount.as_ref() else {
-            let detail = session
-                .mount_failure
-                .clone()
-                .unwrap_or_else(|| "OS mount is not available; use the in-app file manager".into());
-            return Err(UprivError::VaultMountFailed(detail));
-        };
-        join_logical_under_mount(mount.mount_point(), &logical)
+        if let Some(mount) = session.mount.as_ref() {
+            return join_logical_under_mount(mount.mount_point(), &logical).map(OsFolder::Path);
+        }
+        Ok(match &session.attach {
+            AttachState::Running(_) => OsFolder::Attaching,
+            AttachState::Idle => OsFolder::None,
+        })
     })
 }
 
@@ -3601,22 +3568,20 @@ mode = "encrypted_dir"
         assert!(matches!(closed, UprivError::VaultNotOpen(_)));
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        let result = fs_os_path(&root, "notes", "/hello.txt");
-        match crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
-            Ok(session.mount.is_some())
-        }) {
-            Ok(true) => {
-                let path = result.expect("mounted vault should resolve an OS path");
-                assert!(path.ends_with("hello.txt"));
-            }
-            Ok(false) => {
-                assert!(matches!(
-                    result.unwrap_err(),
-                    UprivError::VaultMountFailed(_)
-                ));
-            }
-            Err(error) => panic!("{error}"),
-        }
+        // No attach was asked: the open itself never mounts.
+        assert_eq!(
+            fs_os_path(&root, "notes", "/hello.txt").unwrap(),
+            OsFolder::None
+        );
+        crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            session.attach = AttachState::Running(Default::default());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            fs_os_path(&root, "notes", "/hello.txt").unwrap(),
+            OsFolder::Attaching
+        );
         close_vault(&root, "notes").unwrap();
     }
 

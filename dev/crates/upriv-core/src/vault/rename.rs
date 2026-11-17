@@ -7,15 +7,12 @@ use std::path::{Path, PathBuf};
 
 use crate::config::vault_config::normalize_and_validate_display_name;
 use crate::config::{
-    known_vault_ids, load_app_settings_at, load_vault_config_raw, remap_grouped_vault_id,
-    save_app_settings, save_vault_config, VaultConfig,
+    known_vault_ids, load_app_settings_at, load_vault_config, remap_grouped_vault_id,
+    save_vault_config, update_app_settings, VaultConfig,
 };
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
-use crate::paths::{
-    display_name_to_vault_id, resolve_vault_mount_point, resolved_workspace_parent, VaultRoot,
-    WorkspaceSystem,
-};
+use crate::paths::{display_name_to_vault_id, VaultRoot};
 use crate::runtime_state::refuse_if_held_elsewhere;
 use crate::session::{
     is_vault_backup_export_at, is_vault_closing_at, is_vault_open_at, is_vault_preparing_at,
@@ -122,70 +119,10 @@ fn patch_last_opened(root: &VaultRoot, old_id: &str, new_id: &str) -> Result<boo
     if loaded.settings.app.last_opened_vault.trim() != old_id {
         return Ok(false);
     }
-    let mut settings = loaded.settings;
-    settings.app.last_opened_vault = new_id.to_string();
-    save_app_settings(root.root(), &settings)?;
+    update_app_settings(root.root(), |settings| {
+        settings.app.last_opened_vault = new_id.to_string();
+    })?;
     Ok(true)
-}
-
-/// Rename leftover `{parent}/{display_name}` when the vault is closed and dest is free.
-fn migrate_closed_mount_leaf(
-    root: &VaultRoot,
-    config: &VaultConfig,
-    old_display: &str,
-    new_display: &str,
-    previous_id: &str,
-    next_id: &str,
-) -> Result<Option<(PathBuf, PathBuf)>> {
-    if old_display == new_display {
-        return Ok(None);
-    }
-    let loaded = match load_app_settings_at(root.root()) {
-        Ok(loaded) => loaded,
-        Err(UprivError::VaultRootNotFound(_)) | Err(UprivError::VaultRootIncomplete { .. }) => {
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
-    let system = WorkspaceSystem::current();
-    let own_folder = !config.mount.row(system).path.trim().is_empty();
-    let parent = resolved_workspace_parent(
-        &loaded.settings.workspace,
-        &config.mount,
-        system,
-        root.root(),
-    );
-    let Some(old_mount) = resolve_vault_mount_point(&parent, old_display, own_folder) else {
-        return Ok(None);
-    };
-    let Some(new_mount) = resolve_vault_mount_point(&parent, new_display, own_folder) else {
-        return Ok(None);
-    };
-    if !old_mount.host_is_dir() {
-        return Ok(None);
-    }
-    let skip = if new_mount.host_exists() {
-        Some("dest_exists")
-    } else if crate::host_fs::read_dir(&old_mount)?.next().is_some() {
-        // Files there are not this vault's to move.
-        Some("not_empty")
-    } else {
-        None
-    };
-    if let Some(reason) = skip {
-        log_event(
-            LogLevel::Warn,
-            "vault_rename_mount_skipped",
-            &[
-                ("previous_id", previous_id),
-                ("id", next_id),
-                ("reason", reason),
-            ],
-        );
-        return Ok(None);
-    }
-    crate::host_fs::rename(&old_mount, &new_mount)?;
-    Ok(Some((old_mount, new_mount)))
 }
 
 fn rollback_error(old_dir: &Path, parts: Vec<String>) -> UprivError {
@@ -205,7 +142,6 @@ struct RenameRollback<'a> {
     prior_persistence: &'a Option<VaultPersistence>,
     groups_remapped: bool,
     last_opened_patched: bool,
-    mount_moved: &'a Option<(PathBuf, PathBuf)>,
 }
 
 /// Restore prior identity files after a failed migration. Errors are visible, not swallowed.
@@ -220,7 +156,6 @@ fn rollback_migration(ctx: RenameRollback<'_>) -> Result<()> {
         prior_persistence,
         groups_remapped,
         last_opened_patched,
-        mount_moved,
     } = ctx;
     let mut errors: Vec<String> = Vec::new();
     if last_opened_patched {
@@ -231,13 +166,6 @@ fn rollback_migration(ctx: RenameRollback<'_>) -> Result<()> {
     if groups_remapped {
         if let Err(error) = remap_grouped_vault_id(root, new_id, old_id) {
             errors.push(format!("groups: {error}"));
-        }
-    }
-    if let Some((old_mount, new_mount)) = mount_moved {
-        if new_mount.host_exists() && !old_mount.host_exists() {
-            if let Err(error) = crate::host_fs::rename(new_mount, old_mount) {
-                errors.push(format!("mount: {error}"));
-            }
         }
     }
     if new_dir.host_is_dir() {
@@ -302,7 +230,7 @@ pub fn rename_vault(
 
         with_vault_dir_locks(&old_dir, &new_dir, || {
             refuse_if_busy(&old_dir)?;
-            let prior_config = load_vault_config_raw(&old_dir)?;
+            let prior_config = load_vault_config(&old_dir)?;
             if prior_config.vault.id.trim() != old_id {
                 return Err(UprivError::VaultConfigInvalid {
                     path: crate::config::vault_config_path(&old_dir),
@@ -330,7 +258,6 @@ pub fn rename_vault(
 
             let mut groups_remapped = false;
             let mut last_opened_patched = false;
-            let mut mount_moved = None;
             let migrated: Result<()> = (|| {
                 save_vault_config(&new_dir, &next_config)?;
                 if let Some(mut persistence) = prior_persistence.clone() {
@@ -346,14 +273,6 @@ pub fn rename_vault(
                 groups_remapped = true;
                 maybe_fail("after_groups")?;
                 last_opened_patched = patch_last_opened(root, old_id, &new_id)?;
-                mount_moved = migrate_closed_mount_leaf(
-                    root,
-                    &next_config,
-                    &prior_display,
-                    &display_name,
-                    old_id,
-                    &new_id,
-                )?;
                 Ok(())
             })();
 
@@ -368,7 +287,6 @@ pub fn rename_vault(
                     prior_persistence: &prior_persistence,
                     groups_remapped,
                     last_opened_patched,
-                    mount_moved: &mount_moved,
                 }) {
                     Ok(()) => Err(error),
                     Err(rollback) => Err(combine_migrate_and_rollback(&old_dir, error, rollback)),
@@ -396,7 +314,7 @@ fn rename_display_name_only(
 ) -> Result<VaultRenameResult> {
     with_vault_dir_lock(old_dir, || {
         refuse_if_busy(old_dir)?;
-        let mut config = load_vault_config_raw(old_dir)?;
+        let mut config = load_vault_config(old_dir)?;
         if config.vault.id.trim() != old_id {
             return Err(UprivError::VaultConfigInvalid {
                 path: crate::config::vault_config_path(old_dir),
@@ -414,8 +332,6 @@ fn rename_display_name_only(
                 id_changed: false,
             });
         }
-        let prior_config = config.clone();
-        let prior_persistence = load_vault_persistence(old_dir)?;
         let prior_display = config.vault.display_name.clone();
         super::plain::ensure_no_leftover(root, old_id)?;
         config.vault.display_name = display_name.to_string();
@@ -423,27 +339,6 @@ fn rename_display_name_only(
         if let Some(mut persistence) = load_vault_persistence(old_dir)? {
             persistence.display_name = display_name.to_string();
             save_vault_persistence(old_dir, &persistence)?;
-        }
-        if let Err(error) =
-            migrate_closed_mount_leaf(root, &config, &prior_display, display_name, old_id, old_id)
-        {
-            let mut errors: Vec<String> = Vec::new();
-            if let Err(restore) = save_vault_config(old_dir, &prior_config) {
-                errors.push(format!("config: {restore}"));
-            }
-            if let Some(persistence) = prior_persistence {
-                if let Err(restore) = save_vault_persistence(old_dir, &persistence) {
-                    errors.push(format!("persistence: {restore}"));
-                }
-            }
-            if errors.is_empty() {
-                return Err(error);
-            }
-            return Err(combine_migrate_and_rollback(
-                old_dir,
-                error,
-                rollback_error(old_dir, errors),
-            ));
         }
         log_vault_renamed(old_id, old_id, &prior_display, display_name);
         Ok(VaultRenameResult {
@@ -458,7 +353,7 @@ fn rename_display_name_only(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{create_vault_group_with_sort, load_vault_groups, save_app_settings};
+    use crate::config::{create_vault_group_with_sort, load_vault_groups};
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::session::PreparingGuard;
@@ -487,7 +382,7 @@ mode = "encrypted_dir"
         assert!(!result.id_changed);
         assert_eq!(result.id, "notes");
         assert_eq!(result.display_name, "NOTES");
-        let cfg = load_vault_config_raw(root.vault_dir("notes").unwrap()).unwrap();
+        let cfg = load_vault_config(root.vault_dir("notes").unwrap()).unwrap();
         assert_eq!(cfg.vault.display_name, "NOTES");
         assert_eq!(cfg.vault.id, "notes");
     }
@@ -528,7 +423,7 @@ mode = "encrypted_dir"
         assert_eq!(result.id, "work-docs");
         assert!(!root.vault_dir("notes").unwrap().host_exists());
         assert!(root.vault_dir("work-docs").unwrap().host_is_dir());
-        let cfg = load_vault_config_raw(root.vault_dir("work-docs").unwrap()).unwrap();
+        let cfg = load_vault_config(root.vault_dir("work-docs").unwrap()).unwrap();
         assert_eq!(cfg.vault.id, "work-docs");
         assert_eq!(cfg.vault.display_name, "Work Docs");
 
@@ -544,7 +439,7 @@ mode = "encrypted_dir"
         let result = rename_vault(&root, "notes", "Work    Docs").expect("rename");
         assert_eq!(result.display_name, "Work Docs");
         assert_eq!(result.id, "work-docs");
-        let cfg = load_vault_config_raw(root.vault_dir("work-docs").unwrap()).unwrap();
+        let cfg = load_vault_config(root.vault_dir("work-docs").unwrap()).unwrap();
         assert_eq!(cfg.vault.display_name, "Work Docs");
     }
 
@@ -630,7 +525,7 @@ mode = "encrypted_dir"
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         assert!(root.vault_dir("notes").unwrap().host_is_dir());
         assert!(!root.vault_dir("work-docs").unwrap().host_exists());
-        let cfg = load_vault_config_raw(root.vault_dir("notes").unwrap()).unwrap();
+        let cfg = load_vault_config(root.vault_dir("notes").unwrap()).unwrap();
         assert_eq!(cfg.vault.id, "notes");
         assert_eq!(cfg.vault.display_name, "Notes");
         let known = known_vault_ids(&root).unwrap();
@@ -640,29 +535,11 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn rename_moves_leftover_closed_mount_leaf() {
-        let (tmp, root) = vault_root_with(&[VaultSpec::encrypted("notes", "Notes", 1)]);
-        let chosen = tmp.path().join("chosen");
-        let workspace = chosen.join("workspace");
-        crate::host_fs::create_dir_all(workspace.join("Notes")).unwrap();
-        let mut loaded = load_app_settings_at(root.root()).expect("settings");
-        let system = crate::paths::WorkspaceSystem::current();
-        loaded.settings.workspace.row_mut(system).place = crate::paths::WorkspacePlace::Custom;
-        loaded.settings.workspace.row_mut(system).path = chosen.to_string_lossy().into();
-        loaded.settings.workspace.file_manager_folder = true;
-        save_app_settings(root.root(), &loaded.settings).expect("save workspace");
-
-        rename_vault(&root, "notes", "Work Docs").expect("rename");
-        assert!(!workspace.join("Notes").host_exists());
-        assert!(workspace.join("Work Docs").host_is_dir());
-    }
-
-    #[test]
     fn rollback_restores_config_id_match_after_groups_failure_simulation() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("notes", "Notes", 1)]);
         let old_dir = root.vault_dir("notes").unwrap();
         let new_dir = root.vault_dir("work-docs").unwrap();
-        let prior = load_vault_config_raw(&old_dir).unwrap();
+        let prior = load_vault_config(&old_dir).unwrap();
         crate::host_fs::rename(&old_dir, &new_dir).unwrap();
         let mut broken = prior.clone();
         broken.vault.id = "work-docs".into();
@@ -679,13 +556,12 @@ mode = "encrypted_dir"
             prior_persistence: &None,
             groups_remapped: false,
             last_opened_patched: false,
-            mount_moved: &None,
         })
         .expect("rollback");
 
         assert!(old_dir.host_is_dir());
         assert!(!new_dir.host_exists());
-        let restored = load_vault_config_raw(&old_dir).unwrap();
+        let restored = load_vault_config(&old_dir).unwrap();
         assert_eq!(restored.vault.id, "notes");
         assert_eq!(restored.vault.display_name, "Notes");
     }

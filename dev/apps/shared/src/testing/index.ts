@@ -1,5 +1,6 @@
 export { mockVaultExportBytes } from "./vaultExport";
 export { cloneJson } from "./cloneJson";
+export { applyMockListChanges } from "./folderLists";
 export { getMockFileContent, getMockVaultFileTree } from "./fileTree";
 export {
   createVaultFile,

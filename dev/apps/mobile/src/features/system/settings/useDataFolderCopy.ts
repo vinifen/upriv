@@ -2,7 +2,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { newJobId, type JobProgress } from "@upriv/shared";
 import { useJobProgress } from "@upriv/shared/react";
 import { useKeepAwakeWhile } from "@/hooks/useKeepAwakeWhile";
-import { isAndroidSafUri } from "@/platform/native/pickVaultRootFolder";
 import { useJobService } from "@/platform/services";
 
 /** The copy a setup runs: its clock and its stop. */
@@ -15,11 +14,11 @@ export interface DataFolderCopy {
 }
 
 /**
- * A setup on a picked storage-access folder may copy the phone's private data
- * folder into it, which takes as long as that folder is big. Core runs that
- * copy as a job with no time limit; once it is seen copying, the footer shows
- * Stop and the elapsed time in place of the button that started it. A setup
- * with nothing to copy never shows it and keeps the operation limit.
+ * An apply on a phone copies the data folder kept in the private app folder,
+ * when there is one, into the folder the list selects, which takes as long as
+ * that folder is big. Core runs that copy as a job with no time limit; once it
+ * is seen copying, the footer shows Stop and the elapsed time in place of the
+ * button that started it. An apply with nothing to copy ends before it shows.
  */
 export function useDataFolderCopy(onStopRefused: (error: unknown) => void) {
   const jobs = useJobService();
@@ -35,18 +34,14 @@ export function useDataFolderCopy(onStopRefused: (error: unknown) => void) {
     setRunning(next);
   }, []);
 
-  /** The job a setup of `path` carries, or `undefined` when that setup copies nothing. */
-  const begin = useCallback(
-    (path: string): string | undefined => {
-      if (!isAndroidSafUri(path)) return undefined;
-      const id = newJobId();
-      commit({ id, stoppingSince: null });
-      return id;
-    },
-    [commit],
-  );
+  /** The job an apply carries. */
+  const begin = useCallback((): string => {
+    const id = newJobId();
+    commit({ id, stoppingSince: null });
+    return id;
+  }, [commit]);
 
-  /** The setup that carried the job settled, whichever way. */
+  /** The apply that carried the job settled, whichever way. */
   const end = useCallback(() => commit(null), [commit]);
 
   const stop = useCallback(() => {

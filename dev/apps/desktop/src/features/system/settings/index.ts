@@ -1,7 +1,4 @@
-/** Public API — only exports consumed outside `system/settings/`.
- *
- * Location picker lives in `VaultRootLocationSection.tsx` (Data folder + Setup).
- */
+/** Public API — only exports consumed outside `system/settings/`. */
 export { AppSettingsModal } from "./AppSettingsModal";
 export { AppSettingsProvider, useAppSettingsContext } from "./AppSettingsContext";
 export { VaultRootGate } from "./VaultRootGate";

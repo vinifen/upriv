@@ -9,7 +9,7 @@ import {
   isMockLifecyclePasswordValid,
   isRpcError,
   isVaultPipelineError,
-  resolveVaultMountPoint,
+  NO_LISTS_SAVED,
   runTimedPipeline,
   DEFAULT_KDF_UNLOCK_PRESET,
   displayNameToVaultId,
@@ -21,16 +21,19 @@ import {
   type AppServices,
   type AppSettingsLoadResult,
   type CreateVaultInput,
-  backupEntryKey,
   backupExportFilename,
+  type DataFolderChoice,
+  type DeviceGroups,
+  type DeviceInfo,
   type VaultBackupEntry,
+  type VaultBackupListing,
   type VaultListItem,
   type VaultPipelineError as VaultPipelineErrorType,
   type VaultRenameResult,
-  type VaultRootMode,
   type VaultSettingsConfig,
 } from "@upriv/shared";
 import {
+  applyMockListChanges,
   cloneJson,
   remapVaultWorkspaceSnapshot,
   createAsyncVaultFileSystemService,
@@ -55,30 +58,22 @@ import {
   unregisterMockVaultId,
 } from "./data/vaults";
 import { MOCK_VAULT_GROUPS } from "./data/vaultGroups";
-import { MOCK_ALIAS_URI, MOCK_DEFAULT_ANCHOR, MOCK_VAULT_ROOT_URI } from "./data/paths";
+import { MOCK_DEFAULT_ANCHOR, MOCK_VAULT_ROOT_URI } from "./data/paths";
 import {
   getMockVaultSettings,
   registerMockVaultSettings,
   unregisterMockVaultSettings,
 } from "./stores/vaultSettings";
 
-interface MockVaultRootState {
-  configured: boolean;
-  rootPath: string;
-  aliasPath?: string;
-  aliasActive: boolean;
-}
+/** Expo Go's stand-in for this phone. */
+const MOCK_DEVICE: DeviceInfo = { id: "e".repeat(32), system: "android" };
 
 /** Stands in for the upriv-core header probe round-trip. */
 const MOCK_IMPORT_PASSWORD_TEST_MS = 400;
 
 /** Pre-seeded so Expo Go lands on the vault list; Gate still re-resolves. */
-let runtimeRoot: MockVaultRootState = {
-  configured: true,
-  rootPath: MOCK_VAULT_ROOT_URI,
-  aliasPath: MOCK_ALIAS_URI,
-  aliasActive: false,
-};
+let dataFolderConfigured = true;
+let dataFolders: DeviceGroups<DataFolderChoice> = {};
 
 let runtimeSettings = createDefaultAppSettings();
 runtimeSettings = {
@@ -112,31 +107,50 @@ function mockOpenRamFails(vaultId: string): boolean {
   return vaultId === "cold-storage";
 }
 
+/** A backup of `vaultId` in the data folder's backups. */
+function mockBackup(
+  vaultId: string,
+  stamp: string,
+  sizeBytes: number,
+  saved = false,
+): VaultBackupEntry {
+  const fileName = `${stamp}-${vaultId}.zip`;
+  const place = saved ? `saves/${fileName}` : fileName;
+  return {
+    key: `data/${place}`,
+    stamp,
+    fileName,
+    name: "",
+    createdAt: `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(8, 10)}:${stamp.slice(10, 12)}:${stamp.slice(12, 14)}.000Z`,
+    sizeBytes,
+    saved,
+    path: `${MOCK_VAULT_ROOT_URI}/.upriv/vaults/${vaultId}/backups/${place}`,
+  };
+}
+
 const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
   "my-encrypted-notes": [
-    {
-      stamp: "20260601120000",
-      fileName: "20260601120000-my-encrypted-notes.zip",
-      createdAt: "2026-06-01T12:00:00.000Z",
-      sizeBytes: 128_000,
-    },
-    {
-      stamp: "20260520090000",
-      fileName: "20260520090000-my-encrypted-notes.zip",
-      createdAt: "2026-05-20T09:00:00.000Z",
-      sizeBytes: 120_000,
-      saved: true,
-    },
+    mockBackup("my-encrypted-notes", "20260601120000", 128_000),
+    mockBackup("my-encrypted-notes", "20260520090000", 120_000, true),
   ],
-  "work-documents": [
-    {
-      stamp: "20260602080000",
-      fileName: "20260602080000-work-documents.zip",
-      createdAt: "2026-06-02T08:00:00.000Z",
-      sizeBytes: 256_000,
-    },
-  ],
+  "work-documents": [mockBackup("work-documents", "20260602080000", 256_000)],
 };
+
+/** A vault's backups, all in the data folder's section. */
+function mockBackupListing(vaultId: string): VaultBackupListing {
+  return {
+    sections: [
+      {
+        folder: "data",
+        kind: "data_folder",
+        path: `${MOCK_VAULT_ROOT_URI}/.upriv/vaults/${vaultId}/backups`,
+        device: null,
+        status: "ok",
+        entries: (MOCK_BACKUPS[vaultId] ?? []).map((entry) => ({ ...entry })),
+      },
+    ],
+  };
+}
 
 const MOCK_LOG_CURRENT = [
   "0001 2026-06-02T12:00:00.000Z INFO  app_start          version=0.1.0-beta source=mobile_mock",
@@ -266,6 +280,11 @@ export function createMobileMockServices(): AppServices {
   }
 
   return {
+    device: {
+      async info() {
+        return MOCK_DEVICE;
+      },
+    },
     vault: {
       canPersistSettings: true,
       canDeleteVault: true,
@@ -318,8 +337,29 @@ export function createMobileMockServices(): AppServices {
       async getSettings(vaultId) {
         return getMockVaultSettings(vaultId);
       },
-      async registerSettings(vaultId, config: VaultSettingsConfig) {
-        registerMockVaultSettings({ ...config, vault: { ...config.vault, id: vaultId } });
+      async registerSettings(vaultId, config: VaultSettingsConfig, lists) {
+        const saved = getMockVaultSettings(vaultId);
+        registerMockVaultSettings({
+          ...config,
+          vault: { ...config.vault, id: vaultId },
+          unlocked_folder: {
+            ...config.unlocked_folder,
+            devices: lists
+              ? applyMockListChanges(
+                  saved.unlocked_folder.devices,
+                  lists.unlockedFolder,
+                  MOCK_DEVICE,
+                )
+              : saved.unlocked_folder.devices,
+          },
+          backup: {
+            ...config.backup,
+            devices: lists
+              ? applyMockListChanges(saved.backup.devices, lists.backup, MOCK_DEVICE)
+              : saved.backup.devices,
+          },
+        });
+        return NO_LISTS_SAVED;
       },
       rename: mockRename,
       async unregisterSettings(vaultId) {
@@ -366,85 +406,49 @@ export function createMobileMockServices(): AppServices {
 
     vaultRoot: {
       async resolve(options = {}) {
-        const vaultRootMode: VaultRootMode = options.vaultRootMode ?? "default_root";
         const explicit = options.explicitPath?.trim();
-        if (explicit) {
-          return { status: "found", rootPath: explicit, source: "explicit" };
-        }
-        if (!runtimeRoot.configured) {
+        if (explicit) return { status: "found", rootPath: explicit, source: "explicit" };
+        if (!dataFolderConfigured) {
           return {
             status: "needs_setup",
-            aliasPath: MOCK_ALIAS_URI,
             defaultRootAnchor: MOCK_DEFAULT_ANCHOR,
             distribution: "installed",
+            ended: [],
           };
         }
-        if (vaultRootMode === "custom_root") {
-          const path = runtimeRoot.aliasPath?.trim() || runtimeRoot.rootPath;
-          if (!path || !runtimeRoot.aliasActive) {
-            return {
-              status: "needs_setup",
-              aliasPath: MOCK_ALIAS_URI,
-              defaultRootAnchor: MOCK_DEFAULT_ANCHOR,
-              distribution: "installed",
-            };
-          }
-          return { status: "found", rootPath: path, source: "custom_root" };
-        }
+        return { status: "found", rootPath: MOCK_VAULT_ROOT_URI, source: "default" };
+      },
+
+      async list(options) {
         return {
-          status: "found",
-          rootPath: runtimeRoot.rootPath || MOCK_VAULT_ROOT_URI,
-          source: "default_root",
+          groups: options?.newList ? {} : cloneJson(dataFolders),
+          defaultFolder: null,
+          explicit: null,
         };
       },
 
-      async setupDefaultRoot() {
-        runtimeRoot = {
-          configured: true,
-          rootPath: MOCK_VAULT_ROOT_URI,
-          aliasPath: runtimeRoot.aliasPath,
-          aliasActive: false,
+      async status(path) {
+        return {
+          state: "ok",
+          content: path === null && dataFolderConfigured ? "valid" : "empty",
+          details: null,
         };
+      },
+
+      async apply(request) {
+        dataFolders = applyMockListChanges(
+          request.newList ? {} : dataFolders,
+          request.changes,
+          MOCK_DEVICE,
+        );
+        const switched = !dataFolderConfigured;
+        dataFolderConfigured = true;
         settingsOnDisk = true;
-        return { rootPath: MOCK_VAULT_ROOT_URI };
+        return { rootPath: MOCK_VAULT_ROOT_URI, source: "default", switched, ended: [] };
       },
 
-      async setupAtPath(path: string) {
-        const rootPath = path.trim() || MOCK_VAULT_ROOT_URI;
-        runtimeRoot = {
-          configured: true,
-          rootPath,
-          aliasPath: rootPath,
-          aliasActive: true,
-        };
-        settingsOnDisk = true;
-        return { rootPath, aliasPath: MOCK_ALIAS_URI };
-      },
-
-      async readAlias() {
-        if (!runtimeRoot.aliasPath) return null;
-        return {
-          path: runtimeRoot.aliasPath,
-          active: runtimeRoot.aliasActive,
-        };
-      },
-
-      async defaultRootStatus() {
-        return {
-          status: runtimeRoot.configured ? ("valid" as const) : ("absent" as const),
-          defaultRootAnchor: MOCK_DEFAULT_ANCHOR,
-        };
-      },
-
-      async inspectAtPath(path: string) {
-        const trimmed = path.trim();
-        if (!trimmed) {
-          return { status: "absent", path: trimmed };
-        }
-        if (runtimeRoot.configured && trimmed === runtimeRoot.rootPath) {
-          return { status: "valid", path: trimmed };
-        }
-        return { status: "absent", path: trimmed };
+      async search() {
+        return { found: false, switch: null, ended: [] };
       },
 
       async suggestedCustomRootPath() {
@@ -467,60 +471,82 @@ export function createMobileMockServices(): AppServices {
       },
     },
 
+    folderLists: {
+      async status() {
+        return { state: "ok", details: null };
+      },
+      async unlockedFolderInfo() {
+        return { choice: { kind: "nothing" }, path: null, mounted: false };
+      },
+    },
+
     appSettings: {
       async load(): Promise<AppSettingsLoadResult> {
         return {
           settings: cloneJson(runtimeSettings),
           onDisk: settingsOnDisk,
-          rootPath: settingsOnDisk ? runtimeRoot.rootPath : null,
+          rootPath: settingsOnDisk ? MOCK_VAULT_ROOT_URI : null,
         };
       },
-      async save(config) {
-        runtimeSettings = cloneJson(config);
+      async save(config, lists) {
+        runtimeSettings = {
+          ...cloneJson(config),
+          unlocked_folders: {
+            ...config.unlocked_folders,
+            devices: lists
+              ? applyMockListChanges(
+                  runtimeSettings.unlocked_folders.devices,
+                  lists.unlockedFolders,
+                  MOCK_DEVICE,
+                )
+              : runtimeSettings.unlocked_folders.devices,
+          },
+          backups: {
+            devices: lists
+              ? applyMockListChanges(runtimeSettings.backups.devices, lists.backups, MOCK_DEVICE)
+              : runtimeSettings.backups.devices,
+          },
+        };
         settingsOnDisk = true;
-        return true;
+        return { wrote: true, ...NO_LISTS_SAVED };
       },
     },
 
     backups: {
       async listBackups(vaultId) {
-        return { backups: (MOCK_BACKUPS[vaultId] ?? []).map((b) => ({ ...b })), chosen: null };
+        return mockBackupListing(vaultId);
       },
-      async deleteBackups(vaultId, stamps) {
-        const list = MOCK_BACKUPS[vaultId];
-        if (!list) return;
-        const set = new Set(stamps);
-        MOCK_BACKUPS[vaultId] = list.filter((entry) => !set.has(backupEntryKey(entry, vaultId)));
+      async deleteBackups(vaultId, keys) {
+        const gone = new Set(keys);
+        MOCK_BACKUPS[vaultId] = (MOCK_BACKUPS[vaultId] ?? []).filter(
+          (entry) => !gone.has(entry.key),
+        );
       },
-      async promoteToSave(vaultId, stamp) {
-        const list = MOCK_BACKUPS[vaultId];
-        if (!list) return;
-        for (const entry of list) {
-          if (backupEntryKey(entry, vaultId) === stamp) {
-            entry.saved = true;
-          }
-        }
+      async promoteToSave(vaultId, key) {
+        MOCK_BACKUPS[vaultId] = (MOCK_BACKUPS[vaultId] ?? []).map((entry) =>
+          entry.key === key ? mockBackup(vaultId, entry.stamp, entry.sizeBytes, true) : entry,
+        );
       },
+      async renameBackup(vaultId, key, name) {
+        let renamed: VaultBackupEntry | null = null;
+        MOCK_BACKUPS[vaultId] = (MOCK_BACKUPS[vaultId] ?? []).map((entry) => {
+          if (entry.key !== key) return entry;
+          renamed = { ...mockBackup(vaultId, entry.stamp, entry.sizeBytes, true), name };
+          return renamed;
+        });
+        if (!renamed) throw new RpcError("backup_not_found", "mock: no such backup");
+        return renamed;
+      },
+      async forgetFolder() {},
       async saveNow(vaultId) {
-        const createdAt = new Date().toISOString();
-        const stamp = createdAt.slice(0, 19).replace(/[-T:]/g, "");
-        const entry: VaultBackupEntry = {
-          stamp,
-          fileName: `${stamp}-${vaultId}.zip`,
-          createdAt,
-          sizeBytes: 128_000,
-          saved: true,
-        };
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[-T:]/g, "");
+        const entry = mockBackup(vaultId, stamp, 128_000, true);
         MOCK_BACKUPS[vaultId] = [entry, ...(MOCK_BACKUPS[vaultId] ?? [])];
-        return { backup: { ...entry }, fallback: null };
+        return { backup: { ...entry }, switches: [] };
       },
       async exportTo(vaultId, keys, destDir) {
         return { path: `${destDir}/${backupExportFilename(keys, vaultId)}`, size: keys.length };
       },
-      async checkFolder() {
-        return "ok" as const;
-      },
-      async reuseFolder() {},
     },
 
     logs: {
@@ -567,17 +593,16 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.INSUFFICIENT_RAM);
           }
         });
+        return [];
       },
       async runClosingPipeline(vaultId, onStep) {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep);
-        return { backupFailed: false, backupFailure: null, backupFallback: null, plain: null };
+        return { backupFailed: false, backupFailure: null, backupSwitches: [], plain: null };
       },
       async hurryClose() {
         return true;
       },
-      resolveWorkspacePath(displayName, parentPath) {
-        return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";
-      },
+      async forgetPlainRecord() {},
       validateLifecyclePassword(password) {
         return isMockLifecyclePasswordValid(password);
       },

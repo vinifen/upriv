@@ -1,11 +1,11 @@
 import { useCallback, useMemo } from "react";
-import { Platform, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { SettingsAccordionSection } from "@/components/settings";
 import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { getMobileAppVersion } from "@/lib/appVersion";
-import { useVaultRootService } from "@/platform/services";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { buildSystemInfoSections, type VaultGroup, type VaultListItem } from "@upriv/shared";
 import { useSystemInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
@@ -26,6 +26,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const vaultRootService = useVaultRootService();
+  const deviceService = useDeviceService();
 
   const getVersion = useCallback(() => {
     const versionInfo = getMobileAppVersion();
@@ -42,9 +43,9 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     groups,
     settings,
     vaultRootService,
+    deviceService,
     getVersion,
     showHiddenVaults,
-    host: Platform.OS,
   });
 
   useVaultRootIntegrityClose(open, loadFailure, reportVaultRootIntegrityFailure, onClose);

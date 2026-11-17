@@ -1,6 +1,6 @@
 import { useCallback, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "@/components/icons";
-import { AnchoredPopover } from "./AnchoredPopover";
+import { ABOVE_MODAL_Z_INDEX, AnchoredPopover } from "./AnchoredPopover";
 
 export type SelectOptionTone = "default" | "muted" | "danger";
 
@@ -21,9 +21,6 @@ interface SelectProps<T extends string | number> {
   size?: "sm" | "md";
   className?: string;
 }
-
-/** Custom picker — native `<select>` is too OS-default for settings/modals. */
-const SELECT_Z_INDEX = 250;
 
 function optionToneClass(
   tone: SelectOptionTone | undefined,
@@ -60,6 +57,7 @@ function indexOfValue<T extends string | number>(
   return index < 0 ? 0 : index;
 }
 
+/** Custom picker — native `<select>` is too OS-default for settings/modals. */
 export function Select<T extends string | number>({
   value,
   options,
@@ -222,7 +220,7 @@ export function Select<T extends string | number>({
         id={listId}
         role="listbox"
         aria-label={name}
-        zIndex={SELECT_Z_INDEX}
+        zIndex={ABOVE_MODAL_Z_INDEX}
         onSideChange={setMenuSide}
         className={[
           "select-scroll-pane h-fit border-0 bg-surface-container-highest outline-none ring-0",

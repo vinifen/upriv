@@ -422,7 +422,7 @@ describe("ExportVaultModal", () => {
   it("refuses a relative folder", () => {
     show();
     fireEvent.change(folderInputs()[0], { target: { value: "Downloads" } });
-    expect(screen.getByText("modal.workspace.error.not_absolute")).toBeDefined();
+    expect(screen.getByText("modal.export_folder.not_absolute")).toBeDefined();
     expect(exportButton().disabled).toBe(true);
   });
 });

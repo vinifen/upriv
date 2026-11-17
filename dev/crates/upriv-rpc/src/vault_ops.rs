@@ -5,20 +5,19 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    abort_import_vault, backup_listing, check_typed_backup_folder, close_all_vaults,
-    close_all_vaults_now, delete_backups, delete_vault, export_backups, export_logical_seven_zip,
-    export_plain_zip, export_store_zip, fs_create_file, fs_create_folder, fs_delete,
-    fs_ensure_folder, fs_held_delete, fs_held_list, fs_held_restore, fs_import_from_os_path,
-    fs_list_tree, fs_move, fs_os_path, fs_preview_fits, fs_read_file, fs_read_range, fs_rename,
-    fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
-    import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
-    import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
-    ingest_import_directory, parse_backup_import_path, probe_import_zip_bytes,
+    abort_import_vault, backup_listing, close_all_vaults, close_all_vaults_now, delete_backups,
+    delete_vault, export_backups, export_logical_seven_zip, export_plain_zip, export_store_zip,
+    fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_held_delete, fs_held_list,
+    fs_held_restore, fs_import_from_os_path, fs_list_tree, fs_move, fs_os_path, fs_preview_fits,
+    fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
+    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
+    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
+    import_store_zip, ingest_import_directory, parse_backup_import_path, probe_import_zip_bytes,
     probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path,
     promote_backup_save, read_import_archive_bytes, read_import_zip_bytes_settings,
-    read_import_zip_settings, reuse_backup_folder, save_backup_now, seven_zip_export_available,
-    sweep_unfinished, vault_list_item, BackupEntry, ExportInclude, ImportExtras, ImportZipProbe,
-    KdfUnlockPreset, VaultConfig, ZipImportClass,
+    read_import_zip_settings, save_backup_now, seven_zip_export_available, sweep_unfinished,
+    vault_list_item, ExportInclude, ImportExtras, ImportZipProbe, KdfUnlockPreset, OsFolder,
+    VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -132,23 +131,23 @@ struct VaultHeldParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackupStampsParams {
+struct BackupKeysParams {
     id: String,
-    stamps: Vec<String>,
+    keys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackupStampParams {
+struct BackupKeyParams {
     id: String,
-    stamp: String,
+    key: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BackupExportParams {
     id: String,
-    stamps: Vec<String>,
+    keys: Vec<String>,
     dest_dir: String,
     /// Names this export for `job_status` and `job_cancel`.
     job: String,
@@ -682,17 +681,16 @@ pub(super) fn vault_fs_os_path(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
+    // The vault row and the in-app file manager ask to show their folder
+    // actions. No OS folder is normal: the switch is off, nothing is selected,
+    // or this is a phone; the UI then offers none.
     match fs_os_path(&root, parsed.id.trim(), &parsed.path) {
-        Ok(path) => match path.to_str() {
-            Some(os_path) => ok(json!({ "osPath": os_path })),
-            None => err("vault_mount_failed", "mount path is not valid UTF-8".into()),
+        Ok(OsFolder::Path(path)) => match path_utf8(&path) {
+            Ok(os_path) => ok(json!({ "osPath": os_path, "state": "ready" })),
+            Err(response) => response,
         },
-        // The in-app file manager asks on every open. No OS folder is normal
-        // when the switch is off, and on macOS and mobile there is never one.
-        Err(upriv_core::UprivError::VaultMountFailed(detail)) => {
-            let reason = upriv_core::mount::mount_failure_reason(&detail);
-            ok(json!({ "osPath": null, "reason": reason }))
-        }
+        Ok(OsFolder::Attaching) => ok(json!({ "osPath": null, "state": "attaching" })),
+        Ok(OsFolder::None) => ok(json!({ "osPath": null, "state": "none" })),
         Err(error) => map_core_err(error),
     }
 }
@@ -738,7 +736,11 @@ pub(super) fn vault_delete(params: Value) -> RpcResponse {
     match delete_vault(&root, parsed.id.trim(), parsed.outside_backups) {
         Ok(outcome) => ok(json!({
             "outside": outcome.outside.as_str(),
-            "folder": outcome.folder.map(|folder| folder.to_string_lossy().into_owned()),
+            "folders": outcome
+                .folders
+                .iter()
+                .map(|folder| folder.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
         })),
         Err(error) => map_core_err(error),
     }
@@ -1192,76 +1194,14 @@ pub(super) fn backup_list(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     match backup_listing(&root, parsed.id.trim()) {
-        Ok(listing) => ok(json!({
-            "backups": listing.entries.iter().map(backup_entry_json).collect::<Vec<_>>(),
-            "chosen": listing.chosen.map(|state| json!({
-                "path": state.path.to_string_lossy(),
-                "status": state.status.as_str(),
-            })),
-        })),
-        Err(error) => map_core_err(error),
-    }
-}
-
-fn backup_entry_json(entry: &BackupEntry) -> Value {
-    json!({
-        "stamp": entry.stamp,
-        "fileName": entry.file_name,
-        "createdAt": entry.created_at,
-        "sizeBytes": entry.size_bytes,
-        "saved": entry.saved,
-        "location": entry.location.as_str(),
-        "path": entry.path.to_string_lossy(),
-    })
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackupFolderCheckParams {
-    path: String,
-    /// The vault that would use this folder as its own. Absent for the app default.
-    #[serde(default)]
-    vault: Option<String>,
-}
-
-/// What a folder typed into the settings can do right now.
-pub(super) fn backup_folder_check(params: Value) -> RpcResponse {
-    let parsed: BackupFolderCheckParams = match serde_json::from_value(params) {
-        Ok(v) => v,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let path = parsed.path.trim();
-    if path.is_empty() {
-        return err("invalid_request", "path is required".into());
-    }
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    let vault = parsed.vault.as_deref().map(str::trim);
-    let status = check_typed_backup_folder(&root, Path::new(path), vault);
-    ok(json!({ "status": status.as_str() }))
-}
-
-/// Use this vault's chosen folder again after its folder there went away.
-pub(super) fn backup_folder_reuse(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
-        Ok(v) => v,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match reuse_backup_folder(&root, parsed.id.trim()) {
-        Ok(()) => ok(json!(null)),
+        Ok(listing) => ok(serde_json::to_value(listing).unwrap_or(json!(null))),
         Err(error) => map_core_err(error),
     }
 }
 
 /// Zip the closed vault into `saves/` where its backups go, now. Returns the
-/// new save and why it is in the data folder when it fell back, or
-/// `job_cancelled` when `job_cancel` stopped it first.
+/// new save and the switches its folder needed, or `job_cancelled` when
+/// `job_cancel` stopped it first.
 pub(super) fn backup_save(params: Value) -> RpcResponse {
     let parsed: BackupSaveParams = match serde_json::from_value(params) {
         Ok(v) => v,
@@ -1273,15 +1213,15 @@ pub(super) fn backup_save(params: Value) -> RpcResponse {
     };
     match save_backup_now(&root, parsed.id.trim(), &parsed.job) {
         Ok(saved) => ok(json!({
-            "backup": backup_entry_json(&saved.entry),
-            "fallback": saved.fell_back.map(|status| status.as_str()),
+            "backup": saved.entry,
+            "switches": saved.switches,
         })),
         Err(error) => map_core_err(error),
     }
 }
 
 pub(super) fn backup_delete(params: Value) -> RpcResponse {
-    let parsed: BackupStampsParams = match serde_json::from_value(params) {
+    let parsed: BackupKeysParams = match serde_json::from_value(params) {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
@@ -1289,14 +1229,14 @@ pub(super) fn backup_delete(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match delete_backups(&root, parsed.id.trim(), &parsed.stamps) {
+    match delete_backups(&root, parsed.id.trim(), &parsed.keys) {
         Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
     }
 }
 
 pub(super) fn backup_promote(params: Value) -> RpcResponse {
-    let parsed: BackupStampParams = match serde_json::from_value(params) {
+    let parsed: BackupKeyParams = match serde_json::from_value(params) {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
@@ -1304,7 +1244,7 @@ pub(super) fn backup_promote(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match promote_backup_save(&root, parsed.id.trim(), parsed.stamp.trim()) {
+    match promote_backup_save(&root, parsed.id.trim(), parsed.key.trim()) {
         Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
     }
@@ -1317,8 +1257,8 @@ pub(super) fn backup_export(params: Value) -> RpcResponse {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    if parsed.stamps.is_empty() {
-        return err("invalid_request", "stamps is required".into());
+    if parsed.keys.is_empty() {
+        return err("invalid_request", "keys is required".into());
     }
     let dest_dir = std::path::PathBuf::from(parsed.dest_dir.trim());
     if !dest_dir.is_absolute() {
@@ -1331,7 +1271,7 @@ pub(super) fn backup_export(params: Value) -> RpcResponse {
     match export_backups(
         &root,
         parsed.id.trim(),
-        &parsed.stamps,
+        &parsed.keys,
         &dest_dir,
         &parsed.job,
     ) {

@@ -1,11 +1,12 @@
 import { RpcError } from "../core-rpc/errors";
-import { backupSnapshotFileName } from "./format";
-import { parseBackupFolderStatus, type BackupFolderStatus } from "./folders";
+import { parseDeviceRef } from "../device";
+import { parseFolderState, parseSwitches } from "../folder-lists";
 import type {
-  ChosenBackupFolder,
+  BackupSectionKind,
   VaultBackupEntry,
   VaultBackupListing,
   VaultBackupSaved,
+  VaultBackupSection,
 } from "./types";
 
 const INVALID_RESPONSE = "invalid_response";
@@ -17,50 +18,60 @@ function asRecord(raw: unknown, label: string): Record<string, unknown> {
   return raw as Record<string, unknown>;
 }
 
-function parseEntry(raw: unknown, vaultId: string): VaultBackupEntry {
+function text(raw: unknown): string {
+  return typeof raw === "string" ? raw : "";
+}
+
+/** One `backup_list` entry, as `backup_rename` also answers. */
+export function parseBackupEntry(raw: unknown): VaultBackupEntry {
   const record = asRecord(raw, "backup");
-  const stamp = typeof record.stamp === "string" ? record.stamp : "";
-  const fromWire = typeof record.fileName === "string" ? record.fileName.trim() : "";
+  if (typeof record.key !== "string" || !record.key) {
+    throw new RpcError(INVALID_RESPONSE, "backup: expected key", raw);
+  }
   return {
-    stamp,
-    fileName: fromWire || backupSnapshotFileName(stamp, vaultId.trim()),
-    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
-    sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : undefined,
+    key: record.key,
+    stamp: text(record.stamp),
+    fileName: text(record.fileName),
+    name: text(record.name),
+    createdAt: text(record.createdAt),
+    sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : 0,
     saved: record.saved === true,
-    location: record.location === "chosen" ? "chosen" : "data_folder",
-    path: typeof record.path === "string" ? record.path : undefined,
+    path: text(record.path),
   };
 }
 
-function parseChosen(raw: unknown): ChosenBackupFolder | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const record = raw as Record<string, unknown>;
-  if (typeof record.path !== "string") return null;
-  return { path: record.path, status: parseBackupFolderStatus(record.status) ?? "other" };
+const SECTION_KINDS = new Set<BackupSectionKind>(["data_folder", "in_use", "other"]);
+
+function parseSection(raw: unknown): VaultBackupSection {
+  const record = asRecord(raw, "backup section");
+  const kind = SECTION_KINDS.has(record.kind as BackupSectionKind)
+    ? (record.kind as BackupSectionKind)
+    : "other";
+  const device =
+    typeof record.device === "object" && record.device !== null
+      ? (record.device as Record<string, unknown>)
+      : null;
+  return {
+    folder: text(record.folder),
+    kind,
+    path: text(record.path),
+    device: device ? parseDeviceRef(device.id, device.system) : null,
+    status: parseFolderState(record.status),
+    entries: Array.isArray(record.entries) ? record.entries.map(parseBackupEntry) : [],
+  };
 }
 
 /** `backup_list`. */
-export function parseBackupListing(raw: unknown, vaultId: string): VaultBackupListing {
+export function parseBackupListing(raw: unknown): VaultBackupListing {
   const record = asRecord(raw, "backup_list");
-  if (!Array.isArray(record.backups)) {
-    throw new RpcError(INVALID_RESPONSE, "backup_list: expected backups", raw);
+  if (!Array.isArray(record.sections)) {
+    throw new RpcError(INVALID_RESPONSE, "backup_list: expected sections", raw);
   }
-  return {
-    backups: record.backups.map((entry) => parseEntry(entry, vaultId)),
-    chosen: parseChosen(record.chosen),
-  };
+  return { sections: record.sections.map(parseSection) };
 }
 
 /** `backup_save`. */
-export function parseBackupSaved(raw: unknown, vaultId: string): VaultBackupSaved {
+export function parseBackupSaved(raw: unknown): VaultBackupSaved {
   const record = asRecord(raw, "backup_save");
-  return {
-    backup: parseEntry(record.backup, vaultId),
-    fallback: parseBackupFolderStatus(record.fallback),
-  };
-}
-
-/** `backup_folder_check`. */
-export function parseBackupFolderCheck(raw: unknown): BackupFolderStatus {
-  return parseBackupFolderStatus(asRecord(raw, "backup_folder_check").status) ?? "other";
+  return { backup: parseBackupEntry(record.backup), switches: parseSwitches(record.switches) };
 }

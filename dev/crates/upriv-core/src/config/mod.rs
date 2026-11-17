@@ -8,28 +8,30 @@
 //! | [`vault_config`] | `.upriv/vaults/<id>/config.toml` | **Per-vault** options (identity, storage, …) |
 //! | [`vault_groups`] | `.upriv/vault_groups.toml` | Optional vault **groups** (list organization only) |
 //!
-//! Path discovery and `.upriv-data-folder` alias stay in [`crate::paths`]. This module
-//! calls into `paths` when load/save must find a root or sync the alias.
+//! Finding the data folder in use stays in [`crate::paths`]; load and save
+//! call into it.
 
 pub mod app_settings;
 pub mod edit_policy;
+pub mod list_saves;
 pub mod vault_config;
 pub mod vault_groups;
 
+pub(crate) use app_settings::update_app_settings;
 pub use app_settings::{
     discover_bootstrap_root, load_app_settings, load_app_settings_at, parse_settings_toml_str,
-    save_app_settings, save_app_settings_session, save_app_settings_session_with_alias_sync,
-    save_app_settings_with_alias_sync, serialize_settings_toml_str, sync_alias_with_app_settings,
+    save_app_settings_at, save_app_settings_session, serialize_settings_toml_str,
     AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
 };
 pub use edit_policy::{
     quiet_targets_changed, refuse_config_save_if_busy, save_vault_config_checked,
     CONFIG_SAVE_QUIET_TARGETS,
 };
+pub use list_saves::{AppListChanges, ListsSaved, VaultListChanges};
 pub use vault_config::{
-    load_vault_config, load_vault_config_raw, save_vault_config, serialize_vault_config_toml,
-    set_vault_hidden, vault_config_path, VaultBackupMode, VaultConfig, VaultIdentitySection,
-    VaultStorageMode, VaultStorageSection, VAULT_CONFIG_TOML_GROUPS_NOTE,
+    load_vault_config, save_vault_config, serialize_vault_config_toml, set_vault_hidden,
+    vault_config_path, VaultBackupMode, VaultConfig, VaultIdentitySection, VaultStorageMode,
+    VaultStorageSection, VAULT_CONFIG_TOML_GROUPS_NOTE,
 };
 pub use vault_groups::{
     create_vault_group_with_sort, delete_vault_group, known_vault_ids, load_vault_groups,

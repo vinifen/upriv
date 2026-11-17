@@ -1,5 +1,5 @@
-//! Virtual workspace mount (FUSE / WinFsp). The in-app file manager does not
-//! depend on a successful mount — mount failure is a degraded desktop mode.
+//! An encrypted vault's unlocked folder (FUSE / WinFsp). The in-app file
+//! manager does not depend on it: a vault whose folder fails stays open there.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -19,18 +19,6 @@ mod winfsp_windows;
 pub(crate) use thumbnails::{
     purge_folder_thumbnails, unwatch_vault_folder, uri_is_under_folder, watch_vault_folder,
 };
-
-/// Why a saved file-manager folder still has no OS path.
-///
-/// `unsupported_filesystem` means the disk cannot hold a Windows directory junction.
-/// An empty string is every other missing mount.
-pub fn mount_failure_reason(detail: &str) -> &'static str {
-    if detail == "unsupported_filesystem" {
-        "unsupported_filesystem"
-    } else {
-        ""
-    }
-}
 
 /// Held while a vault is mounted. Unmounts and removes the leaf on drop.
 pub struct MountedVault {
@@ -117,22 +105,24 @@ pub fn mount_encrypted_dir(
     }
 }
 
-/// Parent folder outside `.upriv`.
+/// The vault's folder inside an `upriv-unlocked` that already exists: the
+/// caller makes that folder, and nothing above it is ever made.
 ///
 /// Linux mounts onto an empty directory that already exists. WinFsp creates the
 /// leaf itself and returns `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) when
 /// that name is already there, so Windows only removes an empty leftover.
 #[cfg(any(target_os = "linux", windows))]
 fn prepare_mount_directory(mount_point: &Path) -> Result<()> {
-    // A `content://` address is not an OS path. `create_dir_all` would
-    // otherwise create that relative tree in the process working directory.
     if !mount_point.is_absolute() || crate::paths::path_is_under_reserved_upriv_tree(mount_point) {
         return Err(UprivError::VaultMountFailed(
             "mount path must be an absolute folder outside .upriv".into(),
         ));
     }
-    if let Some(parent) = mount_point.parent() {
-        crate::host_fs::create_dir_all(parent)?;
+    if !mount_point
+        .parent()
+        .is_some_and(|parent| parent.host_is_dir())
+    {
+        return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
     }
     #[cfg(windows)]
     {
@@ -419,19 +409,5 @@ mod mountinfo_tests {
             classify_mount_point(Path::new("/"), SAMPLE),
             MountKind::Other
         );
-    }
-}
-
-#[cfg(test)]
-mod failure_reason_tests {
-    use super::mount_failure_reason;
-
-    #[test]
-    fn names_the_unsupported_filesystem_detail() {
-        assert_eq!(
-            mount_failure_reason("unsupported_filesystem"),
-            "unsupported_filesystem"
-        );
-        assert_eq!(mount_failure_reason("WinFsp is not installed"), "");
     }
 }

@@ -27,7 +27,6 @@ import {
   type CreateVaultValidationCode,
   type PasswordWeakness,
   type VaultGroup,
-  type WorkspaceTable,
 } from "@upriv/shared";
 import {
   importFolderListingError,
@@ -62,8 +61,9 @@ import {
   PlainFilesSwitch,
   VaultSettingsAutoCloseSection,
   VaultSettingsBackupSection,
-  VaultSettingsMountSection,
+  type VaultListsContext,
 } from "@/features/vaults/settings/vaultSettingsForm";
+import { VaultUnlockedFolderSection } from "@/components/settings";
 import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
 
 let importPickGeneration = 0;
@@ -79,9 +79,8 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   onChange: (patch: Partial<CreateVaultDraft>) => void;
   groups?: readonly VaultGroup[];
   includeHidden?: boolean;
-  /** Resolved vault-root for mount reserved checks (from wizard / CreateVaultModal). */
-  vaultRootPath?: string | null;
-  appWorkspace?: WorkspaceTable;
+  /** The folder lists of a new vault: the app's lists and this device; nothing saved yet. */
+  lists?: VaultListsContext;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
 }
@@ -614,6 +613,7 @@ function CreateVaultGeneralStep({
   onChange,
   groups = NO_VAULT_GROUPS,
   includeHidden = false,
+  lists,
 }: StepProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
@@ -646,11 +646,15 @@ function CreateVaultGeneralStep({
 
       <SettingsAccordionSection title={t("modal.settings.section.backup")} defaultOpen>
         <SettingsLockedFields draft={draft}>
-          <VaultSettingsBackupSection
-            config={draft.backup}
-            onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
-          />
+          {lists ? (
+            <VaultSettingsBackupSection
+              config={draft.backup}
+              lists={lists}
+              onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
+            />
+          ) : null}
         </SettingsLockedFields>
+        <FieldErrors errors={createVaultErrorsForField(errors, "backupFolder")} />
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("modal.settings.section.auto_close")} defaultOpen>
@@ -717,8 +721,7 @@ function CreateVaultAdvancedStep({
   errors,
   onChange,
   groups = NO_VAULT_GROUPS,
-  vaultRootPath = null,
-  appWorkspace,
+  lists,
 }: StepProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
@@ -795,17 +798,23 @@ function CreateVaultAdvancedStep({
         </SettingsLockedFields>
       </SettingsAccordionSection>
 
-      <SettingsAccordionSection title={t("modal.settings.section.mount")}>
+      <SettingsAccordionSection title={t("modal.settings.section.unlocked_folder")}>
         <SettingsLockedFields draft={draft}>
-          <VaultSettingsMountSection
-            config={draft.mount}
-            vaultRootPath={vaultRootPath}
-            plaintext={draft.storage.mode === "upriv_plain"}
-            appWorkspace={appWorkspace}
-            onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
-          />
+          {lists ? (
+            <VaultUnlockedFolderSection
+              config={draft.unlocked_folder}
+              saved={lists.saved.unlocked}
+              here={lists.here}
+              vaultId={null}
+              appUnlocked={lists.app.unlocked_folders}
+              plaintext={draft.storage.mode === "upriv_plain"}
+              onChange={(patch) =>
+                onChange({ unlocked_folder: { ...draft.unlocked_folder, ...patch } })
+              }
+            />
+          ) : null}
         </SettingsLockedFields>
-        <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />
+        <FieldErrors errors={createVaultErrorsForField(errors, "unlockedFolder")} />
       </SettingsAccordionSection>
     </View>
   );

@@ -1,21 +1,17 @@
 //! Per-vault `vaults/<id>/config.toml` types (aligned with TS `VaultSettingsConfig`).
 
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
-use crate::paths::{
-    validate_workspace_global_path, VaultBackupFolderRow, VaultBackupPlace, WorkspaceSystem,
-};
+use crate::folder_list::backup::VaultBackupChoice;
+use crate::folder_list::unlocked::VaultUnlockedFolder;
+use crate::folder_list::DeviceGroups;
 
 /// Storage mode from `[storage] mode` (TS `StorageMode`).
 ///
 /// - `encrypted_dir` — default. Rest = `store/`. While open: decrypt in RAM
 ///   (FUSE/WinFsp on desktop; in-app file manager on mobile).
-/// - `upriv_plain` — rest = `store/`. While open: plaintext under the open
-///   mount folder on disk (wipe on close). That folder is this system's
-///   workspace path.
+/// - `upriv_plain` — rest = `store/`. While open: plaintext in the vault's
+///   unlocked folder on this device (wiped on close).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VaultStorageMode {
@@ -88,8 +84,6 @@ pub struct VaultStorageSection {
     pub plain_files: VaultPlainFiles,
 }
 
-pub use crate::paths::VaultMountSection;
-
 /// `[backup]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,13 +99,9 @@ pub struct VaultBackupSection {
     /// every close.
     #[serde(default = "default_true")]
     pub skip_unchanged: bool,
-    /// Where backups go on each desktop system.
-    #[serde(default)]
-    pub linux: VaultBackupFolderRow,
-    #[serde(default)]
-    pub windows: VaultBackupFolderRow,
-    #[serde(default)]
-    pub macos: VaultBackupFolderRow,
+    /// The vault's backup folder list, per device.
+    #[serde(default, skip_serializing_if = "DeviceGroups::is_empty")]
+    pub devices: DeviceGroups<VaultBackupChoice>,
 }
 
 impl Default for VaultBackupSection {
@@ -121,36 +111,12 @@ impl Default for VaultBackupSection {
             mode: VaultBackupMode::KeepLast,
             keep_last: 1,
             skip_unchanged: true,
-            linux: VaultBackupFolderRow::default(),
-            windows: VaultBackupFolderRow::default(),
-            macos: VaultBackupFolderRow::default(),
+            devices: DeviceGroups::default(),
         }
     }
 }
 
-impl VaultBackupSection {
-    /// This system's row. Phones have none.
-    pub fn folder_row(&self, system: WorkspaceSystem) -> Option<&VaultBackupFolderRow> {
-        match system {
-            WorkspaceSystem::Linux => Some(&self.linux),
-            WorkspaceSystem::Windows => Some(&self.windows),
-            WorkspaceSystem::Macos => Some(&self.macos),
-            WorkspaceSystem::Android | WorkspaceSystem::Ios => None,
-        }
-    }
-
-    /// Check every `custom` row. A kept path on another `place` is not in use.
-    pub fn validate_folders(&self, vault_root: Option<&Path>) -> Result<()> {
-        for row in [&self.linux, &self.windows, &self.macos] {
-            if row.place == VaultBackupPlace::Custom {
-                validate_workspace_global_path(&row.path, vault_root)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// `[security]`. Wipe settings for a plaintext workspace.
+/// `[security]`. Wipe settings for a plain-text vault's folder.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultSecuritySection {
@@ -283,7 +249,7 @@ pub struct VaultConfig {
     #[serde(default)]
     pub storage: VaultStorageSection,
     #[serde(default)]
-    pub mount: VaultMountSection,
+    pub unlocked_folder: VaultUnlockedFolder,
     #[serde(default)]
     pub backup: VaultBackupSection,
     #[serde(default)]

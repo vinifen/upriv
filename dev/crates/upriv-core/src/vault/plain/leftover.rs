@@ -1,16 +1,30 @@
 //! A plaintext folder that outlived its session: a crash, a power cut, or a
 //! wipe that could not finish. The store stays the truth. The vault lists as
 //! recovery until the user removes the folder. Opening never wipes it on its own.
+//!
+//! A record is kept while its drive is away. It is dropped only on proof: its
+//! `upriv-unlocked` answers, its folder ID file holds the record's ID, and
+//! nothing of the session is left there (the vault's folder is gone, or holds
+//! no marker of that session: the marker is written before any file and
+//! removed last). A folder that merely answers proves nothing: a mount point
+//! stays as an empty folder while its drive is gone, and on Windows another
+//! drive can take the same letter. A folder or marker that cannot be read
+//! proves nothing either.
 
 use std::path::Path;
 
 use serde::Serialize;
 
+use super::dest;
 use super::disk;
 use super::marker::{self, Marker, MARKER_NAME};
+use super::residue;
 use super::sweep::{self, Visit};
-use super::{dest, residue};
+use crate::device::DeviceSystem;
 use crate::error::{Result, UprivError};
+use crate::folder_list::unlocked::{container_id, remove_container_if_empty};
+use crate::folder_list::UNLOCKED_CONTAINER;
+use crate::folder_probe::{within_limit, FOLDER_STATUS_CHECK_LIMIT};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
 use crate::session::{Job, JobKind};
@@ -39,6 +53,87 @@ pub struct PlainWipe {
     pub kept: u32,
 }
 
+/// What this device can tell about a recorded plain-text folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlainRecordState {
+    /// The folder is there with this vault's marker: a leftover to remove.
+    Leftover,
+    /// Proven gone: the record can go.
+    Gone,
+    /// Nothing proves where the folder is: its drive is unplugged, not
+    /// answering, or another drive took its place.
+    Away,
+    /// Another device wrote it, and its folder is not reachable from here.
+    Elsewhere,
+}
+
+/// A recorded plain-text folder as the vault list shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlainRecordView {
+    /// The device that wrote it ([`crate::device::ThisDevice::record_key`]).
+    pub device: String,
+    /// That device's system: with the start of the ID, how the UI names it.
+    pub system: DeviceSystem,
+    pub path: String,
+    /// Names the record for [`plain_record_forget`].
+    pub token: String,
+    pub state: PlainRecordState,
+}
+
+/// The state of `record` here: a time-limited look at its folder.
+fn record_state(root: &VaultRoot, vault_id: &str, record: &PlainRecord) -> PlainRecordState {
+    if !record.reachable_here() {
+        return PlainRecordState::Elsewhere;
+    }
+    let folder = record.folder(root);
+    let Some(container) = folder.parent().map(Path::to_path_buf) else {
+        return PlainRecordState::Away;
+    };
+    let vault_id = vault_id.to_string();
+    let record = record.clone();
+    let key = container.clone();
+    within_limit(
+        &key,
+        "plain_record",
+        FOLDER_STATUS_CHECK_LIMIT,
+        move || match check_marker(&folder, &vault_id, &record.token) {
+            MarkerCheck::Ours(_) => PlainRecordState::Leftover,
+            MarkerCheck::Unknown => PlainRecordState::Away,
+            MarkerCheck::Absent if container_proves(&container, &record) => PlainRecordState::Gone,
+            MarkerCheck::Absent => PlainRecordState::Away,
+        },
+    )
+    .unwrap_or(PlainRecordState::Away)
+}
+
+/// This device's record of `vault_id` and its state, with a proven-gone
+/// record dropped.
+fn settled_record(
+    root: &VaultRoot,
+    vault_id: &str,
+) -> Result<Option<(PlainRecord, PlainRecordState)>> {
+    let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
+        return Ok(None);
+    };
+    match record_state(root, vault_id, &record) {
+        PlainRecordState::Gone => {
+            runtime_state::remove_plain_record(root, vault_id, &record.token)?;
+            Ok(None)
+        }
+        state => Ok(Some((record, state))),
+    }
+}
+
+fn unreachable(root: &VaultRoot, record: &PlainRecord) -> UprivError {
+    UprivError::PlainFolderUnreachable {
+        device: record.device.clone(),
+        system: record.system,
+        path: record.folder(root).display().to_string(),
+    }
+}
+
 /// The leftover folder this computer can reach for `vault_id`.
 pub fn plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<Option<PlainLeftover>> {
     let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
@@ -65,17 +160,22 @@ pub fn plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<Option<PlainLe
 }
 
 /// Remove: wipe every file in the leftover folder, as the job `job_id`, whose
-/// total is the folder's bytes. A folder that is gone or not this vault's is
-/// forgotten without being touched. A stop leaves the files not reached yet:
-/// the vault stays in recovery, and a later Remove finishes the wipe.
+/// total is the folder's bytes. A record proven gone is forgotten without
+/// touching anything; one whose drive is away is refused. A stop leaves the
+/// files not reached yet: the vault stays in recovery, and a later Remove
+/// finishes the wipe.
 pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result<PlainWipe> {
     Job::run(job_id, JobKind::PlainRemove, Some(vault_id), |job| {
         let vault_dir = root.vault_dir(vault_id)?;
         crate::session::with_vault_dir_lock(&vault_dir, || {
             ensure_closed(root, vault_id)?;
-            let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
+            let Some((record, state)) = settled_record(root, vault_id)? else {
+                runtime_state::acknowledge_dirty_close(root, vault_id)?;
                 return Ok(PlainWipe::default());
             };
+            if state != PlainRecordState::Leftover {
+                return Err(unreachable(root, &record));
+            }
             let wipe = wipe_recorded(
                 root,
                 vault_id,
@@ -91,44 +191,100 @@ pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str, job_id: &str) -> 
     })
 }
 
-/// Refuse while this computer still has a leftover folder with this vault's
-/// marker. A record whose folder is gone, or whose marker does not match, is
-/// forgotten: unlock can continue.
+/// Refuse while this device still has a plain-text folder of this vault on
+/// record: a leftover to remove, or one on a drive that cannot be proven
+/// here. A record proven gone is dropped, and the unlock can continue.
 pub(crate) fn ensure_no_leftover(root: &VaultRoot, vault_id: &str) -> Result<()> {
-    forget_stale_record(root, vault_id)?;
-    match runtime_state::reachable_plain_record(root, vault_id)? {
-        Some(_) => Err(UprivError::PlainLeftover),
+    match settled_record(root, vault_id)? {
+        None => Ok(()),
+        Some((_, PlainRecordState::Leftover)) => Err(UprivError::PlainLeftover),
+        Some((record, _)) => Err(unreachable(root, &record)),
+    }
+}
+
+/// True while this device has a leftover folder of this vault with its
+/// marker. Reads only: the vault list asks this.
+pub(crate) fn holds_leftover(root: &VaultRoot, vault_id: &str) -> bool {
+    matches!(
+        runtime_state::reachable_plain_record(root, vault_id),
+        Ok(Some(record)) if record_state(root, vault_id, &record) == PlainRecordState::Leftover
+    )
+}
+
+/// `records` of `vault_id` but those proven gone, for the vault list. Reads
+/// only; another device's record is not looked at.
+pub(crate) fn plain_record_views(
+    root: &VaultRoot,
+    vault_id: &str,
+    records: Vec<PlainRecord>,
+) -> Vec<PlainRecordView> {
+    records
+        .into_iter()
+        .filter_map(|record| {
+            let state = record_state(root, vault_id, &record);
+            (state != PlainRecordState::Gone).then(|| PlainRecordView {
+                device: record.device.clone(),
+                system: record.system,
+                path: record.folder(root).display().to_string(),
+                token: record.token.clone(),
+                state,
+            })
+        })
+        .collect()
+}
+
+/// `plain_record_forget`: forget one plain-text folder on record, whatever
+/// device wrote it. Its files stay where they are, as they are. Refused
+/// while the vault is open.
+pub fn plain_record_forget(root: &VaultRoot, vault_id: &str, token: &str) -> Result<()> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    crate::session::with_vault_dir_lock(&vault_dir, || {
+        ensure_closed(root, vault_id)?;
+        let known = runtime_state::plain_records(root, vault_id)?
+            .iter()
+            .any(|record| record.token == token);
+        if !known {
+            return Ok(());
+        }
+        runtime_state::remove_plain_record(root, vault_id, token)?;
+        if runtime_state::reachable_plain_record(root, vault_id)?.is_none() {
+            runtime_state::acknowledge_dirty_close(root, vault_id)?;
+        }
+        crate::logging::log_event(
+            crate::logging::LogLevel::Warn,
+            "vault_plain_record_forgotten",
+            &[("id", vault_id)],
+        );
+        Ok(())
+    })
+}
+
+/// [`UprivError::VaultPlainElsewhere`] while another device has a plain-text
+/// folder of this vault on record: deleting the vault would lose track of
+/// files only that device can reach.
+pub(crate) fn refuse_if_elsewhere(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let elsewhere = runtime_state::plain_records(root, vault_id)?
+        .into_iter()
+        .find(|record| !record.reachable_here());
+    match elsewhere {
+        Some(record) => Err(UprivError::VaultPlainElsewhere {
+            device: record.device,
+            system: record.system,
+            path: record.path,
+        }),
         None => Ok(()),
     }
 }
 
-/// True while [`ensure_no_leftover`] would refuse this vault. Reads only: the
-/// vault list asks this, so a stale record stays until a write drops it.
-pub(crate) fn holds_leftover(root: &VaultRoot, vault_id: &str) -> bool {
-    matches!(
-        runtime_state::reachable_plain_record(root, vault_id),
-        Ok(Some(record)) if verified_marker(&record.folder(root), vault_id, &record.token).is_some()
-    )
-}
-
-/// Drop a recorded leftover whose folder is gone or no longer this vault's.
-fn forget_stale_record(root: &VaultRoot, vault_id: &str) -> Result<()> {
-    let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
-        return Ok(());
-    };
-    if verified_marker(&record.folder(root), vault_id, &record.token).is_some() {
-        return Ok(());
-    }
-    runtime_state::remove_plain_record(root, vault_id, &record.token)?;
-    Ok(())
-}
-
 /// Before a vault is deleted: wipe its leftover folder. A folder that cannot
-/// be fully wiped stops the delete.
+/// be fully wiped, or whose drive is away, stops the delete.
 pub(crate) fn clear_for_delete(root: &VaultRoot, vault_id: &str, vault_dir: &Path) -> Result<()> {
-    let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
+    let Some((record, state)) = settled_record(root, vault_id)? else {
         return Ok(());
     };
+    if state != PlainRecordState::Leftover {
+        return Err(unreachable(root, &record));
+    }
     let wipe = WipeOptions::for_vault_dir(vault_dir);
     if wipe_recorded(root, vault_id, &record, &wipe, &Job::untracked())?.kept > 0 {
         return Err(UprivError::PlainLeftover);
@@ -138,39 +294,50 @@ pub(crate) fn clear_for_delete(root: &VaultRoot, vault_id: &str, vault_dir: &Pat
 
 /// Record again a folder a crash left whose record is gone (a lost
 /// `state.json`, or a data folder restored from elsewhere). The folder's
-/// marker names the vault and the session; that is all a wipe needs.
+/// marker names the vault and the session, and its `upriv-unlocked` the
+/// drive: that is all a wipe needs.
 pub(crate) fn adopt_orphans(root: &VaultRoot, vaults: &[crate::vault::VaultListEntry]) {
-    let host = crate::lockfile::hostname().ok();
+    if crate::device::this_device().id.is_none() {
+        return;
+    }
     for vault in vaults {
         let id = vault.id.as_str();
         if runtime_state::vault_is_live(root, id) {
             continue;
         }
-        let _ = forget_stale_record(root, id);
         let Ok(records) = runtime_state::plain_records(root, id) else {
             continue;
         };
-        if records
-            .iter()
-            .any(|record| record.reachable_here(host.as_deref()))
-        {
+        if records.iter().any(PlainRecord::reachable_here) {
             continue;
         }
-        let Ok(dest) = dest::resolve(root, &vault.config) else {
+        let Ok(places) = dest::places(root, &vault.config) else {
             continue;
         };
-        if !is_real_folder(&dest.folder) {
-            continue;
-        }
-        let Ok(Some(marker)) = marker::read(&dest.folder) else {
+        let dest = dest::Destination::new(root, places.selected, &vault.config.vault.display_name);
+        let folder = dest.folder.clone();
+        let container = dest.container(root);
+        let vault_id = id.to_string();
+        let key = container.clone();
+        let found = within_limit(&key, "plain_orphan", FOLDER_STATUS_CHECK_LIMIT, move || {
+            if !is_real_folder(&folder) {
+                return None;
+            }
+            let marker = marker::read(&folder).ok().flatten()?;
+            if marker.vault_id != vault_id {
+                return None;
+            }
+            let folder_id = container_id(&container).ok().flatten()?;
+            Some((marker.token, folder_id))
+        })
+        .flatten();
+        let Some((token, folder_id)) = found else {
             continue;
         };
-        if marker.vault_id != id {
-            continue;
-        }
-        let Some(record) = record_for(root, &dest, &marker, host.as_deref()) else {
+        let Some(path) = record_path(root, &dest) else {
             continue;
         };
+        let record = PlainRecord::written_here(path, dest.in_data_folder(), token, folder_id);
         if runtime_state::adopt_plain_record(root, id, record).is_ok() {
             crate::logging::log_event(
                 crate::logging::LogLevel::Warn,
@@ -181,20 +348,79 @@ pub(crate) fn adopt_orphans(root: &VaultRoot, vaults: &[crate::vault::VaultListE
     }
 }
 
-fn record_for(
-    root: &VaultRoot,
-    dest: &dest::Destination,
-    marker: &Marker,
-    host: Option<&str>,
-) -> Option<PlainRecord> {
-    let host = host?.to_string();
-    Some(PlainRecord {
-        host,
-        path: record_path(root, dest)?,
-        in_data_folder: dest.in_data_folder(),
-        token: marker.token.clone(),
-        since: crate::time::utc_timestamp_iso_millis(),
-    })
+/// A record another device wrote becomes this device's when its folder is at
+/// its path here with the vault's marker and token: the drive moved with
+/// the data folder. One time-limited look per record.
+pub(crate) fn follow_records(root: &VaultRoot, vaults: &[crate::vault::VaultListEntry]) {
+    if crate::device::this_device().id.is_none() {
+        return;
+    }
+    for vault in vaults {
+        let id = vault.id.as_str();
+        let Ok(records) = runtime_state::plain_records(root, id) else {
+            continue;
+        };
+        for record in records
+            .into_iter()
+            .filter(|record| !record.reachable_here())
+        {
+            let folder = record.folder(root);
+            let vault_id = id.to_string();
+            let token = record.token.clone();
+            let probe = folder.clone();
+            let here = within_limit(
+                &folder,
+                "plain_follow",
+                FOLDER_STATUS_CHECK_LIMIT,
+                move || verified_marker(&probe, &vault_id, &token).is_some(),
+            )
+            .unwrap_or(false);
+            if here && runtime_state::follow_plain_record(root, id, &record.token).is_ok() {
+                crate::logging::log_event(
+                    crate::logging::LogLevel::Info,
+                    "vault_plain_record_followed",
+                    &[("id", id)],
+                );
+            }
+        }
+    }
+}
+
+/// How many of this device's plain-text folders on record are in `container`.
+pub(crate) fn records_left_under(root: &VaultRoot, container: &Path) -> u32 {
+    let Ok(state) = runtime_state::load_runtime_state(root) else {
+        return 0;
+    };
+    state
+        .vaults
+        .values()
+        .flat_map(|entry| entry.plain.iter())
+        .filter(|record| record.reachable_here())
+        .filter(|record| record.folder(root).parent() == Some(container))
+        .count() as u32
+}
+
+/// Drop this device's records of folders under `container` that are proven
+/// gone, before the container itself goes and that proof with it.
+pub(crate) fn forget_gone_records_under(root: &VaultRoot, container: &Path) {
+    let Ok(state) = runtime_state::load_runtime_state(root) else {
+        return;
+    };
+    for (vault_id, entry) in state.vaults {
+        for record in entry.plain.iter().filter(|record| record.reachable_here()) {
+            let folder = record.folder(root);
+            if folder.parent() != Some(container) {
+                continue;
+            }
+            let gone = matches!(
+                check_marker(&folder, &vault_id, &record.token),
+                MarkerCheck::Absent
+            ) && container_proves(container, record);
+            if gone {
+                let _ = runtime_state::remove_plain_record(root, &vault_id, &record.token);
+            }
+        }
+    }
 }
 
 /// How `state.json` names a folder: relative to the data folder with `/`
@@ -225,9 +451,11 @@ fn wipe_recorded(
     job: &Job,
 ) -> Result<PlainWipe> {
     let folder = record.folder(root);
-    let wipe = match verified_marker(&folder, vault_id, &record.token) {
-        Some(marker) => wipe_folder(&folder, &marker, opts, job)?,
-        None => PlainWipe::default(),
+    let wipe = match check_marker(&folder, vault_id, &record.token) {
+        MarkerCheck::Ours(marker) => wipe_folder(root, &folder, &marker, opts, job)?,
+        MarkerCheck::Absent => PlainWipe::default(),
+        // Read again here, the marker no longer answers: the record stays.
+        MarkerCheck::Unknown => return Err(unreachable(root, record)),
     };
     if wipe.kept == 0 {
         runtime_state::remove_plain_record(root, vault_id, &record.token)?;
@@ -248,7 +476,13 @@ fn wipe_recorded(
 /// Wipe everything under a folder this vault wrote, then leave it the way
 /// [`finish_folder`] does. `job` reports the bytes, and a stop keeps what is
 /// left.
-fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions, job: &Job) -> Result<PlainWipe> {
+fn wipe_folder(
+    root: &VaultRoot,
+    folder: &Path,
+    marker: &Marker,
+    opts: &WipeOptions,
+    job: &Job,
+) -> Result<PlainWipe> {
     if let Ok((_, bytes)) = disk::tally(folder, &[MARKER_NAME]) {
         job.set_total(bytes);
     }
@@ -264,47 +498,81 @@ fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions, job: &Job) ->
         kept: swept.kept.len() as u32,
     };
     if wipe.kept == 0 {
-        finish_folder(folder, marker)?;
+        finish_folder(root, folder, marker)?;
     }
     residue::purge_after_close(folder, opts);
     Ok(wipe)
 }
 
 /// The folder holds only the marker. The marker goes. A folder Upriv made
-/// goes with it, and an empty `workspace/` directory created for that folder
-/// goes too. A folder the user made is left empty, with their permissions.
-pub(super) fn finish_folder(folder: &Path, marker: &Marker) -> std::io::Result<()> {
+/// goes with it, and its `upriv-unlocked` goes once that holds nothing but
+/// its folder ID file. A folder the user made is left empty, with their
+/// permissions.
+pub(super) fn finish_folder(
+    root: &VaultRoot,
+    folder: &Path,
+    marker: &Marker,
+) -> std::io::Result<()> {
     marker::remove(folder)?;
     if marker.made_folder {
         crate::host_fs::remove_dir(folder)?;
-        remove_empty_workspace_dir(folder);
+        release_container_of(root, folder);
     }
     Ok(())
 }
 
-/// `workspace/` under the data folder or a custom place is created for the
-/// open vault. Once its last vault folder is gone, the directory goes too.
-fn remove_empty_workspace_dir(leaf: &Path) {
-    let Some(parent) = leaf.parent() else {
+/// `upriv-unlocked` goes with its last vault folder. The records of folders
+/// under it that are gone are dropped first, while that is still provable.
+pub(crate) fn release_container_of(root: &VaultRoot, vault_folder: &Path) {
+    let Some(container) = vault_folder.parent() else {
         return;
     };
-    if parent.file_name().and_then(|name| name.to_str()) != Some("workspace") {
+    if !crate::folder_list::names_folder(container, UNLOCKED_CONTAINER) {
         return;
     }
-    if disk::holds_only(parent, &[]).ok() != Some(true) {
-        return;
+    forget_gone_records_under(root, container);
+    remove_container_if_empty(container);
+}
+
+/// What a recorded folder holds of the session that wrote it.
+enum MarkerCheck {
+    /// The folder is there with that session's marker: its files may be too.
+    Ours(Marker),
+    /// Nothing of the session is there: no folder, or one without its marker.
+    Absent,
+    /// The folder or its marker did not read: nothing is proven.
+    Unknown,
+}
+
+fn check_marker(folder: &Path, vault_id: &str, token: &str) -> MarkerCheck {
+    match crate::host_fs::entry_kind(folder) {
+        Ok(crate::host_fs::EntryKind::Dir) => {}
+        // A file or a link stands where the folder was: Upriv makes neither.
+        Ok(_) => return MarkerCheck::Absent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return MarkerCheck::Absent,
+        Err(_) => return MarkerCheck::Unknown,
     }
-    let _ = crate::host_fs::remove_dir(parent);
+    match marker::read(folder) {
+        Ok(Some(marker)) if marker.written_by(vault_id, token) => MarkerCheck::Ours(marker),
+        Ok(_) => MarkerCheck::Absent,
+        Err(_) => MarkerCheck::Unknown,
+    }
 }
 
 fn verified_marker(folder: &Path, vault_id: &str, token: &str) -> Option<Marker> {
-    if !is_real_folder(folder) {
-        return None;
+    match check_marker(folder, vault_id, token) {
+        MarkerCheck::Ours(marker) => Some(marker),
+        MarkerCheck::Absent | MarkerCheck::Unknown => None,
     }
-    marker::read(folder)
+}
+
+/// The `upriv-unlocked` that held the record's folder answers with the
+/// record's ID: the same folder, on the same drive.
+fn container_proves(container: &Path, record: &PlainRecord) -> bool {
+    container_id(container)
         .ok()
         .flatten()
-        .filter(|marker| marker.written_by(vault_id, token))
+        .is_some_and(|id| id == record.folder_id)
 }
 
 fn is_real_folder(path: &Path) -> bool {
@@ -325,11 +593,21 @@ fn ensure_closed(root: &VaultRoot, vault_id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::{load_vault_config, VaultConfig};
+    use crate::folder_list::unlocked::ensure_container;
     use crate::store::KdfUnlockPreset;
-    use crate::test_support::{test_job_id, vault_root_with, VaultSpec};
+    use crate::test_support::{test_job_id, unlocked_rows, vault_root_with, VaultSpec};
+    use std::path::PathBuf;
 
     fn plain_root() -> (tempfile::TempDir, VaultRoot) {
         vault_root_with(&[VaultSpec::upriv_plain("notes", "Notes", 1)])
+    }
+
+    /// `<tmp>/places/upriv-unlocked/Notes`, and the ID of its `upriv-unlocked`.
+    fn notes_folder(tmp: &tempfile::TempDir) -> (PathBuf, String) {
+        let container = tmp.path().join("places").join(UNLOCKED_CONTAINER);
+        std::fs::create_dir_all(container.parent().unwrap()).unwrap();
+        let id = ensure_container(&container).unwrap();
+        (container.join("Notes"), id)
     }
 
     fn leftover(folder: &Path, vault_id: &str, token: &str) {
@@ -341,14 +619,13 @@ mod tests {
         marker::write(folder, &Marker::open(vault_id, token, &helpers, true)).unwrap();
     }
 
-    fn record(folder: &Path, token: &str) -> PlainRecord {
-        PlainRecord {
-            host: crate::lockfile::hostname().unwrap(),
-            path: folder.display().to_string(),
-            in_data_folder: false,
-            token: token.to_string(),
-            since: "2026-10-16T10:00:00.000Z".into(),
-        }
+    fn record(folder: &Path, token: &str, folder_id: &str) -> PlainRecord {
+        PlainRecord::written_here(
+            folder.display().to_string(),
+            false,
+            token.to_string(),
+            folder_id.to_string(),
+        )
     }
 
     /// Tests run side by side, and a running job id is taken.
@@ -361,9 +638,9 @@ mod tests {
     #[test]
     fn a_stopped_wipe_keeps_the_rest_and_the_vault_stays_in_recovery() {
         let (tmp, root) = plain_root();
-        let folder = tmp.path().join("places").join("Notes");
+        let (folder, id) = notes_folder(&tmp);
         leftover(&folder, "notes", "t1");
-        let saved = record(&folder, "t1");
+        let saved = record(&folder, "t1", &id);
         runtime_state::adopt_plain_record(&root, "notes", saved.clone()).unwrap();
 
         let stopped = Job::stopped_by(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
@@ -389,25 +666,25 @@ mod tests {
     #[test]
     fn a_wipe_reports_the_bytes_of_the_folder() {
         let (tmp, root) = plain_root();
-        let folder = tmp.path().join("places").join("Notes");
+        let (folder, id) = notes_folder(&tmp);
         leftover(&folder, "notes", "t1");
-        let saved = record(&folder, "t1");
+        let saved = record(&folder, "t1", &id);
         runtime_state::adopt_plain_record(&root, "notes", saved.clone()).unwrap();
 
-        let id = test_job_id();
-        let job = Job::start(&id).unwrap();
+        let job_id = test_job_id();
+        let job = Job::start(&job_id).unwrap();
         let wipe = WipeOptions::for_vault_dir(&root.vault_dir("notes").unwrap());
         wipe_recorded(&root, "notes", &saved, &wipe, &job).unwrap();
-        let status = crate::session::job_status(&id).expect("running");
+        let status = crate::session::job_status(&job_id).expect("running");
         assert_eq!((status.bytes_done, status.bytes_total), (16, 16));
     }
 
     #[test]
-    fn remove_wipes_a_folder_with_the_recorded_marker() {
+    fn remove_wipes_the_folder_and_its_empty_upriv_unlocked() {
         let (tmp, root) = plain_root();
-        let folder = tmp.path().join("places").join("Notes");
+        let (folder, id) = notes_folder(&tmp);
         leftover(&folder, "notes", "t1");
-        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
 
         let found = plain_leftover(&root, "notes").unwrap().expect("leftover");
         assert!(found.found);
@@ -417,6 +694,8 @@ mod tests {
         assert_eq!(wipe, PlainWipe { wiped: 3, kept: 0 });
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
         assert!(!folder.exists());
+        assert!(!folder.parent().unwrap().exists());
+        assert!(tmp.path().join("places").exists());
     }
 
     #[test]
@@ -431,9 +710,9 @@ mod tests {
         };
         let (tmp, root) = plain_root();
         assert!(!listed(&root));
-        let folder = tmp.path().join("places").join("Notes");
+        let (folder, id) = notes_folder(&tmp);
         leftover(&folder, "notes", "t1");
-        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
         assert!(listed(&root));
 
         remove_leftover(&root).unwrap();
@@ -443,18 +722,53 @@ mod tests {
     #[test]
     fn the_list_does_not_mark_a_folder_with_another_token() {
         let (tmp, root) = plain_root();
-        let folder = tmp.path().join("places").join("Notes");
+        let (folder, id) = notes_folder(&tmp);
         leftover(&folder, "notes", "someone-else");
-        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
         assert!(!holds_leftover(&root, "notes"));
     }
 
     #[test]
-    fn a_folder_with_another_token_is_forgotten_not_wiped() {
+    fn a_marker_that_does_not_read_proves_nothing_and_keeps_the_record() {
         let (tmp, root) = plain_root();
-        let folder = tmp.path().join("places").join("Notes");
+        let (folder, id) = notes_folder(&tmp);
+        leftover(&folder, "notes", "t1");
+        let saved = record(&folder, "t1", &id);
+        runtime_state::adopt_plain_record(&root, "notes", saved.clone()).unwrap();
+        // The folder and its files are there; its marker no longer reads.
+        std::fs::write(folder.join(MARKER_NAME), b"{").unwrap();
+
+        assert!(matches!(
+            ensure_no_leftover(&root, "notes"),
+            Err(UprivError::PlainFolderUnreachable { .. })
+        ));
+        forget_gone_records_under(&root, folder.parent().unwrap());
+        let wipe = WipeOptions::for_vault_dir(&root.vault_dir("notes").unwrap());
+        assert!(wipe_recorded(&root, "notes", &saved, &wipe, &Job::untracked()).is_err());
+        assert_eq!(
+            runtime_state::plain_records(&root, "notes").unwrap().len(),
+            1
+        );
+        assert!(folder.join("a.txt").exists());
+    }
+
+    #[test]
+    fn a_folder_gone_from_its_proven_container_drops_the_record() {
+        let (tmp, root) = plain_root();
+        let (folder, id) = notes_folder(&tmp);
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
+        assert!(ensure_no_leftover(&root, "notes").is_ok());
+        assert!(runtime_state::plain_records(&root, "notes")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn a_folder_with_another_token_on_a_proven_drive_is_forgotten_not_wiped() {
+        let (tmp, root) = plain_root();
+        let (folder, id) = notes_folder(&tmp);
         leftover(&folder, "notes", "someone-else");
-        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
 
         assert!(!plain_leftover(&root, "notes").unwrap().unwrap().found);
         assert_eq!(remove_leftover(&root).unwrap(), PlainWipe::default());
@@ -463,18 +777,110 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_that_merely_answers_empty_keeps_the_record() {
+        let (tmp, root) = plain_root();
+        let (folder, id) = notes_folder(&tmp);
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
+        // The mount point is there, empty: its drive is gone.
+        std::fs::remove_file(
+            folder
+                .parent()
+                .unwrap()
+                .join(crate::folder_list::unlocked::UNLOCKED_ID_FILE),
+        )
+        .unwrap();
+        assert!(matches!(
+            ensure_no_leftover(&root, "notes"),
+            Err(UprivError::PlainFolderUnreachable { .. })
+        ));
+        assert!(runtime_state::reachable_plain_record(&root, "notes")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn another_drive_in_its_place_keeps_the_record() {
+        let (tmp, root) = plain_root();
+        let (folder, _) = notes_folder(&tmp);
+        runtime_state::adopt_plain_record(
+            &root,
+            "notes",
+            record(&folder, "t1", "0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap();
+        assert!(matches!(
+            ensure_no_leftover(&root, "notes"),
+            Err(UprivError::PlainFolderUnreachable { .. })
+        ));
+        let records = runtime_state::plain_records(&root, "notes").unwrap();
+        let views = plain_record_views(&root, "notes", records);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].state, PlainRecordState::Away);
+    }
+
+    #[test]
+    fn the_right_drive_without_the_folder_drops_the_record() {
+        let (tmp, root) = plain_root();
+        let (folder, id) = notes_folder(&tmp);
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
+        ensure_no_leftover(&root, "notes").unwrap();
+        assert!(runtime_state::reachable_plain_record(&root, "notes")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn forget_drops_a_record_whose_drive_is_away_and_leaves_its_files() {
+        let (tmp, root) = plain_root();
+        let gone = tmp
+            .path()
+            .join("unplugged")
+            .join(UNLOCKED_CONTAINER)
+            .join("Notes");
+        runtime_state::adopt_plain_record(
+            &root,
+            "notes",
+            record(&gone, "t1", "0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap();
+        assert!(ensure_no_leftover(&root, "notes").is_err());
+        plain_record_forget(&root, "notes", "t1").unwrap();
+        ensure_no_leftover(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_record_follows_its_folder_to_this_device() {
+        let (tmp, root) = plain_root();
+        let (folder, id) = notes_folder(&tmp);
+        leftover(&folder, "notes", "t1");
+        let mut state = runtime_state::load_runtime_state(&root).unwrap();
+        state.vaults.insert(
+            "notes".into(),
+            runtime_state::RuntimeVaultEntry {
+                session: "closed".into(),
+                mount_point: None,
+                plain: vec![PlainRecord {
+                    device: "3e301fc022fc5185e12822bc2a251f64".into(),
+                    ..record(&folder, "t1", &id)
+                }],
+            },
+        );
+        runtime_state::save_runtime_state(&root, &state).unwrap();
+        assert!(!holds_leftover(&root, "notes"));
+
+        follow_records(&root, &crate::vault::list_vault_entries(&root).unwrap());
+        assert!(holds_leftover(&root, "notes"));
+    }
+
+    #[test]
     fn an_orphan_folder_is_recorded_from_its_marker() {
         let (tmp, root) = plain_root();
         let base = tmp.path().join("places");
-        std::fs::create_dir_all(&base).unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
         let mut config = load_vault_config(&vault_dir).unwrap();
-        config
-            .mount
-            .row_mut(crate::paths::WorkspaceSystem::current())
-            .path = base.display().to_string();
+        unlocked_rows(&mut config, &[&base]);
         crate::config::save_vault_config(&vault_dir, &config).unwrap();
-        let folder = base.join("Notes");
+        let (folder, _) = notes_folder(&tmp);
         leftover(&folder, "notes", "t9");
 
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
@@ -494,12 +900,38 @@ mod tests {
             "[vault]\nid = \"{id}\"\ndisplay_name = \"{name}\"\norder = 1\n[storage]\nmode = \"{mode}\"\n"
         ))
         .expect("config");
-        config
-            .mount
-            .row_mut(crate::paths::WorkspaceSystem::current())
-            .path = parent.display().to_string();
+        unlocked_rows(&mut config, &[parent]);
         config.storage.plain_files = crate::config::vault_config::VaultPlainFiles::Whole;
         config
+    }
+
+    fn vault_folder(parent: &Path) -> PathBuf {
+        parent.join(UNLOCKED_CONTAINER).join("Notes")
+    }
+
+    #[test]
+    fn an_unplugged_row_hands_over_to_the_next_with_a_saved_switch() {
+        let (tmp, root) = vault_root_with(&[]);
+        let unplugged = tmp.path().join("unplugged");
+        let second = tmp.path().join("second");
+        std::fs::create_dir_all(&second).unwrap();
+        let mut config = own_folder_config("notes", "Notes", &unplugged, true);
+        unlocked_rows(&mut config, &[&unplugged, &second]);
+        crate::create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+
+        let opened = crate::open_vault(&root, "notes", b"pass-word-ok").expect("open");
+        assert!(vault_folder(&second).is_dir());
+        assert!(!unplugged.exists());
+        assert_eq!(opened.switches.len(), 1);
+        assert!(opened.switches[0].saved);
+        crate::close_vault(&root, "notes").unwrap();
+
+        let device = crate::device::this_device();
+        let saved = load_vault_config(root.vault_dir("notes").unwrap()).unwrap();
+        assert_eq!(
+            saved.unlocked_folder.devices.selection_here(device),
+            crate::folder_list::Selection::Row(2)
+        );
     }
 
     #[test]
@@ -514,13 +946,9 @@ mod tests {
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let folder = parent.join("Notes");
-        let outcome = crate::open_vault(&root, "notes", b"pass-word-ok").expect("open");
-        let crate::OpenVaultOutcome::PlainConfirm { path, .. } = outcome else {
-            panic!("first open confirms the place");
-        };
-        assert_eq!(path, folder);
-        crate::confirm_plain_destination(&root, "notes", &folder, &test_job_id()).unwrap();
+        let folder = vault_folder(&parent);
+        crate::open_vault(&root, "notes", b"pass-word-ok").expect("open");
+        assert!(folder.is_dir());
         crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
         crate::plain_sync(&root, "notes").unwrap();
         assert_eq!(std::fs::read(folder.join("hello.txt")).unwrap(), b"secret");
@@ -529,8 +957,7 @@ mod tests {
         assert_eq!(closed.plain.unwrap().kept, 0);
         assert!(!folder.exists());
 
-        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder, &test_job_id())
-            .unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         assert_eq!(
             crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
             b"secret"
@@ -549,9 +976,8 @@ mod tests {
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let folder = parent.join("Notes");
+        let folder = vault_folder(&parent);
         crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
-        crate::confirm_plain_destination(root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_write_file(root, "notes", "/hello.txt", b"secret").unwrap();
         crate::plain_sync(root, "notes").unwrap();
         folder
@@ -565,9 +991,8 @@ mod tests {
         let mut config = own_folder_config("notes", "Notes", &parent, true);
         config.storage.plain_files = crate::config::vault_config::VaultPlainFiles::Chosen;
         crate::create_vault(root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
-        let folder = parent.join("Notes");
+        let folder = vault_folder(&parent);
         crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
-        crate::confirm_plain_destination(root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_mkdir(root, "notes", "/docs").unwrap();
         crate::vault::fs_write_file(root, "notes", "/docs/a.txt", b"first").unwrap();
         crate::vault::fs_write_file(root, "notes", "/docs/b.txt", b"second").unwrap();
@@ -788,8 +1213,7 @@ mod tests {
         bytes[24] ^= 0x01;
         std::fs::write(&blob, &bytes).unwrap();
 
-        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder, &test_job_id())
-            .unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         assert_eq!(std::fs::read(folder.join("hello.txt")).unwrap(), b"secret");
         assert_eq!(
             std::fs::read(folder.join("broken.txt")).unwrap(),
@@ -865,8 +1289,7 @@ mod tests {
         assert!(!folder.exists());
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
 
-        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder, &test_job_id())
-            .unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         assert_eq!(
             crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
             b"secret"
@@ -945,7 +1368,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let (tmp, root) = vault_root_with(&[]);
         let parent = tmp.path().join("places");
-        let folder = parent.join("Notes");
+        let folder = vault_folder(&parent);
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o750)).unwrap();
         crate::create_vault(
@@ -956,7 +1379,6 @@ mod tests {
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        crate::confirm_plain_destination(&root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
         crate::plain_sync(&root, "notes").unwrap();
 
@@ -981,8 +1403,8 @@ mod tests {
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
-        assert!(!parent.join("Notes").exists());
+        assert!(!parent.join(UNLOCKED_CONTAINER).exists());
         crate::close_vault(&root, "notes").unwrap();
-        assert!(!parent.join("Notes").exists());
+        assert!(!parent.join(UNLOCKED_CONTAINER).exists());
     }
 }

@@ -4,8 +4,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   NO_VAULT_GROUPS,
   PASSWORD_WEAKNESS_I18N_KEYS,
-  vaultRootPathForWorkspaceValidation,
   type CreateVaultDraft,
+  type CreateVaultLists,
   type CreateVaultResult,
   type CreateVaultStepId,
   type VaultGroup,
@@ -18,7 +18,7 @@ import {
   retainsPendingImport,
   subscribeImportFolderListing,
 } from "@/platform/native/contentTreeImport";
-import { useCreateVaultService, useJobService, useVaultRootService } from "@/platform/services";
+import { useCreateVaultService, useDeviceService, useJobService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
@@ -27,7 +27,11 @@ import { Button, Modal, ModalFooterActions, ModalFooterNav } from "@/components/
 import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { invalidateImportPicks, renderCreateVaultStep } from "./createVaultSteps";
-import { useCreateVaultWizard } from "@upriv/shared/react";
+import { hereDevice, useCreateVaultWizard, useDeviceInfo } from "@upriv/shared/react";
+import type { VaultListsContext } from "@/features/vaults/settings/vaultSettingsForm";
+
+/** A new vault has no lists saved yet: every row of the draft is checked against the path rules. */
+const NOTHING_SAVED: VaultListsContext["saved"] = { unlocked: {}, backups: {} };
 
 interface CreateVaultModalProps {
   open: boolean;
@@ -64,35 +68,17 @@ export function CreateVaultModal({
     showHiddenVaultsSession,
     reportVaultRootIntegrityFailure,
   } = useAppSettingsContext();
-  const vaultRootService = useVaultRootService();
-  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  const deviceInfo = useDeviceInfo(useDeviceService());
+  const here = useMemo(() => hereDevice(deviceInfo), [deviceInfo]);
   const [createError, setCreateError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      setResolvedRootPath(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: appSettings.app.vault_root_mode,
-        });
-        if (cancelled) return;
-        if (resolved.status === "found") {
-          setResolvedRootPath(resolved.rootPath);
-        } else {
-          setResolvedRootPath(resolved.defaultRootAnchor);
-        }
-      } catch {
-        if (!cancelled) setResolvedRootPath(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, appSettings.app.vault_root_mode, vaultRootService]);
+  const lists = useMemo<VaultListsContext>(
+    () => ({ app: appSettings, saved: NOTHING_SAVED, here, vaultId: null }),
+    [appSettings, here],
+  );
+  const wizardLists = useMemo<CreateVaultLists>(
+    () => ({ here, appUnlocked: appSettings.unlocked_folders }),
+    [here, appSettings.unlocked_folders],
+  );
 
   const reportImportVaultRootFailure = useCallback(
     (error: unknown) => {
@@ -101,11 +87,6 @@ export function CreateVaultModal({
     [reportVaultRootIntegrityFailure],
   );
 
-  const vaultRootPath = vaultRootPathForWorkspaceValidation(
-    appSettings.app.vault_root_mode,
-    appSettings.app.upriv_root_path,
-    resolvedRootPath,
-  );
   const includeHidden = appSettings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
 
   const stepPaneMaxHeight = useMemo(() => {
@@ -127,7 +108,7 @@ export function CreateVaultModal({
     existingOrders,
     existingDisplayNames,
     groups,
-    vaultRootPath,
+    lists: wizardLists,
     initialDraft,
     initialStep,
     onCreate: (result, password) => {
@@ -312,8 +293,7 @@ export function CreateVaultModal({
           groups,
           includeHidden,
           existingDisplayNames,
-          vaultRootPath,
-          appWorkspace: appSettings.workspace,
+          lists,
           onTestImportPassword: handleTestImportPassword,
           onStopTestImportPassword: stopTestImportPassword,
           testingPassword,

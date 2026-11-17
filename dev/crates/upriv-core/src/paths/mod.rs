@@ -1,30 +1,23 @@
 //! Vault-root path contract (PRD §5 / SDD §3).
 //!
-//! - [`VaultRoot`] — paths under an opened root  
-//! - [`resolve_vault_root`] — launch discovery (explicit → `custom_root` active alias → `default_root`)  
-//! - [`initialize_vault_root`] — create default `.upriv/` layout  
+//! - [`VaultRoot`] — paths under an opened root
+//! - [`resolve_vault_root`] — launch discovery (explicit → this device's choice in the data folder list)
+//! - [`initialize_vault_root`] — create default `.upriv/` layout
 //!
-//! App settings TOML (`.upriv/settings.toml`) lives in [`crate::config`].
-//! Alias (`.upriv-data-folder` in app home) is created only for “another folder”.
-//! Default-root mode ignores an active alias (alias file is the on-disk source of truth for
-//! mode/path — not `settings.toml`) and deactivates it on save.
+//! App settings TOML (`.upriv/settings.toml`) lives in [`crate::config`]. The
+//! data folder list (`.upriv-data-folder` in the app home) lives in
+//! [`crate::folder_list::data_folder`].
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-mod backup_place;
 mod distribution;
 pub(crate) mod fs_env;
 mod init;
 mod relocate;
+pub(crate) mod reserved;
 mod resolve;
 mod slug_alloc;
-mod workspace;
 
-pub use backup_place::{
-    own_backups_folder, resolve_chosen_backup_folder, shared_backups_folder, BackupFolderRow,
-    BackupFolderTable, BackupPlace, ChosenBackupFolder, VaultBackupFolderRow, VaultBackupPlace,
-    SHARED_BACKUPS_FOLDER,
-};
 pub use distribution::{
     default_vault_root_anchor, default_vault_root_anchor_for, detect_app_distribution,
     distribution_str, env_app_distribution, infer_app_distribution, init_app_distribution,
@@ -43,25 +36,17 @@ pub(crate) use init::{
     open_or_initialize_vault_root_with_policy_and_bootstrap,
 };
 pub use relocate::{copy_data_folder_into, relocate_upriv_dir, UprivDirRelocate};
+pub(crate) use reserved::is_content_uri;
+pub use reserved::{is_absolute_address, is_inside_upriv_of, path_is_under_reserved_upriv_tree};
 pub use resolve::{
-    active_alias_is_unmounted_saf, app_home_dir, deactivate_app_home_alias,
-    discover_vault_root_upward, read_vault_root_alias, remember_vault_root_custom_uri,
-    resolve_vault_root, setup_default_root_anchor, vault_root_alias_path, write_vault_root_alias,
-    write_vault_root_alias_for_root, write_vault_root_alias_for_root_with_custom, ResolveVaultRoot,
-    ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+    app_home_dir, data_folder_lost, discover_vault_root_upward, explicit_data_folder,
+    resolve_vault_root, setup_default_root_anchor, ResolveVaultRoot, ResolveVaultRootOptions,
+    VaultRootSource,
 };
+pub(crate) use resolve::{chosen_data_folder, data_folder_in_use, default_data_folder};
 pub use slug_alloc::display_name_to_vault_id;
-pub(crate) use workspace::paths_equal_or_under_casefold;
-pub use workspace::{
-    app_workspace_place, encrypted_shortcut_active, is_absolute_filesystem_path,
-    is_absolute_workspace_address, is_reserved_upriv_workspace_path,
-    path_is_under_reserved_upriv_tree, resolve_vault_mount_point, resolved_workspace_parent,
-    validate_workspace_global_path, validate_workspace_table, VaultMountSection, VaultShortcut,
-    WorkspaceOsEntry, WorkspacePlace, WorkspaceSettings, WorkspaceSystem, WorkspaceTable,
-};
 
-/// Crate-internal: validate/open a default_root candidate path (used by `config::app_settings`).
-pub(crate) use resolve::open_default_root_candidate;
+pub(crate) use resolve::resolve_user_data_app_home;
 
 use std::path::{Path, PathBuf};
 
@@ -438,7 +423,7 @@ pub struct VaultRoot {
 impl VaultRoot {
     /// Open an existing vault-root (must contain a **valid** `.upriv/settings.toml`).
     ///
-    /// Uses the same rules as inspect/default_root: missing `.upriv` → NotFound;
+    /// Uses the same rules as a launch: missing `.upriv` → NotFound;
     /// `.upriv` present but broken/empty → Incomplete (not NotFound).
     pub fn discover(path: impl AsRef<Path>) -> Result<Self> {
         let root = crate::host_fs::canonicalize(path.as_ref()).map_err(UprivError::from)?;
@@ -511,7 +496,8 @@ pub(crate) fn normalize_stored_name(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Display-name leaf fallback for workspace mount folders.
+/// A vault's folder inside `upriv-unlocked`: its display name, or `_` when a
+/// system cannot hold that name as a folder.
 pub(crate) fn sanitize_display_leaf(name: &str) -> String {
     let normalized = normalize_stored_name(name);
     if normalized.is_empty()
@@ -661,18 +647,6 @@ mod tests {
         crate::host_fs::create_dir_all(dir.path().join(".upriv")).unwrap();
         let err = VaultRoot::discover(dir.path()).unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
-    }
-
-    #[test]
-    fn workspace_path_keeps_display_name() {
-        assert_eq!(
-            resolve_vault_mount_point("/tmp/fake-root", "My Encrypted Notes", false).unwrap(),
-            PathBuf::from("/tmp/fake-root/workspace/My Encrypted Notes")
-        );
-        assert_eq!(
-            resolve_vault_mount_point("/custom/mount/parent", "My Encrypted Notes", true).unwrap(),
-            PathBuf::from("/custom/mount/parent/My Encrypted Notes")
-        );
     }
 
     #[test]

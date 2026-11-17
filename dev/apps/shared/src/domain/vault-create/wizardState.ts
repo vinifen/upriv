@@ -12,6 +12,7 @@ import {
   canSubmitCreateVault,
   getCreateVaultStepStatus,
   validateCreateVaultStep,
+  type CreateVaultLists,
   type CreateVaultValidationCode,
 } from "./validate";
 import { shouldShowCreateVaultInlineErrors } from "./wizard";
@@ -20,8 +21,8 @@ import { shouldShowCreateVaultInlineErrors } from "./wizard";
 export interface CreateVaultWizardContext {
   existingVaultIds: readonly string[];
   knownGroupIds: readonly string[];
-  /** Active vault-root path for reserved-mount checks on custom workspace paths. */
-  vaultRootPath?: string | null;
+  /** The folder lists the new vault joins, as this device sees them. */
+  lists?: CreateVaultLists;
 }
 
 /** The vault settings the chosen file carries, kept so a switch can take them out again. */
@@ -201,7 +202,7 @@ export function createVaultWizardReducer(
         state.draft,
         action.context.existingVaultIds,
         action.context.knownGroupIds,
-        action.context.vaultRootPath,
+        action.context.lists,
       );
       if (errors.length > 0) return { ...state, attemptedSteps };
       const next = stepAt(1, state.currentStep);
@@ -338,7 +339,7 @@ export function selectCreateVaultWizardView(
   state: CreateVaultWizardState,
   context: CreateVaultWizardContext,
 ): CreateVaultWizardView {
-  const { existingVaultIds, knownGroupIds, vaultRootPath } = context;
+  const { existingVaultIds, knownGroupIds, lists } = context;
   const stepStatuses = {} as Record<CreateVaultStepId, CreateVaultStepStatus>;
   for (const stepId of CREATE_VAULT_STEPS) {
     stepStatuses[stepId] = getCreateVaultStepStatus(
@@ -348,7 +349,7 @@ export function selectCreateVaultWizardView(
       state.attemptedSteps,
       state.submitAttempted,
       knownGroupIds,
-      vaultRootPath,
+      lists,
     );
   }
 
@@ -366,12 +367,12 @@ export function selectCreateVaultWizardView(
           state.draft,
           existingVaultIds,
           knownGroupIds,
-          vaultRootPath,
+          lists,
         )
       : [],
     isFirstStep: state.currentStep === CREATE_VAULT_STEPS[0],
     isLastStep: state.currentStep === CREATE_VAULT_STEPS[CREATE_VAULT_STEPS.length - 1],
-    canCreate: canSubmitCreateVault(state.draft, existingVaultIds, knownGroupIds, vaultRootPath),
+    canCreate: canSubmitCreateVault(state.draft, existingVaultIds, knownGroupIds, lists),
     isDirty: !createVaultDraftEqual(state.draft, state.baseline),
   };
 }

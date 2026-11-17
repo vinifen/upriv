@@ -7,15 +7,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UprivError};
-use crate::paths::{
-    validate_workspace_table, BackupFolderTable, VaultRootMode, VAULT_ROOT_SETTINGS_REL,
-};
+use crate::folder_list::backup::AppBackupFolders;
+use crate::folder_list::unlocked::AppUnlockedFolders;
+use crate::paths::VAULT_ROOT_SETTINGS_REL;
 
-use super::types::{
-    AppSectionSettings, AppSettings, LoggingSettings, UiSettings, WorkspaceSettings,
-};
+use super::types::{AppSectionSettings, AppSettings, LoggingSettings, UiSettings};
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SettingsToml {
     pub(super) package: PackageToml,
     #[serde(default)]
@@ -25,9 +24,9 @@ pub(super) struct SettingsToml {
     #[serde(default)]
     pub(super) app: AppToml,
     #[serde(default)]
-    pub(super) workspace: WorkspaceSettings,
+    pub(super) unlocked_folders: AppUnlockedFolders,
     #[serde(default)]
-    pub(super) backups: BackupFolderTable,
+    pub(super) backups: AppBackupFolders,
 }
 
 /// `[package]`: the settings format. The data-folder layout under `.upriv/` is fixed.
@@ -223,17 +222,36 @@ pub(crate) fn default_keep() -> u32 {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub(super) struct AppToml {
     /// Last vault id opened in the UI (empty = none). Always written so the
-    /// key stays visible in `settings.toml`; vault-root mode lives in `.upriv-data-folder`.
+    /// key stays visible in `settings.toml`. The data folder list is not here:
+    /// it is `.upriv-data-folder` in the app home.
     #[serde(default)]
     pub(super) last_opened_vault: String,
 }
 
 pub(super) fn parse_settings_toml(raw: &str, path: &Path) -> Result<SettingsToml> {
-    let parsed: SettingsToml =
+    let mut parsed: SettingsToml =
         toml::from_str(raw).map_err(|error| UprivError::VaultRootIncomplete {
             path: path.to_path_buf(),
             detail: format!("invalid settings.toml: {error}"),
         })?;
+    let lists = parsed
+        .unlocked_folders
+        .devices
+        .check()
+        .map_err(|detail| format!("[unlocked_folders] {detail}"))
+        .and_then(|()| {
+            parsed
+                .backups
+                .devices
+                .check()
+                .map_err(|detail| format!("[backups] {detail}"))
+        });
+    if let Err(detail) = lists {
+        return Err(UprivError::VaultRootIncomplete {
+            path: path.to_path_buf(),
+            detail: format!("invalid settings.toml: {detail}"),
+        });
+    }
     if parsed.package.version != SETTINGS_FORMAT_VERSION {
         return Err(UprivError::VaultRootIncomplete {
             path: path.to_path_buf(),
@@ -246,18 +264,10 @@ pub(super) fn parse_settings_toml(raw: &str, path: &Path) -> Result<SettingsToml
     Ok(parsed)
 }
 
-/// Pure `settings.toml` → [`AppSettings`] parse — no disk access, no alias merge.
+/// Pure `settings.toml` → [`AppSettings`] parse, with no disk access.
 ///
-/// Mobile SAF path uses this so that `settings.toml` bytes read via the
-/// Android DocumentFile bridge can be turned into the same wire shape as the
-/// on-disk `load_app_settings_at()` path, without giving Rust core a SAF
-/// `content://` root. Callers that also know the current vault-root mode/path
-/// (from a SAF alias file managed outside Rust) can overwrite the resulting
-/// `AppSettings::app` fields afterwards.
-///
-/// The `app` section always comes back with defaults
-/// (`vault_root_mode = default_root`, `upriv_root_path = ""`) — vault-root
-/// mode/path is never stored in TOML.
+/// A phone uses it to check the `settings.toml` bytes of a picked folder,
+/// read through the platform's document access, before that folder is used.
 pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
     let parsed = parse_settings_toml(raw, &PathBuf::from("settings.toml"))?;
     Ok(AppSettings {
@@ -271,11 +281,9 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
             keep_last_entries: parsed.logging.keep_last_entries,
         },
         app: AppSectionSettings {
-            vault_root_mode: VaultRootMode::DefaultRoot,
-            upriv_root_path: String::new(),
             last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
         },
-        workspace: parsed.workspace,
+        unlocked_folders: parsed.unlocked_folders,
         backups: parsed.backups,
     })
 }
@@ -283,20 +291,8 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
 /// Pure [`AppSettings`] → `settings.toml` serialization. `[app].last_opened_vault`
 /// is taken from the wire value (trimmed); empty clears the pointer.
 ///
-/// Symmetric with [`parse_settings_toml_str`] — no disk access. Vault-root
-/// mode/path fields are **not** written (same rule as [`write_settings_toml_only`]).
+/// Symmetric with [`parse_settings_toml_str`] — no disk access.
 pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
-    let vault_root = if settings.app.vault_root_mode == VaultRootMode::CustomRoot
-        && !settings.app.upriv_root_path.trim().is_empty()
-    {
-        Some(Path::new(settings.app.upriv_root_path.trim()))
-    } else {
-        None
-    };
-    // Reserved check: custom_root FS root when set, plus always
-    // `path_is_under_reserved_upriv_tree` inside validate (default_root / SAF).
-    validate_workspace_table(&settings.workspace, vault_root)?;
-
     let last_opened_vault = settings.app.last_opened_vault.trim().to_string();
     let file = SettingsToml {
         package: PackageToml {
@@ -312,7 +308,7 @@ pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
             keep_last_entries: settings.logging.keep_last_entries,
         },
         app: AppToml { last_opened_vault },
-        workspace: settings.workspace.clone(),
+        unlocked_folders: settings.unlocked_folders.clone(),
         backups: settings.backups.clone(),
     };
     let body = toml::to_string_pretty(&file).map_err(|error| {
@@ -321,63 +317,24 @@ pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
         )))
     })?;
     let body = inject_package_section_comments(&body);
-    let body = inject_app_section_comments(&body);
-    let body = inject_workspace_section_comments(&body);
+    let body = inject_unlocked_section_comments(&body);
     let header = "# Upriv marker + app settings (vault-root directory)\n\n";
     Ok(format!("{header}{body}"))
 }
 
-const APP_SECTION_COMMENTS: &str = "\
-# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-data-folder`, not here.
-# Missing/inactive → default_root; active + path → custom_root.";
+const UNLOCKED_SECTION_COMMENTS: &str = "\
+# Unlocked folders: where an open vault's files appear to other apps, one list per device.
+# `encrypted_vaults` is one switch for every device: encrypted vaults get a folder too.";
 
-const WORKSPACE_SECTION_COMMENTS: &str = "\
-# One folder per system. `place` starts unset: nothing is created until chosen.
-# beside = workspace next to .upriv. custom = `path`.
-# `file_manager_folder` is one flag for every system and starts off. Phones keep it and do not mount.";
-
-/// Append vault-root alias pointer under `[app]` (after `last_opened_vault`).
-fn inject_app_section_comments(body: &str) -> String {
-    let Some(app_idx) = body.find("[app]") else {
+/// Insert the unlocked folders comment before their table.
+fn inject_unlocked_section_comments(body: &str) -> String {
+    let Some(index) = body.find("[unlocked_folders]") else {
         return body.to_string();
     };
-    let after_header = app_idx + "[app]".len();
-    let has_newline = body.as_bytes().get(after_header) == Some(&b'\n');
-    let content_start = after_header + usize::from(has_newline);
-    let app_tail = &body[content_start..];
-
-    if let Some(rel) = app_tail.find("last_opened_vault =") {
-        let line_end = app_tail[rel..]
-            .find('\n')
-            .map(|i| rel + i)
-            .unwrap_or(app_tail.len());
-        let insert_at = content_start + line_end;
-        return format!(
-            "{}\n{APP_SECTION_COMMENTS}{}",
-            &body[..insert_at],
-            &body[insert_at..]
-        );
-    }
-
     format!(
-        "{}{APP_SECTION_COMMENTS}\n{}",
-        &body[..content_start],
-        &body[content_start..]
-    )
-}
-
-/// Insert the workspace comment before the first per-system table.
-fn inject_workspace_section_comments(body: &str) -> String {
-    let Some(ws_idx) = body.find("[workspace.linux]") else {
-        return body.to_string();
-    };
-    if body[..ws_idx].ends_with(WORKSPACE_SECTION_COMMENTS) {
-        return body.to_string();
-    }
-    format!(
-        "{}{WORKSPACE_SECTION_COMMENTS}\n{}",
-        &body[..ws_idx],
-        &body[ws_idx..]
+        "{}{UNLOCKED_SECTION_COMMENTS}\n{}",
+        &body[..index],
+        &body[index..]
     )
 }
 
@@ -465,9 +422,6 @@ last_opened_vault = "kept"
         assert!(!settings.ui.lifecycle_row_runs_button);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
-        // Vault-root mode/path never come from TOML.
-        assert_eq!(settings.app.vault_root_mode, VaultRootMode::DefaultRoot);
-        assert!(settings.app.upriv_root_path.is_empty());
     }
 
     #[test]
@@ -522,27 +476,12 @@ vault_list_show_vault_settings_button = false
         let mut settings = AppSettings::default();
         settings.ui.locale = "es".into();
         settings.app.last_opened_vault = " from-wire ".into();
-        // Explicit custom_root should NOT be written to TOML — alias is the source of truth.
-        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
-        settings.app.upriv_root_path = "content://ignored".into();
         let out = serialize_settings_toml_str(&settings).unwrap();
         assert!(out.contains("locale = \"es\""));
         assert!(out.contains("last_opened_vault = \"from-wire\""));
-        let opened_idx = out
-            .find("last_opened_vault = \"from-wire\"")
-            .expect("last_opened");
-        let mode_idx = out.find("Vault-root mode").expect("vault-root comment");
         assert!(
-            opened_idx < mode_idx,
-            "vault-root comment must follow last_opened_vault: {out}"
-        );
-        assert!(
-            out.contains("One folder per system"),
-            "workspace comment missing: {out}"
-        );
-        assert!(
-            !out.contains("vault_root_mode") && !out.contains("upriv_root_path"),
-            "mode/path must not be persisted: {out}"
+            out.contains("Unlocked folders: where an open vault's files appear"),
+            "unlocked folders comment missing: {out}"
         );
     }
 
@@ -594,30 +533,63 @@ vault_list_show_vault_settings_button = false
     }
 
     #[test]
-    fn serialize_rejects_relative_workspace_path() {
-        let mut settings = AppSettings::default();
-        settings.workspace.linux.path = "workspace".into();
-        let err = serialize_settings_toml_str(&settings).unwrap_err();
-        assert!(matches!(err, UprivError::WorkspacePathInvalid { .. }));
+    fn the_lists_round_trip_per_device() {
+        let raw = r#"
+[package]
+version = 1
+
+[unlocked_folders]
+encrypted_vaults = true
+
+[unlocked_folders.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1
+next_number = 2
+
+[[unlocked_folders.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
+name = "SSD"
+path = "/mnt/ssd"
+
+[backups.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+next_number = 1
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(settings.unlocked_folders.encrypted_vaults);
+        assert_eq!(settings.unlocked_folders.devices.0.len(), 1);
+        // A group that holds nothing is not written back.
+        let written = serialize_settings_toml_str(&settings).unwrap();
+        assert!(written.contains("path = \"/mnt/ssd\""), "{written}");
+        assert!(!written.contains("[backups.devices"), "{written}");
+        assert_eq!(
+            parse_settings_toml_str(&written).unwrap().unlocked_folders,
+            settings.unlocked_folders
+        );
     }
 
     #[test]
-    fn serialize_rejects_reserved_workspace_under_custom_root() {
-        let mut settings = AppSettings::default();
-        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
-        settings.app.upriv_root_path = "/data/root".into();
-        settings.workspace.linux.path = "/data/root/.upriv/vaults".into();
-        let err = serialize_settings_toml_str(&settings).unwrap_err();
-        assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
+    fn a_list_whose_selection_names_no_row_is_refused() {
+        let raw = r#"
+[package]
+version = 1
+
+[unlocked_folders.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 4
+next_number = 1
+"#;
+        let err = parse_settings_toml_str(raw).unwrap_err();
+        assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
 
     #[test]
-    fn serialize_rejects_reserved_workspace_under_default_root() {
-        let mut settings = AppSettings::default();
-        assert_eq!(settings.app.vault_root_mode, VaultRootMode::DefaultRoot);
-        settings.workspace.linux.path = "/tmp/foo/.upriv/vaults/x".into();
-        let err = serialize_settings_toml_str(&settings).unwrap_err();
-        assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
+    fn an_unknown_table_is_refused() {
+        let raw = "[package]\nversion = 1\n\n[not_a_table]\nkey = 1\n";
+        assert!(matches!(
+            parse_settings_toml_str(raw),
+            Err(UprivError::VaultRootIncomplete { .. })
+        ));
     }
 
     #[test]

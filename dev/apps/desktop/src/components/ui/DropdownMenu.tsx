@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { AnchoredPopover } from "./AnchoredPopover";
+import { ABOVE_MODAL_Z_INDEX, AnchoredPopover } from "./AnchoredPopover";
 import { MenuPanelHeader } from "./MenuPanelHeader";
 import { menuItemClass, menuPanelClass } from "./menuStyles";
 
@@ -15,6 +15,12 @@ export interface DropdownMenuItem {
   id: string;
   label: string;
   icon?: ReactNode;
+  /** A second line under the label: why a disabled item waits, for one. */
+  description?: string;
+  /** Deletes or removes something: the error color. */
+  danger?: boolean;
+  /** An item that turns something on and off: a check while it is on. */
+  checked?: boolean;
   className?: string;
   disabled?: boolean;
   onSelect?: () => void;
@@ -33,12 +39,23 @@ interface DropdownMenuProps {
   items: DropdownMenuItem[];
   align?: "left" | "right";
   label: string;
+  /** Each time the menu opens, so items that depend on the moment can ask again. */
+  onOpen?: () => void;
+  /** The trigger sits inside a modal: the menu opens above it. */
+  aboveModal?: boolean;
 }
 
 /** One step above row hover (`surface-container-high`) so the trigger stays visible. */
 const triggerActiveClass = "bg-surface-container-highest text-on-surface";
 
-export function DropdownMenu({ trigger, items, align = "right", label }: DropdownMenuProps) {
+export function DropdownMenu({
+  trigger,
+  items,
+  align = "right",
+  label,
+  onOpen,
+  aboveModal = false,
+}: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
@@ -54,6 +71,7 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
         onClick: (event: React.MouseEvent) => {
           trigger.props.onClick?.(event);
           event.stopPropagation();
+          if (!open) onOpen?.();
           setOpen((prev) => !prev);
         },
       })
@@ -70,6 +88,7 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
         id={menuId}
         role="menu"
         aria-label={label}
+        zIndex={aboveModal ? ABOVE_MODAL_Z_INDEX : undefined}
         className={["min-w-[12rem] py-1", menuPanelClass].join(" ")}
       >
         <MenuPanelHeader title={label} onClose={() => setOpen(false)} />
@@ -78,17 +97,44 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
             <li key={item.id} role="none">
               <button
                 type="button"
-                role="menuitem"
+                role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+                aria-checked={item.checked}
                 disabled={item.disabled}
-                className={[menuItemClass, item.className].filter(Boolean).join(" ")}
+                className={[
+                  menuItemClass,
+                  item.danger ? "!text-on-error-container" : "",
+                  item.className,
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 onClick={() => {
                   if (item.disabled) return;
                   item.onSelect?.();
                   setOpen(false);
                 }}
               >
-                {item.icon ? <span className="text-on-surface-variant">{item.icon}</span> : null}
-                {item.label}
+                {item.icon ? (
+                  <span
+                    className={item.danger ? "text-on-error-container" : "text-on-surface-variant"}
+                  >
+                    {item.icon}
+                  </span>
+                ) : null}
+                {item.description ? (
+                  <span className="min-w-0 flex-1">
+                    <span className="block">{item.label}</span>
+                    <span className="mt-0.5 block whitespace-normal font-sans text-xs leading-snug text-on-surface-variant">
+                      {item.description}
+                    </span>
+                  </span>
+                ) : (
+                  item.label
+                )}
+                {item.checked ? (
+                  <span aria-hidden className="ml-auto pl-3 text-xs text-vault-open">
+                    ✓
+                  </span>
+                ) : null}
               </button>
             </li>
           ))}

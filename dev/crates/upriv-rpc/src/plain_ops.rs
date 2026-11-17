@@ -1,14 +1,12 @@
 //! Plaintext-folder RPCs. Handlers for an open `upriv_plain` vault and for
 //! recovery of a leftover folder.
 
-use std::path::Path;
-
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    confirm_plain_destination, open_vault_as_job, open_vault_confirmed, plain_deletions,
-    plain_destination, plain_leftover, plain_send, plain_status, plain_sync, plain_unsend,
-    remove_plain_leftover, vault_held_elsewhere, wait_for_previous_app, OpenVaultOutcome,
+    open_vault_as_job, plain_deletions, plain_destination, plain_leftover, plain_send,
+    plain_status, plain_sync, plain_unsend, remove_plain_leftover, vault_held_elsewhere,
+    wait_for_previous_app,
 };
 
 use super::secret::SecretString;
@@ -26,16 +24,6 @@ struct VaultOpenParams {
     id: String,
     #[serde(default)]
     password: Option<SecretString>,
-    #[serde(default)]
-    confirm_path: Option<String>,
-    job: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VaultPlainConfirmParams {
-    id: String,
-    path: String,
     job: String,
 }
 
@@ -98,40 +86,8 @@ pub(super) fn vault_open(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let id = parsed.id.trim();
-    let opened = match parsed.confirm_path.as_deref().map(str::trim) {
-        Some(path) if !path.is_empty() => {
-            open_vault_confirmed(&root, id, password, Path::new(path), &parsed.job)
-        }
-        _ => open_vault_as_job(&root, id, password, &parsed.job),
-    };
-    match opened {
-        Ok(OpenVaultOutcome::Opened) => ok(json!(null)),
-        Ok(OpenVaultOutcome::PlainConfirm { path, class }) => ok(json!({
-            "pendingPlainConfirm": {
-                "path": path.display().to_string(),
-                "class": class,
-            }
-        })),
-        Err(error) => map_core_err(error),
-    }
-}
-
-pub(super) fn vault_plain_confirm(params: Value) -> RpcResponse {
-    let parsed: VaultPlainConfirmParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let path = parsed.path.trim();
-    if path.is_empty() {
-        return err("invalid_request", "path is required".into());
-    }
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match confirm_plain_destination(&root, parsed.id.trim(), Path::new(path), &parsed.job) {
-        Ok(()) => ok(json!(null)),
+    match open_vault_as_job(&root, parsed.id.trim(), password, &parsed.job) {
+        Ok(opened) => ok(serde_json::to_value(opened).unwrap_or(json!(null))),
         Err(error) => map_core_err(error),
     }
 }

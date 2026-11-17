@@ -5,11 +5,18 @@ import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
 import { VaultClosePromptModal } from "./modals/VaultClosePromptModal";
 import { VaultRecoveryModal } from "./modals/VaultRecoveryModal";
+import {
+  UnlockedFolderDriverModal,
+  type UnlockedFolderDriver,
+} from "./modals/UnlockedFolderDriverModal";
 import type {
+  AppUnlockedChoice,
+  DeviceGroups,
   PlainFolderClass,
   PlainLeftover,
   PlainPlaceChoice,
   PlainRecoveryAction,
+  VaultUnlockedChoice,
 } from "@upriv/shared";
 
 interface VaultLifecycleLayerProps {
@@ -31,7 +38,12 @@ interface VaultLifecycleLayerProps {
   onRecoveryAction: (action: PlainRecoveryAction) => void;
   placeOpen: boolean;
   placeVaultName: string;
-  placeWorkspaceChoices: boolean;
+  /** The app's unlocked folders can change: no vault is open. */
+  placeAppChoices: boolean;
+  /** The app's unlocked folders, which a folder typed for the app's list may not repeat. */
+  placeAppUnlocked: DeviceGroups<AppUnlockedChoice>;
+  /** The vault's own unlocked folders; `null` while they load. */
+  placeVaultUnlocked: DeviceGroups<VaultUnlockedChoice> | null;
   placeSubmitting: boolean;
   placeWarningClass: PlainFolderClass | null;
   onPlaceClose: () => void;
@@ -43,6 +55,12 @@ interface VaultLifecycleLayerProps {
   heldSubmitting: boolean;
   onHeldApply: () => void;
   onHeldRestore: () => void;
+  /** An encrypted vault that opened without its unlocked folder's driver. */
+  driverPromptVaultName: string | null;
+  driverKind: UnlockedFolderDriver;
+  driverInstalling: boolean;
+  onDriverInstall: () => void;
+  onDriverDismiss: () => void;
   closeNowVault: VaultListItem | null;
   closeNowUnsaved: boolean;
   closeNowAsks: boolean;
@@ -78,7 +96,9 @@ export function VaultLifecycleLayer({
   onRecoveryAction,
   placeOpen,
   placeVaultName,
-  placeWorkspaceChoices,
+  placeAppChoices,
+  placeAppUnlocked,
+  placeVaultUnlocked,
   placeSubmitting,
   placeWarningClass,
   onPlaceClose,
@@ -90,6 +110,11 @@ export function VaultLifecycleLayer({
   heldSubmitting,
   onHeldApply,
   onHeldRestore,
+  driverPromptVaultName,
+  driverKind,
+  driverInstalling,
+  onDriverInstall,
+  onDriverDismiss,
   closeNowVault,
   closeNowUnsaved,
   closeNowAsks,
@@ -122,12 +147,21 @@ export function VaultLifecycleLayer({
       <PlainPlaceModal
         open={placeOpen}
         vaultName={placeVaultName}
-        workspaceChoices={placeWorkspaceChoices}
+        appChoices={placeAppChoices}
+        appUnlocked={placeAppUnlocked}
+        vaultUnlocked={placeVaultUnlocked}
         submitting={placeSubmitting}
         warningClass={placeWarningClass}
         onClose={onPlaceClose}
         onContinue={onPlaceContinue}
         onAcceptWarning={onPlaceAcceptWarning}
+      />
+      <UnlockedFolderDriverModal
+        vaultName={driverPromptVaultName}
+        driver={driverKind}
+        installing={driverInstalling}
+        onInstall={onDriverInstall}
+        onDismiss={onDriverDismiss}
       />
       <PlainHeldModal
         open={heldOpen}

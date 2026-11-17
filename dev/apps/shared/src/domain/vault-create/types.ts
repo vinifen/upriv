@@ -1,4 +1,3 @@
-import type { VaultBackupFolders } from "../backups/folders";
 import type { KdfUnlockPreset } from "../vault-settings/kdf";
 import type { VaultSettingsConfig } from "../vault-settings";
 
@@ -81,13 +80,8 @@ export interface CreateVaultDraft {
   /** Probe threw (SAF / missing method) — not a wrong archive password. */
   passwordProbeUnavailable: boolean;
   auto_close: VaultSettingsConfig["auto_close"];
+  /** The backup choices, with every device's group a file's settings carried. */
   backup: VaultSettingsConfig["backup"];
-  /**
-   * The backup folders a file's settings carried. A row still holding one of
-   * them is not held up by the live folder check: that folder may be on a
-   * drive this computer does not have.
-   */
-  carriedBackupFolders: VaultBackupFolders | null;
   /** Create-time only — written to `vault.header`, not `config.toml`. */
   kdf: { unlock_preset: KdfUnlockPreset };
   /**
@@ -96,7 +90,8 @@ export interface CreateVaultDraft {
    */
   archiveUnlockPreset: KdfUnlockPreset | null;
   storage: VaultSettingsConfig["storage"];
-  mount: VaultSettingsConfig["mount"];
+  /** The unlocked folder switch and every device's group a file's settings carried. */
+  unlocked_folder: VaultSettingsConfig["unlocked_folder"];
   security: Omit<VaultSettingsConfig["security"], "password_changed_at">;
   /** Carried from an import so create does not reset compression the form does not show. */
   seven_zip: VaultSettingsConfig["seven_zip"];

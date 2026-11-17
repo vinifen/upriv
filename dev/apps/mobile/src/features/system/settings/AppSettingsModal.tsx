@@ -1,31 +1,25 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 import {
+  APP_BACKUP_LIST,
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
+  APP_UNLOCKED_LIST,
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
   LOG_LEVEL_PRESETS,
   SUPPORTED_LOCALES,
+  appListChanges,
   appSettingsEqual,
   isRpcError,
+  listDraftBlocks,
   shouldBumpVaultRootEpoch,
   logFileCountForKeepLast,
   normalizeAppSettings,
-  workspaceSystemsCurrentFirst,
-  appWorkspaceChoice,
-  appWorkspacePlace,
-  validateWorkspaceTable,
-  suggestedDefaultWorkspacePath,
-  workspacePathDisplay,
-  workspaceTablesEqual,
-  workspaceSystemFromHost,
-  workspaceSystemHasShortcut,
   vaultRootGoneRpcError,
-  vaultRootPathForWorkspaceValidation,
-  workspacePathIssueI18nKey,
   type AppSettingsConfig,
+  type ListsSaved,
   type LocaleId,
   type UiTheme,
 } from "@upriv/shared";
@@ -43,31 +37,38 @@ import {
 } from "@/components/ui";
 import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import {
+  AppBackupsSection,
+  AppUnlockedFoldersSection,
   FieldHint,
   FieldLabel,
   PolicyRadioOption,
   SettingsAccordionSection,
   SwitchRow,
 } from "@/components/settings";
-import { PathField } from "@/components/PathField";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useOperationLimit, useToast, useVaultRootIntegrityClose } from "@upriv/shared/react";
-import { useVaultRootService } from "@/platform/services";
+import {
+  hereDevice,
+  useDeviceInfo,
+  useOperationLimit,
+  useToast,
+  useVaultRootIntegrityClose,
+} from "@upriv/shared/react";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 
 const SAVED_INDICATOR_MS = 1500;
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
-/** A phone keeps its backups in the data folder, so it has no backup folder to choose. */
-const PHONE_SETTINGS_SECTIONS = APP_SETTINGS_SECTIONS.filter((section) => section !== "backups");
 
 interface AppSettingsModalProps {
   open: boolean;
   onClose: () => void;
   /** Report unsaved draft so the list shell can refuse opening Data folder / Groups. */
   onDirtyChange?: (dirty: boolean) => void;
-  /** Disable Clear on workspace path while any vault session is open. */
+  /** A vault is open: this device's unlocked folders keep their rows and choice. */
   hasOpenVault?: boolean;
   /** List toast. A save keeps running after the window closes and reports here. */
   onNotice?: (message: string) => void;
+  /** A vault's display name, by id, for the save's toasts. */
+  vaultName?: (vaultId: string) => string;
 }
 
 /** A save in flight, or one that failed, shown again when the window reopens. */
@@ -88,6 +89,7 @@ export function AppSettingsModal({
   onDirtyChange,
   hasOpenVault = false,
   onNotice,
+  vaultName = (vaultId) => vaultId,
 }: AppSettingsModalProps) {
   const { t, locale } = useTranslation();
   const { colors, typography } = useTheme();
@@ -106,6 +108,7 @@ export function AppSettingsModal({
     [show],
   );
   const vaultRootService = useVaultRootService();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
   const {
     settings,
     replaceSettings,
@@ -121,12 +124,14 @@ export function AppSettingsModal({
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [resolveFailure, setResolveFailure] = useState<unknown>(null);
+  /**
+   * The settings as the window opened, or as the last save left them. A save
+   * sends the lists' change from here, so a switch core made meanwhile stays.
+   */
+  const [baseline, setBaseline] = useState<AppSettingsConfig | null>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
-  /** True after the user patches workspace this modal session — skip live Context sync. */
-  const workspaceTouchedRef = useRef(false);
   const commitSaveLock = useRef(false);
   /** Bumped only when a save runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const saveBusyGen = useRef(0);
@@ -137,9 +142,9 @@ export function AppSettingsModal({
 
   const isDirty = useMemo(
     () =>
-      Boolean(draft && !appSettingsEqual(draft, settings)) ||
+      Boolean(draft && !appSettingsEqual(draft, baseline ?? settings)) ||
       draftShowHiddenVaultsSession !== showHiddenVaultsSession,
-    [draft, draftShowHiddenVaultsSession, settings, showHiddenVaultsSession],
+    [baseline, draft, draftShowHiddenVaultsSession, settings, showHiddenVaultsSession],
   );
 
   useEffect(() => {
@@ -153,75 +158,47 @@ export function AppSettingsModal({
     openedSessionRef.current = true;
     // A save still running, or one that failed, shows its values again.
     const pending = pendingSaveRef.current;
-    workspaceTouchedRef.current = pending !== null;
+    setBaseline(settings);
     setDraft(pending?.config ?? settings);
     setDraftShowHiddenVaultsSession(pending?.showHidden ?? showHiddenVaultsSession);
   }, [open, settings, showHiddenVaultsSession]);
 
+  // `[app]` is core's: keep the draft on the live value.
   useEffect(() => {
     if (!open) return;
     setDraft((current) => {
       if (!current) return current;
-      if (
-        current.app.vault_root_mode === settings.app.vault_root_mode &&
-        current.app.upriv_root_path === settings.app.upriv_root_path &&
-        current.app.last_opened_vault === settings.app.last_opened_vault
-      ) {
-        return current;
-      }
+      if (current.app.last_opened_vault === settings.app.last_opened_vault) return current;
       return { ...current, app: { ...settings.app } };
     });
-  }, [open, settings.app, settings.app.upriv_root_path, settings.app.vault_root_mode]);
-
-  // Keep draft.workspace aligned unless the user edited Workspace this session.
-  useEffect(() => {
-    if (!open) return;
-    if (workspaceTouchedRef.current) return;
-    setDraft((current) => {
-      if (!current) return current;
-      if (workspaceTablesEqual(current.workspace, settings.workspace)) return current;
-      return { ...current, workspace: { ...settings.workspace } };
-    });
-  }, [open, settings.workspace]);
+  }, [open, settings.app]);
 
   useEffect(() => {
     if (!open) {
-      setResolvedRootPath(null);
       setResolveFailure(null);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: settings.app.vault_root_mode,
-        });
+        const resolved = await vaultRootService.resolve();
         if (cancelled) return;
-        setResolveFailure(null);
-        if (resolved.status === "found") {
-          setResolvedRootPath(resolved.rootPath);
-        } else {
-          setResolvedRootPath(null);
-          setResolveFailure(vaultRootGoneRpcError());
-        }
+        setResolveFailure(resolved.status === "found" ? null : vaultRootGoneRpcError());
       } catch (error) {
-        if (!cancelled) {
-          setResolvedRootPath(null);
-          setResolveFailure(error);
-        }
+        if (!cancelled) setResolveFailure(error);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, settings.app.vault_root_mode, vaultRootService]);
+  }, [open, vaultRootService]);
 
   useEffect(() => {
     if (!open) {
       // A save in flight keeps running; its outcome comes back as a list toast.
       openedSessionRef.current = false;
-      workspaceTouchedRef.current = false;
       setDraft(null);
+      setBaseline(null);
       setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
@@ -255,9 +232,6 @@ export function AppSettingsModal({
 
   const patchDraft = useCallback(
     <S extends keyof AppSettingsConfig>(section: S, patch: Partial<AppSettingsConfig[S]>) => {
-      if (section === "workspace") {
-        workspaceTouchedRef.current = true;
-      }
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) =>
@@ -326,61 +300,45 @@ export function AppSettingsModal({
   };
 
   const formConfig = draft ?? settings;
-  const workspaceRootForValidation = vaultRootPathForWorkspaceValidation(
-    formConfig.app.vault_root_mode,
-    formConfig.app.upriv_root_path,
-    resolvedRootPath,
-  );
-  const workspaceSystem = workspaceSystemFromHost(Platform.OS);
-  const workspacePathInvalid = Boolean(
-    validateWorkspaceTable(formConfig.workspace, workspaceRootForValidation),
-  );
-  /** Open vault + emptied draft must not wipe a configured path for this system. */
-  const workspaceClearWhileOpen =
-    hasOpenVault &&
-    !formConfig.workspace[workspaceSystem].path.trim() &&
-    Boolean(settings.workspace[workspaceSystem].path.trim());
+  const listBase = baseline ?? settings;
+  const hereId = here?.id ?? null;
+  const listsBlocked =
+    listDraftBlocks(
+      listBase.unlocked_folders.devices,
+      formConfig.unlocked_folders.devices,
+      APP_UNLOCKED_LIST,
+      hereId,
+    ) ||
+    listDraftBlocks(listBase.backups.devices, formConfig.backups.devices, APP_BACKUP_LIST, hereId);
 
   const handleSaveClick = () => {
-    if (!isDirty || saveBusy) return;
-    if (workspaceClearWhileOpen) return;
-    const workspaceForCheck = workspaceTouchedRef.current
-      ? (draft ?? settings).workspace
-      : settings.workspace;
-    if (validateWorkspaceTable(workspaceForCheck, workspaceRootForValidation)) {
-      return;
-    }
+    if (!isDirty || saveBusy || listsBlocked) return;
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
 
   const commitSave = () => {
-    if (!isDirty || saveBusy) return;
-    if (workspaceClearWhileOpen) return;
-    const workspaceForSave = workspaceTouchedRef.current
-      ? (draft ?? settings).workspace
-      : { ...settings.workspace };
-    if (validateWorkspaceTable(workspaceForSave, workspaceRootForValidation)) {
-      return;
-    }
+    if (!isDirty || saveBusy || listsBlocked) return;
     if (commitSaveLock.current) return;
     const generation = ++saveBusyGen.current;
     commitSaveLock.current = true;
-    const normalized = normalizeAppSettings({
-      ...(draft ?? settings),
-      app: { ...settings.app },
-      workspace: workspaceForSave,
-    });
+    const normalized = normalizeAppSettings({ ...(draft ?? settings), app: { ...settings.app } });
+    // This device's unlocked folders keep their rows while a vault is open (`no_open_session`).
+    const lists = appListChanges(listBase, normalized, hereId, { unlockedHere: hasOpenVault });
     const showHidden = draftShowHiddenVaultsSession;
     setSaveBusy(true);
     setPendingSave({ config: normalized, showHidden, failure: null });
     let failure: string | null = null;
     void (async () => {
       try {
-        if (!appSettingsEqual(normalized, settings)) {
-          await replaceSettings(normalized);
+        if (!appSettingsEqual(normalized, listBase)) {
+          const saved = await replaceSettings(normalized, { lists });
+          reportListsSaved(saved);
           if (generation !== saveBusyGen.current) return;
-          if (openRef.current) setDraft(normalized);
+          if (openRef.current) {
+            setDraft(normalized);
+            setBaseline(normalized);
+          }
         }
         if (generation !== saveBusyGen.current) return;
         setShowHiddenVaultsSession(showHidden);
@@ -417,8 +375,21 @@ export function AppSettingsModal({
     })();
   };
 
-  const saveBlocked =
-    !isDirty || saveBusy || saveConfirmOpen || workspacePathInvalid || workspaceClearWhileOpen;
+  /** What a save left beyond `settings.toml`: folders that stayed, vaults that kept a device name. */
+  function reportListsSaved(saved: ListsSaved) {
+    for (const folder of saved.keptFolders) {
+      notice(t("folder_list.toast.folder_kept", { path: folder }));
+    }
+    if (saved.unchangedVaults.length > 0) {
+      notice(
+        t("folder_list.toast.vaults_unchanged", {
+          names: saved.unchangedVaults.map(vaultName).join(", "),
+        }),
+      );
+    }
+  }
+
+  const saveBlocked = !isDirty || saveBusy || saveConfirmOpen || listsBlocked;
 
   if (!open || !formConfig) return null;
 
@@ -492,7 +463,7 @@ export function AppSettingsModal({
         footer={footer}
       >
         <View style={styles.content} {...dismissConfirmOnBodyTap}>
-          {PHONE_SETTINGS_SECTIONS.map((sectionId) => (
+          {APP_SETTINGS_SECTIONS.map((sectionId) => (
             <SettingsAccordionSection
               key={sectionId}
               title={t(`modal.app_settings.section.${sectionId}`)}
@@ -509,12 +480,23 @@ export function AppSettingsModal({
                   onChange={(patch) => patchDraft("ui", patch)}
                 />
               ) : null}
-              {sectionId === "workspace" ? (
-                <WorkspaceFields
-                  config={formConfig.workspace}
-                  vaultRootPath={workspaceRootForValidation}
-                  clearDisabled={hasOpenVault}
-                  onChange={(patch) => patchDraft("workspace", patch)}
+              {sectionId === "unlocked_folders" ? (
+                <AppUnlockedFoldersSection
+                  config={formConfig.unlocked_folders}
+                  saved={listBase.unlocked_folders}
+                  here={here}
+                  lockedHint={
+                    hasOpenVault ? t("modal.app_settings.field.unlocked_folders.locked") : null
+                  }
+                  onChange={(patch) => patchDraft("unlocked_folders", patch)}
+                />
+              ) : null}
+              {sectionId === "backups" ? (
+                <AppBackupsSection
+                  config={formConfig.backups}
+                  saved={listBase.backups}
+                  here={here}
+                  onChange={(patch) => patchDraft("backups", patch)}
                 />
               ) : null}
               {sectionId === "vault_list" ? (
@@ -676,178 +658,6 @@ function GeneralFields({
         value={config.lifecycle_row_runs_button}
         onValueChange={(lifecycle_row_runs_button) => onChange({ lifecycle_row_runs_button })}
       />
-    </View>
-  );
-}
-
-function WorkspaceFields({
-  config,
-  onChange,
-  vaultRootPath,
-  clearDisabled = false,
-}: {
-  config: AppSettingsConfig["workspace"];
-  onChange: (patch: Partial<AppSettingsConfig["workspace"]>) => void;
-  vaultRootPath: string | null;
-  clearDisabled?: boolean;
-}) {
-  const { t } = useTranslation();
-  const { colors, typography } = useTheme();
-  const vaultRootService = useVaultRootService();
-  const current = workspaceSystemFromHost(Platform.OS);
-  const currentPlace = appWorkspacePlace(config[current]);
-  const showShortcut = workspaceSystemHasShortcut(current);
-  const pathIssue = validateWorkspaceTable(config, vaultRootPath);
-  const defaultWorkspacePath = suggestedDefaultWorkspacePath(vaultRootPath);
-  const [pickError, setPickError] = useState<string | null>(null);
-
-  return (
-    <View style={styles.fields}>
-      <FieldHint>{t("modal.app_settings.section.workspace_intro")}</FieldHint>
-      {clearDisabled ? (
-        <FieldHint>{t("modal.app_settings.action.clear_workspace_path_blocked_open")}</FieldHint>
-      ) : null}
-      {workspaceSystemsCurrentFirst(Platform.OS).map((system) => {
-        const active = system === current && !clearDisabled;
-        const entry = config[system];
-        const place = appWorkspaceChoice(entry);
-        // Chosen before its folder: the folder is the step left, and Save waits (`empty`).
-        const customMissing = place === "custom" && !entry.path.trim();
-        return (
-          <Fragment key={system}>
-            <View style={active ? undefined : { opacity: 0.6 }}>
-              <FieldLabel disabled={!active}>
-                {t(`modal.app_settings.field.workspace.system.${system}`)}
-              </FieldLabel>
-              <FieldHint disabled={!active}>
-                {system === current
-                  ? t(
-                      showShortcut
-                        ? "modal.app_settings.field.workspace.path_help"
-                        : "modal.app_settings.field.workspace.phone_help",
-                    )
-                  : t("modal.app_settings.field.workspace.other_system")}
-              </FieldHint>
-              {system === current ? (
-                <View style={styles.fields}>
-                  <PolicyRadioOption
-                    value="unset"
-                    checked={place === "unset"}
-                    title={t("modal.app_settings.field.workspace.unset")}
-                    description={t("modal.app_settings.field.workspace.unset_desc")}
-                    disabled={!active}
-                    onSelect={() => {
-                      if (!active) return;
-                      onChange({ [system]: { ...entry, place: "unset", path: "" } });
-                    }}
-                  />
-                  <PolicyRadioOption
-                    value="beside"
-                    checked={place === "beside"}
-                    title={t("modal.app_settings.field.workspace.default")}
-                    description={t("modal.app_settings.field.workspace.default_desc")}
-                    disabled={!active}
-                    onSelect={() => {
-                      if (!active) return;
-                      onChange({ [system]: { ...entry, place: "beside", path: "" } });
-                    }}
-                    footer={
-                      <PathField
-                        value={workspacePathDisplay(defaultWorkspacePath)}
-                        editable={false}
-                      />
-                    }
-                  />
-                  <PolicyRadioOption
-                    value="custom"
-                    checked={place === "custom"}
-                    attention={customMissing}
-                    title={t("modal.app_settings.field.workspace.custom")}
-                    description={t("modal.app_settings.field.workspace.custom_desc")}
-                    disabled={!active}
-                    onSelect={() => {
-                      if (!active || place === "custom") return;
-                      onChange({ [system]: { ...entry, place: "custom", path: "" } });
-                    }}
-                    footer={
-                      <View style={styles.fields}>
-                        <PathField
-                          value={entry.path}
-                          disabled={!active || place !== "custom"}
-                          placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
-                          onChangeText={(path) => {
-                            if (!active) return;
-                            onChange({ [system]: { ...entry, place: "custom", path } });
-                          }}
-                        />
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          label={t("modal.app_settings.action.pick_workspace_folder")}
-                          disabled={!active || Platform.OS !== "android"}
-                          onPress={() => {
-                            if (!active) return;
-                            void (async () => {
-                              setPickError(null);
-                              try {
-                                const picked = await vaultRootService.pickFolder(
-                                  entry.path.trim() || null,
-                                  t("modal.app_settings.action.pick_workspace_folder"),
-                                );
-                                if (!picked?.trim()) return;
-                                onChange({
-                                  [system]: { ...entry, place: "custom", path: picked.trim() },
-                                });
-                              } catch (error) {
-                                setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
-                              }
-                            })();
-                          }}
-                        />
-                      </View>
-                    }
-                  />
-                </View>
-              ) : (
-                <PathField
-                  value={
-                    appWorkspacePlace(entry) === "beside"
-                      ? t("modal.app_settings.field.workspace.default")
-                      : entry.path
-                  }
-                  disabled
-                  placeholder={t("modal.app_settings.field.workspace.unset")}
-                />
-              )}
-            </View>
-            {system === current && showShortcut ? (
-              <SwitchRow
-                label={t("modal.app_settings.field.workspace.mount")}
-                hint={t("modal.app_settings.field.workspace.mount_help")}
-                value={config.file_manager_folder}
-                disabled={clearDisabled || currentPlace === "unset"}
-                onValueChange={(file_manager_folder) => onChange({ file_manager_folder })}
-              />
-            ) : null}
-          </Fragment>
-        );
-      })}
-      {pathIssue ? (
-        <Text
-          style={[typography.caption, { color: colors.onErrorContainer }]}
-          accessibilityRole="alert"
-        >
-          {t(workspacePathIssueI18nKey(pathIssue))}
-        </Text>
-      ) : null}
-      {pickError ? (
-        <Text
-          style={[typography.caption, { color: colors.onErrorContainer }]}
-          accessibilityRole="alert"
-        >
-          {pickError}
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -1105,6 +915,5 @@ const styles = StyleSheet.create({
   fields: { gap: spacing.md },
   fieldGroup: { gap: spacing.xs },
   optionsCol: { gap: spacing.sm },
-  rowWrap: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   footerCol: { gap: spacing.md },
 });

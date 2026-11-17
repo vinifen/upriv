@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::host_fs::{export_tree_uri, SAF_EXPORT_ROOT};
+use crate::host_fs::{is_tree_mounted, tree_uri_of};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{
@@ -38,14 +38,13 @@ pub(super) fn record_file(
 ) -> Result<()> {
     add_unfinished_file(
         root,
-        UnfinishedFileRecord {
+        UnfinishedFileRecord::written_here(
             work,
-            vault_id: vault_id.map(str::to_string),
-            host: String::new(),
-            path: partial.to_string_lossy().into_owned(),
-            tree: export_tree_uri(partial),
-            job: job.id().to_string(),
-        },
+            vault_id.map(str::to_string),
+            partial.to_string_lossy().into_owned(),
+            tree_uri_of(partial),
+            job.id().to_string(),
+        ),
     )
 }
 
@@ -76,8 +75,8 @@ pub(super) fn partial_work(work: UnfinishedWork) -> PartialWork {
 
 /// Clear what a crash left: delete each vault an import never finished, then
 /// remove each unfinished file this computer recorded. Returns the
-/// storage-access folders that hold such a file and are not mounted: mount
-/// each as the export folder and sweep again. Whatever cannot be removed keeps
+/// storage-access trees that hold such a file and are not mounted: mount
+/// each and sweep again. Whatever cannot be removed keeps
 /// its record for the next launch.
 pub fn sweep_unfinished(root: &VaultRoot) -> Result<Vec<String>> {
     sweep_imports(root)?;
@@ -117,9 +116,10 @@ fn sweep_files(root: &VaultRoot) -> Result<Vec<String>> {
             continue;
         }
         if let Some(tree) = &record.tree {
-            let mounted = export_tree_uri(Path::new(SAF_EXPORT_ROOT));
-            if mounted.as_deref() != Some(tree.as_str()) {
-                folders.push(tree.clone());
+            if !is_tree_mounted(tree) {
+                if !folders.contains(tree) {
+                    folders.push(tree.clone());
+                }
                 continue;
             }
         }
@@ -159,14 +159,13 @@ mod tests {
         tree: Option<&str>,
         job: &str,
     ) -> UnfinishedFileRecord {
-        UnfinishedFileRecord {
+        UnfinishedFileRecord::written_here(
             work,
-            vault_id: Some("notes".into()),
-            host: String::new(),
-            path: path.to_string_lossy().into_owned(),
-            tree: tree.map(str::to_string),
-            job: job.into(),
-        }
+            Some("notes".into()),
+            path.to_string_lossy().into_owned(),
+            tree.map(str::to_string),
+            job.into(),
+        )
     }
 
     #[test]
@@ -263,8 +262,8 @@ mod tests {
     fn a_folder_that_is_not_mounted_is_named_once_and_keeps_its_records() {
         let (_tmp, root) = vault_root_with(&[]);
         let tree = "content://tree/primary%3ADownload";
-        let first = Path::new(SAF_EXPORT_ROOT).join("A.zip.upriv-part");
-        let second = Path::new(SAF_EXPORT_ROOT).join("B.zip.upriv-part");
+        let first = crate::host_fs::tree_root(tree).join("A.zip.upriv-part");
+        let second = crate::host_fs::tree_root(tree).join("B.zip.upriv-part");
         add_unfinished_file(
             &root,
             record(&first, UnfinishedWork::PlainExport, Some(tree), "ended-a"),
@@ -281,13 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn a_record_from_another_computer_waits_for_that_computer() {
+    fn a_record_from_another_device_waits_for_that_device() {
         let (tmp, root) = vault_root_with(&[]);
         let partial = tmp.path().join("Notes.zip.upriv-part");
         crate::host_fs::write(&partial, b"readable").unwrap();
         let mut state = load_runtime_state(&root).unwrap();
         state.unfinished_files.push(UnfinishedFileRecord {
-            host: "another-computer".into(),
+            device: "3e301fc022fc5185e12822bc2a251f64".into(),
             ..record(&partial, UnfinishedWork::PlainExport, None, "ended-job")
         });
         save_runtime_state(&root, &state).unwrap();

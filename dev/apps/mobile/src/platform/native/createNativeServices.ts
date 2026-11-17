@@ -1,35 +1,24 @@
 import type {
   AppServices,
-  AppSettingsConfig,
   AppSettingsLoadResult,
-  AppSettingsSaveOptions,
   AppSettingsService,
+  DataFolderStatus,
   LogService,
   VaultRootService,
 } from "@upriv/shared";
-import {
-  isRpcError,
-  isVaultRootUnreachableError,
-  newJobId,
-  normalizeAppSettings,
-  SAF_VAULT_ROOT,
-} from "@upriv/shared";
+import { isSafContentUri, newJobId, normalizeAppSettings } from "@upriv/shared";
 import {
   rpcAppSettingsGet,
-  rpcAppSettingsParseToml,
   rpcAppSettingsSave,
+  rpcDataFolderApply,
+  rpcDataFolderList,
+  rpcDataFolderSearch,
+  rpcDataFolderStatus,
   rpcLogDelete,
   rpcLogEvent,
   rpcLogGet,
   rpcLogList,
-  rpcVaultRootDefaultRootStatus,
-  rpcVaultRootInspectPath,
-  rpcVaultRootReadAlias,
-  rpcVaultRootRememberCustom,
   rpcVaultRootResolve,
-  rpcVaultRootSetupDefaultRoot,
-  rpcVaultRootSetupPath,
-  rpcVaultRootSuggestedCustomPath,
 } from "@/lib/rpc";
 import { nativeVaultGroupService } from "./vaultGroupService";
 import { nativeVaultLifecycleService } from "./vaultLifecycleService";
@@ -37,26 +26,26 @@ import { nativeVaultService } from "./vaultService";
 import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
 import { nativeDataFolderService } from "./dataFolderService";
+import { nativeDeviceService } from "./deviceService";
+import { mountDeviceTrees } from "./deviceTrees";
+import { nativeExportTrees } from "./exportTrees";
+import { nativeFolderListService } from "./folderListService";
 import { nativeJobService } from "./jobService";
-import { nativeSafExportMount } from "./safExportMount";
 import { nativeCreateVaultService } from "./createVaultService";
 import { nativeVaultSecurityService } from "./vaultSecurityService";
-import { isSafLogicalRoot } from "./androidVaultHome";
-import { planSafSwitch, rememberedCustomFolderPath } from "./documentsGrant";
-import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
 import {
-  isSafTreeUri,
-  mountSafRoot,
-  safDocumentsInitialUri,
-  safGetActiveUri,
-  safInspectRoot,
-  safPersist,
-  safReadSettings,
-  safRelease,
-  safSetActiveUri,
-  unmountSafRoot,
-  type SafInspectStatus,
-} from "./safVaultRoot";
+  mountDefaultDataFolder,
+  mountDefaultForSearch,
+  mountRowDataFolder,
+  mountSelectedDataFolder,
+  mountedDataFolder,
+  phoneDeviceId,
+  restoreDataFolder,
+  selectedDataFolder,
+  unmountDataFolder,
+} from "./phoneDataFolder";
+import { pickVaultRootFolder } from "./pickVaultRootFolder";
+import { mountSafRoot, mountTree, safDocumentsGrant, safDocumentsInitialUri } from "./safVaultRoot";
 
 const nativeLogService: LogService = {
   async listFiles() {
@@ -81,273 +70,103 @@ const nativeLogService: LogService = {
 };
 
 /**
- * Kotlin `valid` only means non-empty UTF-8; the Rust parse decides. A library
- * without that RPC (`unknown_method`) is thrown, not read as `incomplete`.
+ * Settings follow the data folder the list selects, mounted at the data
+ * folder root before Rust reads them. A save that changed a list mounts the
+ * trees of this phone's rows.
  */
-async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
-  const status = safInspectRoot(safUri);
-  if (status !== "valid") return status;
-  const toml = safReadSettings(safUri);
-  if (toml == null || !toml.trim()) return "incomplete";
-  try {
-    await rpcAppSettingsParseToml(toml);
-    return "valid";
-  } catch (error) {
-    if (isRpcError(error) && error.code === "unknown_method") throw error;
-    return "incomplete";
-  }
-}
-
-/** Point the active grant at `next`, then release only the folder the plan names. */
-function commitSafSwitch(previous: string | null, next: string): void {
-  const plan = planSafSwitch(previous, next);
-  if (next) safSetActiveUri(next);
-  if (!plan.releaseUri) return;
-  try {
-    safRelease(plan.releaseUri);
-  } catch {
-    /* best-effort release */
-  }
-}
-
-function clearActiveSafUri(): void {
-  const previousUri = safGetActiveUri();
-  unmountSafRoot();
-  if (!previousUri) return;
-  const plan = planSafSwitch(previousUri, "");
-  safSetActiveUri(null);
-  if (!plan.releaseUri) return;
-  try {
-    safRelease(plan.releaseUri);
-  } catch {
-    /* best-effort release */
-  }
-}
-
-function mountActiveSafUri(): string | null {
-  const uri = safGetActiveUri();
-  if (!uri) return null;
-  mountSafRoot(uri);
-  return uri;
-}
-
-/**
- * Mount the active grant for a settings read. An unplugged drive leaves the
- * bridge unmounted, so Rust answers from `.upriv-data-folder` (custom_root, not on disk)
- * and the pointer survives until the drive is back.
- */
-function mountActiveSafUriForLoad(): string | null {
-  const uri = safGetActiveUri();
-  if (!uri) return null;
-  try {
-    mountSafRoot(uri);
-  } catch (error) {
-    if (!isVaultRootUnreachableError(error)) throw error;
-    unmountSafRoot();
-  }
-  return uri;
-}
-
-/** Put the bridge back on the folder that was active before a failed switch. */
-function restoreSafMount(previous: string | null, attempted: string): void {
-  if (previous && previous !== attempted) {
-    try {
-      mountSafRoot(previous);
-    } catch {
-      unmountSafRoot();
-    }
-    return;
-  }
-  if (!previous) unmountSafRoot();
-}
-
-function withLogicalRoot(config: AppSettingsConfig): AppSettingsConfig {
-  return {
-    ...config,
-    app: { ...config.app, upriv_root_path: SAF_VAULT_ROOT },
-  };
-}
-
-/**
- * Settings follow the active data folder. A picked `content://` tree is
- * mounted at the logical root before Rust reads or writes it.
- */
-function createSafAwareAppSettingsService(): AppSettingsService {
-  const rustLoad = async (): Promise<AppSettingsLoadResult> => {
+const nativeAppSettingsService: AppSettingsService = {
+  async load(): Promise<AppSettingsLoadResult> {
+    await mountSelectedDataFolder();
     const result = await rpcAppSettingsGet();
     return {
       settings: normalizeAppSettings(result.settings),
       onDisk: result.onDisk,
       rootPath: result.rootPath,
     };
-  };
+  },
 
-  const rustSave = async (
-    config: AppSettingsConfig,
-    options?: AppSettingsSaveOptions,
-  ): Promise<boolean> => {
-    const { wrote } = await rpcAppSettingsSave(normalizeAppSettings(config), {
-      syncAlias: options?.syncAlias,
-    });
-    return wrote;
-  };
+  async save(config, lists) {
+    const saved = await rpcAppSettingsSave(normalizeAppSettings(config), lists);
+    await mountDeviceTrees();
+    return saved;
+  },
+};
 
-  return {
-    async load(): Promise<AppSettingsLoadResult> {
-      const uri = mountActiveSafUriForLoad();
-      const loaded = await rustLoad();
-      const pointed = loaded.settings.app.upriv_root_path.trim() || (loaded.rootPath ?? "").trim();
-      if (uri && isSafLogicalRoot(pointed)) {
-        return {
-          ...loaded,
-          rootPath: uri,
-          settings: {
-            ...loaded.settings,
-            app: {
-              ...loaded.settings.app,
-              vault_root_mode: "custom_root",
-              upriv_root_path: uri,
-            },
-          },
-        };
-      }
-      if (uri) clearActiveSafUri();
-      return loaded;
-    },
+/** Default is not checked while a row is the data folder: the root serves that row. */
+const DEFAULT_NOT_CHECKED: DataFolderStatus = { state: "ok", content: null, details: null };
 
-    async save(config: AppSettingsConfig, options?: AppSettingsSaveOptions): Promise<boolean> {
-      const normalized = normalizeAppSettings(config);
-      const treeUri = normalized.app.upriv_root_path.trim();
-      if (normalized.app.vault_root_mode === "custom_root" && isSafTreeUri(treeUri)) {
-        const previous = safGetActiveUri();
-        safPersist(treeUri);
-        mountSafRoot(treeUri);
-        let wrote: boolean;
-        try {
-          wrote = await rustSave(withLogicalRoot(normalized), options);
-        } catch (error) {
-          restoreSafMount(previous, treeUri);
-          throw error;
-        }
-        if (!wrote) {
-          restoreSafMount(previous, treeUri);
-          return false;
-        }
-        const plan = planSafSwitch(previous, treeUri);
-        if (plan.rememberCustomUri) {
-          try {
-            await rpcVaultRootRememberCustom(plan.rememberCustomUri);
-          } catch (error) {
-            // Settings are already on this tree. The next launch must mount it.
-            // Keep the previous grant until `android_custom_folder=` is written.
-            safSetActiveUri(treeUri);
-            throw error;
-          }
-        }
-        commitSafSwitch(previous, treeUri);
-        return wrote;
-      }
-
-      // Record the Custom folder before the save. If that write fails, settings
-      // stay unchanged and this folder stays mounted. If the save fails after
-      // it, `android_custom_folder=` is already stored.
-      const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
-      if (leaving) await rpcVaultRootRememberCustom(leaving);
-      const wrote = await rustSave(normalized, options);
-      clearActiveSafUri();
-      return wrote;
-    },
-  };
-}
+/** Default with no Documents grant yet: confirming Documents makes the data folder there. */
+const DEFAULT_TO_MAKE: DataFolderStatus = { state: "ok", content: "empty", details: null };
 
 /**
- * Vault-root service. A picked `content://` folder is mounted, then Rust
- * creates and edits vaults there. Other paths go straight to Rust.
- *
- * Resolve only reads. It never releases the grant: an unplugged drive throws
- * `vault_root_unreachable`, and only choosing another data folder drops it.
+ * The phone's data folder. Rust reaches the folder this device's list
+ * selects at `/upriv-saf-root`: a row's picked tree, or Default's Documents
+ * grant, mounted here before each call that reads it. Every other row's
+ * tree is checked at its own root.
  */
 function createNativeVaultRootService(): VaultRootService {
+  /** The tree the data folder root serves, for a found data folder's path. */
+  const shownRoot = (rootPath: string) => mountedDataFolder()?.tree ?? rootPath;
+
   return {
     async resolve(options) {
-      const uri = mountActiveSafUri();
+      await mountSelectedDataFolder();
       const result = await rpcVaultRootResolve(options);
-      if (uri && result.status === "found" && isSafLogicalRoot(result.rootPath)) {
-        return { ...result, rootPath: uri };
-      }
-      return result;
+      if (result.status === "found") await mountDeviceTrees();
+      return result.status === "found" && result.source !== "explicit"
+        ? { ...result, rootPath: shownRoot(result.rootPath) }
+        : result;
     },
 
-    async setupDefaultRoot(options) {
-      const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
-      if (leaving) await rpcVaultRootRememberCustom(leaving);
-      const result = await rpcVaultRootSetupDefaultRoot(options);
-      clearActiveSafUri();
-      return result;
+    list: (options) => rpcDataFolderList(options?.newList ?? false),
+
+    async status(path) {
+      if (path !== null) {
+        if (isSafContentUri(path)) mountTree(path);
+        return rpcDataFolderStatus(path);
+      }
+      if (mountedDataFolder()?.kind === "row") return DEFAULT_NOT_CHECKED;
+      const grant = safDocumentsGrant();
+      if (!grant) return DEFAULT_TO_MAKE;
+      if (mountedDataFolder()?.tree !== grant) mountSafRoot(grant);
+      return rpcDataFolderStatus(null);
     },
 
-    async setupAtPath(path, options) {
-      const trimmed = path.trim();
-      // Only a picked storage-access folder copies the private data folder: the job is its.
-      const { job, ...setup } = options ?? {};
-      if (!isSafTreeUri(trimmed)) {
-        const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
-        if (leaving) await rpcVaultRootRememberCustom(leaving);
-        const result = await rpcVaultRootSetupPath(trimmed, setup);
-        clearActiveSafUri();
-        return result;
-      }
-      const previous = safGetActiveUri();
-      const plan = planSafSwitch(previous, trimmed);
+    async apply(request) {
+      const view = await rpcDataFolderList(request.newList ?? false);
+      const target = selectedDataFolder(view.groups, await phoneDeviceId(), request.changes);
+      const previous = mountedDataFolder();
+      if (target?.kind === "default") await mountDefaultDataFolder();
+      else if (target) {
+        try {
+          mountRowDataFolder(target.tree);
+        } catch {
+          // Unmounted: core answers that this folder cannot hold a data folder now.
+        }
+      } else unmountDataFolder();
       try {
-        safPersist(trimmed);
-        mountSafRoot(trimmed);
-        const result = await rpcVaultRootSetupPath(SAF_VAULT_ROOT, {
-          ...setup,
-          adoptPrivateRoot: { job: job ?? newJobId() },
-          ...(plan.rememberCustomUri ? { customUri: plan.rememberCustomUri } : {}),
-        });
-        commitSafSwitch(previous, trimmed);
-        return { ...result, rootPath: trimmed };
+        // A data folder kept in the private app folder moves into the one chosen.
+        const applied = await rpcDataFolderApply({ ...request, job: request.job ?? newJobId() });
+        await mountDeviceTrees();
+        return { ...applied, rootPath: shownRoot(applied.rootPath) };
       } catch (error) {
-        restoreSafMount(previous, trimmed);
+        restoreDataFolder(previous);
         throw error;
       }
     },
 
-    async readAlias() {
-      const file = await rpcVaultRootReadAlias();
-      const saved = rememberedCustomFolderPath(file?.customPath ?? "");
-      const live = safGetActiveUri();
-      const liveCustom = rememberedCustomFolderPath(live ?? "");
-      if (liveCustom) {
-        return { path: liveCustom, active: true, customPath: liveCustom };
-      }
-      if (saved) {
-        return { path: saved, active: false, customPath: saved };
-      }
-      if (live) return { path: live, active: true };
-      return file;
-    },
-
-    async defaultRootStatus() {
-      return rpcVaultRootDefaultRootStatus();
-    },
-
-    async inspectAtPath(path) {
-      const trimmed = path.trim();
-      if (isSafTreeUri(trimmed)) {
-        const status = await inspectSafWithSchema(trimmed);
-        return { status, path: trimmed };
-      }
-      return rpcVaultRootInspectPath(trimmed);
+    async search(job) {
+      // Each row is checked at its tree's root, Default at the data folder root.
+      await mountDeviceTrees();
+      mountDefaultForSearch();
+      return rpcDataFolderSearch(job);
     },
 
     async suggestedCustomRootPath() {
-      return safDocumentsInitialUri() ?? rpcVaultRootSuggestedCustomPath();
+      return safDocumentsInitialUri() ?? "";
     },
 
-    async pickFolder(defaultPath, _title) {
+    async pickFolder(defaultPath) {
       return pickVaultRootFolder(defaultPath);
     },
   };
@@ -355,15 +174,16 @@ function createNativeVaultRootService(): VaultRootService {
 
 /**
  * Native adapters → in-process `upriv-ffi` (same split as desktop
- * `createDesktopServices`). A picked `content://` folder is mounted at
- * `/upriv-saf-root` before path RPCs, so create, open, edit, import, and
- * backup write on that grant. Export data folder mounts the folder picked for
- * its zip at `/upriv-saf-export`. Expo Go never reaches this factory.
+ * `createDesktopServices`). The data folder the list selects is mounted at
+ * `/upriv-saf-root`; every other picked folder (a row, an export's folder) is
+ * reached at its tree's root. Expo Go never reaches this factory.
  */
 export function createNativeServices(): AppServices {
   return {
+    device: nativeDeviceService,
     vaultRoot: createNativeVaultRootService(),
-    appSettings: createSafAwareAppSettingsService(),
+    folderLists: nativeFolderListService,
+    appSettings: nativeAppSettingsService,
     logs: nativeLogService,
     vault: nativeVaultService,
     lifecycle: nativeVaultLifecycleService,
@@ -371,13 +191,9 @@ export function createNativeServices(): AppServices {
     filesystem: nativeVaultFileSystemService,
     backups: nativeBackupService,
     dataFolder: nativeDataFolderService,
-    exportFolderGrants: nativeSafExportMount,
+    exportFolderGrants: nativeExportTrees,
     jobs: nativeJobService,
     createVault: nativeCreateVaultService,
     vaultSecurity: nativeVaultSecurityService,
   };
 }
-
-// Re-export the isAndroidSafUri helper alias so callers do not need to import
-// two "is SAF" predicates (both are the same content:// scheme check).
-export { isAndroidSafUri };

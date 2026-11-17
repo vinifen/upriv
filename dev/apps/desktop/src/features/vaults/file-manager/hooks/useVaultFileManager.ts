@@ -57,6 +57,7 @@ import {
   useExplorerSearch,
   useFolderFallback,
   useOpenTabContents,
+  useOsFolderReady,
   useToast,
   useTreeFolderPresence,
   useVaultFileTree,
@@ -314,31 +315,22 @@ export function useVaultFileManager({
     sendToFolder,
   );
 
-  /** Live OS mount for this vault — gates "Open in file manager" / "Open in terminal". */
-  const [osFolderAvailable, setOsFolderAvailable] = useState(false);
-  useEffect(() => {
-    if (!isElectronRenderer()) return;
-    let cancelled = false;
-    fs.osPath(vaultId, "/").then(
-      (osPath) => {
-        if (!cancelled) setOsFolderAvailable(Boolean(osPath));
-      },
-      () => {
-        if (!cancelled) setOsFolderAvailable(false);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [fs, vaultId]);
+  /** The vault's folder in the OS — gates "Show in unlocked folder" / "Open in terminal". */
+  const osFolder = useOsFolderReady(
+    (id, path) => fs.osPath(id, path),
+    vaultId,
+    isElectronRenderer(),
+  );
+  const osFolderAvailable = osFolder.ready;
+  const { lost: osFolderLost } = osFolder;
 
   const openInSystemFileManager = useCallback(
     async (logicalPath: string) => {
       const failure = await revealFailureKey(() => rpcRevealInFileManager(vaultId, logicalPath));
-      if (failure === MOUNT_FAILED_KEY) setOsFolderAvailable(false);
+      if (failure === MOUNT_FAILED_KEY) osFolderLost();
       if (failure) showToast(t(failure));
     },
-    [showToast, t, vaultId],
+    [osFolderLost, showToast, t, vaultId],
   );
 
   const openInTerminal = useCallback(
@@ -351,11 +343,11 @@ export function useVaultFileManager({
         await rpcOpenInTerminal(vaultId, logicalPath);
       } catch (error) {
         const key = desktopErrorI18nKey(error, "modal.file_manager.toast.open_terminal_failed");
-        if (key === MOUNT_FAILED_KEY) setOsFolderAvailable(false);
+        if (key === MOUNT_FAILED_KEY) osFolderLost();
         showToast(t(key));
       }
     },
-    [showToast, t, vaultId],
+    [osFolderLost, showToast, t, vaultId],
   );
 
   const getEditorContent = useCallback(

@@ -16,29 +16,25 @@ use upriv_core::host_fs::HostFsQuery;
 use upriv_core::logging::{
     clear_logging_session, delete_session_log_files, ensure_logging_session,
     list_session_log_files, log_app_start, log_event, log_vault_root_entered,
-    log_vault_root_leaving_on, log_vault_root_ready, map_needs_setup_after_ready,
-    read_session_log_file, reset_vault_root_ready, session_logger, vault_root_was_ready, LogLevel,
-    Logger,
+    log_vault_root_leaving_on, log_vault_root_ready, read_session_log_file, reset_vault_root_ready,
+    vault_root_was_ready, LogLevel, Logger,
 };
 use upriv_core::{
-    active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
-    close_state, close_vault, close_vault_auto, close_vault_now, copy_data_folder_into,
-    create_vault_as_job, create_vault_group_with_sort, deactivate_app_home_alias,
+    change_vault_kdf, change_vault_password, close_state, close_vault, close_vault_auto,
+    close_vault_now, create_vault_as_job, create_vault_group_with_sort, data_folder_lost,
     delete_vault_group, discover_bootstrap_root, finish_import_session, hurry_close,
-    inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
-    load_vault_groups, open_import_session, open_or_initialize_vault_root, parse_settings_toml_str,
-    read_vault_root_alias, rebuild_vault, relocate_upriv_dir, remember_vault_root_custom_uri,
-    rename_vault, reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
-    resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
-    update_vault_group, vault_disk_usage, vault_list_item, write_vault_root_alias_for_root,
-    write_vault_root_alias_for_root_with_custom, AppSettings, CloseState, IncompleteReplacePolicy,
-    KdfUnlockPreset, ResolveVaultRoot, ResolveVaultRootOptions, UpdateVaultGroupParams,
-    UprivDirRelocate, VaultConfig, VaultGroup, VaultListItem, VaultRootBootstrapPrefs,
-    VaultRootDirStatus, VaultRootMode, VaultRootSource, VaultStorageMode, VaultWelcome,
-    VAULT_ROOT_ALIAS_FILE,
+    known_vault_ids, list_vaults, load_app_settings, load_vault_config, load_vault_groups,
+    open_import_session, rebuild_vault, rename_vault, reorder_vault_group_grouped_vaults,
+    reorder_vault_groups, repair_vault_groups, resolve_vault_root, save_app_settings_session,
+    suggested_vault_root, update_vault_group, vault_disk_usage, vault_list_item, AppSettings,
+    CloseState, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
+    ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup, VaultListItem,
+    VaultRootBootstrapPrefs, VaultRootDirStatus, VaultStorageMode, VaultWelcome,
 };
 
 mod data_folder_ops;
+mod device_ops;
+mod folder_ops;
 mod job_ops;
 mod plain_ops;
 mod secret;
@@ -76,8 +72,6 @@ pub struct RpcResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResolveParams {
     #[serde(default)]
-    vault_root_mode: VaultRootMode,
-    #[serde(default)]
     explicit_path: Option<String>,
     /// Debug-only alternate app home (`UPRIV_DEV` must be set); rejected otherwise.
     #[serde(default)]
@@ -87,52 +81,14 @@ struct ResolveParams {
 /// Bootstrap UI prefs applied only when creating a new `.upriv/`.
 ///
 /// Wire nests these under `bootstrap` (camelCase) so future pre-root UI prefs
-/// (theme selector on Gate, high-contrast, etc.) can extend this bag without
-/// renaming setup RPC params again. Selecting an already-valid root ignores
-/// this object entirely — see AGENT.md § "Selecting an existing `.upriv`".
+/// (theme selector on Gate, high-contrast, etc.) extend this bag. Opening an
+/// already-valid data folder ignores it — see AGENT.md § "Selecting an
+/// existing `.upriv`".
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BootstrapPrefsParams {
     #[serde(default)]
     locale: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PathParams {
-    path: String,
-    #[serde(default)]
-    replace_incomplete: bool,
-    #[serde(default)]
-    replace_policy: Option<String>,
-    #[serde(default)]
-    bootstrap: Option<BootstrapPrefsParams>,
-    /// Android: last Custom folder (`content://`). Stored on `.upriv-data-folder` and kept
-    /// when this setup selects the Documents default. Omitted on desktop.
-    #[serde(default)]
-    custom_uri: Option<String>,
-    /// Android: copy the private app-folder `.upriv` into the mounted grant
-    /// before init. Desktop omits this. A destination that already has `.upriv`
-    /// is left as-is.
-    #[serde(default)]
-    adopt_private_root: bool,
-    /// The job that copy runs as, so the person can stop it. Required with
-    /// `adopt_private_root`.
-    #[serde(default)]
-    job: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SetupDefaultRootParams {
-    #[serde(default)]
-    replace_incomplete: bool,
-    /// `"delete"` | `"rename"` — **required** when `replace_incomplete` is true
-    /// (no daemon default; UI/TS must pass policy explicitly).
-    #[serde(default)]
-    replace_policy: Option<String>,
-    #[serde(default)]
-    bootstrap: Option<BootstrapPrefsParams>,
 }
 
 pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
@@ -142,18 +98,17 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
             "distribution": upriv_core::distribution_str(upriv_core::detect_app_distribution()),
         })),
         "app_shutdown" => vault_ops::app_shutdown(req.params),
+        "device_info" => device_ops::info(),
+        "device_identity_set" => device_ops::identity_set(req.params),
+        "device_trees" => folder_ops::device_trees_rpc(),
+        "folder_status" => folder_ops::folder_status_rpc(req.params),
         "app_settings_get" => app_settings_get(),
         "app_settings_save" => app_settings_save(req.params),
-        "app_settings_parse_toml" => app_settings_parse_toml(req.params),
         "vault_root_resolve" => vault_root_resolve(req.params),
-        "vault_root_setup_default_root" => vault_root_setup_default_root(req.params),
-        "vault_root_setup_path" => vault_root_setup_path(req.params),
-        "vault_root_deactivate_alias" => vault_root_deactivate_alias(),
-        "vault_root_read_alias" => vault_root_read_alias(),
-        "vault_root_remember_custom" => vault_root_remember_custom(req.params),
-        "vault_root_default_root_status" => vault_root_default_root_status(),
-        "vault_root_inspect_path" => vault_root_inspect_path(req.params),
         "vault_root_suggested_custom_path" => vault_root_suggested_custom_path(),
+        "data_folder_list" => data_folder_ops::list(req.params),
+        "data_folder_apply" => data_folder_ops::apply(req.params),
+        "data_folder_search" => data_folder_ops::search(req.params),
         "log_list" => log_list(),
         "log_get" => log_get(req.params),
         "log_delete" => log_delete(req.params),
@@ -169,7 +124,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_list" => vault_list(),
         "vault_create" => vault_create(req.params),
         "vault_open" => plain_ops::vault_open(req.params),
-        "vault_plain_confirm" => plain_ops::vault_plain_confirm(req.params),
         "vault_plain_destination" => plain_ops::vault_plain_destination(req.params),
         "vault_plain_leftover" => plain_ops::vault_plain_leftover(req.params),
         "vault_plain_remove" => plain_ops::vault_plain_remove(req.params),
@@ -178,6 +132,9 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_plain_deletions" => plain_ops::vault_plain_deletions(req.params),
         "vault_plain_send" => plain_ops::vault_plain_send(req.params),
         "vault_plain_unsend" => plain_ops::vault_plain_unsend(req.params),
+        "plain_record_forget" => folder_ops::plain_record_forget_rpc(req.params),
+        "vault_unlocked_folder_attach" => folder_ops::vault_unlocked_folder_attach(req.params),
+        "vault_unlocked_folder_info" => folder_ops::vault_unlocked_folder_info(req.params),
         "vault_close" => vault_close(req.params),
         "vault_change_password" => vault_change_password(req.params),
         "vault_change_kdf" => vault_change_kdf(req.params),
@@ -220,8 +177,8 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_fs_os_path" => vault_ops::vault_fs_os_path(req.params),
         "vault_fs_move" => vault_ops::vault_fs_move(req.params),
         "backup_list" => vault_ops::backup_list(req.params),
-        "backup_folder_check" => vault_ops::backup_folder_check(req.params),
-        "backup_folder_reuse" => vault_ops::backup_folder_reuse(req.params),
+        "backup_rename" => folder_ops::backup_rename(req.params),
+        "backup_folder_forget" => folder_ops::backup_folder_forget(req.params),
         "backup_delete" => vault_ops::backup_delete(req.params),
         "backup_promote" => vault_ops::backup_promote(req.params),
         "backup_save" => vault_ops::backup_save(req.params),
@@ -266,42 +223,6 @@ fn with_relocate_notice(mut body: Value) -> Value {
     body
 }
 
-fn adopt_private_root_into_grant(path: &Path, job: &str) -> Result<&'static str, RpcResponse> {
-    if path != Path::new(upriv_core::host_fs::SAF_VAULT_ROOT) {
-        return Err(err(
-            "invalid_request",
-            "adoptPrivateRoot requires the mounted data folder".into(),
-        ));
-    }
-    if !upriv_core::host_fs::is_bridge_path(path) {
-        return Err(err(
-            "invalid_request",
-            "adoptPrivateRoot requires a mounted data folder".into(),
-        ));
-    }
-    let home = match app_home_dir() {
-        Ok(dir) => dir,
-        Err(error) => return Err(map_core_err(error)),
-    };
-    match copy_data_folder_into(&home, path, job) {
-        Ok(UprivDirRelocate::Absent) => Ok("none"),
-        Ok(UprivDirRelocate::Moved) => Ok("moved"),
-        Ok(UprivDirRelocate::DestinationOccupied) => Ok("left_behind"),
-        Err(error) => Err(map_core_err(error)),
-    }
-}
-
-/// Put a moved private `.upriv` back when setup does not finish.
-///
-/// The caller remounts the previous folder on error. Leaving the only copy in
-/// the new grant would drop it from the folder the app still uses.
-fn restore_adopted_private_root(home: &Path, grant: &Path) {
-    if home.join(".upriv").host_is_dir() {
-        return;
-    }
-    let _ = relocate_upriv_dir(grant, home);
-}
-
 fn vault_root_resolve(params: Value) -> RpcResponse {
     let parsed: ResolveParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -335,68 +256,81 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
             }
             None => None,
         },
-        mode: parsed.vault_root_mode,
         binary_dir,
     };
     match resolve_vault_root(options) {
-        Ok(resolved) => match map_needs_setup_after_ready(resolved) {
-            Ok(ResolveVaultRoot::Found { root, source }) => {
-                let root_path = match path_utf8(root.root()) {
-                    Ok(p) => p,
-                    Err(response) => return response,
-                };
-                let source = source_str(source);
-                log_app_start("vault_root_resolve");
-                log_vault_root_ready(source, &root_path);
-                // Probe can run more than once on Gate launch — keep at DEBUG.
-                log_event(
-                    LogLevel::Debug,
-                    "vault_root_resolve",
-                    &[("status", "found"), ("source", source)],
-                );
-                ok(with_relocate_notice(json!({
-                    "status": "found",
-                    "rootPath": root_path,
-                    "source": source,
-                })))
-            }
-            Ok(ResolveVaultRoot::NeedsSetup {
-                alias_path,
-                default_root_anchor,
-                distribution,
-            }) => {
-                let alias = match path_utf8(&alias_path) {
-                    Ok(p) => p,
-                    Err(response) => return response,
-                };
-                let default_root = match path_utf8(&default_root_anchor) {
-                    Ok(p) => p,
-                    Err(response) => return response,
-                };
-                // No vault-root yet — drop any stale writer so it cannot recreate `.upriv/logs`.
-                clear_logging_session();
-                ok(with_relocate_notice(json!({
-                    "status": "needs_setup",
-                    "aliasPath": alias,
-                    "defaultRootAnchor": default_root,
-                    "distribution": upriv_core::distribution_str(distribution),
-                })))
-            }
-            Err(error) => fail_loud_vault_root_resolve(error),
-        },
+        Ok(ResolveVaultRoot::Found { root, source }) => {
+            let root_path = match path_utf8(root.root()) {
+                Ok(p) => p,
+                Err(response) => return response,
+            };
+            let source = source.as_str();
+            upriv_core::data_folder_entered(root.root());
+            log_app_start("vault_root_resolve");
+            log_vault_root_ready(source, &root_path);
+            // Probe can run more than once on Gate launch — keep at DEBUG.
+            log_event(
+                LogLevel::Debug,
+                "vault_root_resolve",
+                &[("status", "found"), ("source", source)],
+            );
+            ok(with_relocate_notice(json!({
+                "status": "found",
+                "rootPath": root_path,
+                "source": source,
+            })))
+        }
+        Ok(ResolveVaultRoot::NeedsSetup {
+            default_root_anchor,
+            distribution,
+        }) => {
+            let default_root = match path_utf8(&default_root_anchor) {
+                Ok(p) => p,
+                Err(response) => return response,
+            };
+            let ended = leave_lost_data_folder();
+            ok(with_relocate_notice(json!({
+                "status": "needs_setup",
+                "defaultRootAnchor": default_root,
+                "distribution": upriv_core::distribution_str(distribution),
+                "ended": ended,
+            })))
+        }
+        Ok(ResolveVaultRoot::SelectedFailed { place, reason }) => {
+            let ended = leave_lost_data_folder();
+            ok(with_relocate_notice(json!({
+                "status": "selected_failed",
+                "choice": place.choice_name(),
+                "reason": reason,
+                "ended": ended,
+            })))
+        }
         Err(error) => fail_loud_vault_root_resolve(error),
     }
+}
+
+/// No data folder is in use now (the first run, or a selection that does
+/// not answer, also one lost while Upriv ran): drop the writer so it cannot
+/// recreate `.upriv/logs`, and the next data folder logs `vault_root_ready`
+/// again.
+fn leave_no_data_folder() {
+    clear_logging_session();
+    reset_vault_root_ready();
+}
+
+/// The selected choice holds no data folder that answers: the one in use,
+/// if any, is lost, and every vault still open in it ends. Returns the names
+/// of the vaults that ended with it.
+fn leave_lost_data_folder() -> Vec<String> {
+    leave_no_data_folder();
+    upriv_core::leave_lost_data_folder()
 }
 
 fn fail_loud_vault_root_resolve(error: upriv_core::UprivError) -> RpcResponse {
     match &error {
         upriv_core::UprivError::VaultRootIncomplete { .. }
         | upriv_core::UprivError::VaultRootNotFound(_)
-        | upriv_core::UprivError::VaultRootAliasInvalid(_) => {
-            clear_logging_session();
-            // Gate must be able to present first-run Setup after the marker vanished.
-            reset_vault_root_ready();
-        }
+        | upriv_core::UprivError::DataFolderListInvalid { .. } => leave_no_data_folder(),
         _ => {}
     }
     map_core_err(error)
@@ -426,136 +360,24 @@ fn parse_replace_policy_flag(
     }
 }
 
-/// Validate the wire `bootstrap.locale` and require a non-empty value.
-///
-/// Used **before** any disk mutation when the setup RPC will create a new
-/// `.upriv/` — so a missing locale cannot leave a freshly created root stuck
-/// on the built-in `"en"` default (fixes review A2/A3: no retry window where
-/// `.upriv/` exists but `settings.toml` still says `"en"`).
-fn require_bootstrap_locale(
+/// The preferences a new data folder starts with. `bootstrap.locale` is
+/// required on every apply, checked before anything is written, so a folder
+/// an apply makes never starts on the built-in default locale.
+fn bootstrap_prefs(
     bootstrap: Option<&BootstrapPrefsParams>,
-) -> Result<String, RpcResponse> {
+) -> Result<VaultRootBootstrapPrefs, RpcResponse> {
     let locale = bootstrap
         .and_then(|prefs| prefs.locale.as_deref())
         .map(str::trim)
         .filter(|s| !s.is_empty());
     match locale {
-        Some(value) => Ok(value.to_string()),
-        None => {
-            eprintln!("upriv-rpc: bootstrap.locale is required when creating a new vault-root");
-            Err(err(
-                "invalid_request",
-                "bootstrap.locale is required when creating a new vault-root".into(),
-            ))
-        }
-    }
-}
-
-/// Resolve wire `bootstrap` prefs for an `open_or_initialize_*` call.
-///
-/// Pre-inspects `dir` **before** touching disk:
-/// - Valid → `Ok(None)`. Bootstrap prefs are silently ignored (AGENT.md
-///   contract: selecting an existing `.upriv` must not rewrite its
-///   `settings.toml`).
-/// - Absent / Incomplete / Unreadable → require a non-empty `bootstrap.locale`
-///   and return `Some(VaultRootBootstrapPrefs { locale: Some(..) })` so the
-///   init call writes `[ui].locale` atomically as part of the first (and only)
-///   `settings.toml` write.
-fn bootstrap_prefs_for_dir(
-    dir: &Path,
-    bootstrap: Option<&BootstrapPrefsParams>,
-) -> Result<Option<VaultRootBootstrapPrefs>, RpcResponse> {
-    match inspect_vault_root_at(dir) {
-        VaultRootDirStatus::Valid => Ok(None),
-        _ => {
-            let locale = require_bootstrap_locale(bootstrap)?;
-            Ok(Some(VaultRootBootstrapPrefs {
-                locale: Some(locale),
-            }))
-        }
-    }
-}
-
-fn refuse_root_switch_if_busy() -> Option<RpcResponse> {
-    if !upriv_core::vault_activity_blocks_root_switch() {
-        return None;
-    }
-    const MSG: &str =
-        "wait until open, close, create, export, password change, and unlock-RAM change finish before switching data folder";
-    log_event(
-        LogLevel::Warn,
-        "rpc_error",
-        &[("code", "vault_root_busy"), ("message", MSG)],
-    );
-    Some(err("vault_root_busy", MSG.into()))
-}
-
-fn vault_root_setup_default_root(params: Value) -> RpcResponse {
-    if let Some(response) = refuse_root_switch_if_busy() {
-        return response;
-    }
-    let parsed: SetupDefaultRootParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let replace = match parse_replace_policy_flag(
-        parsed.replace_incomplete,
-        parsed.replace_policy.as_deref(),
-    ) {
-        Ok(policy) => policy,
-        Err(response) => return response,
-    };
-    let anchor = match upriv_core::setup_default_root_anchor() {
-        Ok(path) => path,
-        Err(error) => return map_core_err(error),
-    };
-    if let Err(response) = path_utf8(&anchor) {
-        return response;
-    }
-    let from_path = current_root_path_for_log();
-    let prev_logger = session_logger();
-
-    // Pre-validate bootstrap prefs BEFORE any disk mutation when we will create.
-    // Selecting an existing Valid root does not require bootstrap prefs.
-    let prefs = match bootstrap_prefs_for_dir(&anchor, parsed.bootstrap.as_ref()) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    // Init writes `[ui].locale` atomically as part of the first (and only)
-    // settings.toml write when creating — no separate post-create stamp step
-    // exists here anymore (A2/A3). Retry after a later step fails will find
-    // a Valid `.upriv/` with the correct locale already on disk.
-    let prior_status = inspect_vault_root_at(&anchor);
-    let opened = match open_or_initialize_vault_root(&anchor, replace, prefs.as_ref()) {
-        Ok(opened) => opened,
-        Err(error) => return map_core_err(error),
-    };
-    let root = opened.root;
-    // Partial-failure / retry-safe contract: init may succeed before deactivate.
-    // If deactivate fails, `.upriv/` at the anchor is already correctly stamped —
-    // UI should retry deactivate / re-enter setup (no automatic rollback).
-    if let Err(error) = deactivate_app_home_alias() {
-        return map_core_err(error);
-    }
-    match path_utf8(root.root()) {
-        Ok(root_path) => {
-            leave_then_reopen_logging(
-                prev_logger.as_deref(),
-                from_path.as_deref(),
-                &root_path,
-                "default_root",
-            );
-            log_vault_root_setup(
-                "default_root",
-                opened.created,
-                prior_status,
-                replace,
-                &root_path,
-                from_path.as_deref(),
-            );
-            ok(json!({ "rootPath": root_path }))
-        }
-        Err(response) => response,
+        Some(value) => Ok(VaultRootBootstrapPrefs {
+            locale: Some(value.to_string()),
+        }),
+        None => Err(err(
+            "invalid_request",
+            "bootstrap.locale is required to apply the data folder list".into(),
+        )),
     }
 }
 
@@ -568,54 +390,12 @@ fn vault_root_status_str(status: VaultRootDirStatus) -> &'static str {
     }
 }
 
-fn vault_root_default_root_status() -> RpcResponse {
-    let anchor = match upriv_core::setup_default_root_anchor() {
-        Ok(path) => path,
-        Err(error) => return map_core_err(error),
-    };
-    let default_root_anchor = match path_utf8(&anchor) {
-        Ok(p) => p,
-        Err(response) => return response,
-    };
-    ok(json!({
-        "status": vault_root_status_str(inspect_vault_root_at(&anchor)),
-        "defaultRootAnchor": default_root_anchor,
-    }))
-}
-
-fn vault_root_inspect_path(params: Value) -> RpcResponse {
-    let parsed: PathParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let path = PathBuf::from(parsed.path.trim());
-    if let Err(response) = require_absolute_path(&path) {
-        return response;
-    }
-    let path_str = match path_utf8(&path) {
-        Ok(p) => p,
-        Err(response) => return response,
-    };
-    ok(json!({
-        "status": vault_root_status_str(inspect_vault_root_at(&path)),
-        "path": path_str,
-    }))
-}
-
 fn vault_root_suggested_custom_path() -> RpcResponse {
     match suggested_vault_root() {
         Ok(path) => match path_utf8(&path) {
             Ok(path) => ok(json!({ "path": path })),
             Err(response) => response,
         },
-        Err(error) => map_core_err(error),
-    }
-}
-
-/// Deactivate the app home's `.upriv-data-folder` only. Does not create, open, or require a vault-root.
-fn vault_root_deactivate_alias() -> RpcResponse {
-    match deactivate_app_home_alias() {
-        Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
     }
 }
@@ -631,164 +411,6 @@ fn require_absolute_path(path: &Path) -> Result<(), RpcResponse> {
         ));
     }
     Ok(())
-}
-
-fn vault_root_setup_path(params: Value) -> RpcResponse {
-    if let Some(response) = refuse_root_switch_if_busy() {
-        return response;
-    }
-    let parsed: PathParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let path = PathBuf::from(parsed.path.trim());
-    if let Err(response) = require_absolute_path(&path) {
-        return response;
-    }
-    let replace = match parse_replace_policy_flag(
-        parsed.replace_incomplete,
-        parsed.replace_policy.as_deref(),
-    ) {
-        Ok(policy) => policy,
-        Err(response) => return response,
-    };
-    let from_path = current_root_path_for_log();
-    let prev_logger = session_logger();
-
-    // Pre-validate bootstrap prefs BEFORE any disk mutation when we will create.
-    // Selecting an existing Valid root does not require bootstrap prefs.
-    let prefs = match bootstrap_prefs_for_dir(&path, parsed.bootstrap.as_ref()) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    // Init writes `[ui].locale` atomically on create — no separate stamp step
-    // (A2/A3). A private folder that was moved into the grant is put back if
-    // init or the alias write fails, because the caller remounts the previous
-    // folder. A folder created in the grant stays there, so retrying that path
-    // is safe.
-    let private_home = if parsed.adopt_private_root {
-        match app_home_dir() {
-            Ok(dir) => Some(dir),
-            Err(error) => return map_core_err(error),
-        }
-    } else {
-        None
-    };
-    let private_root = if parsed.adopt_private_root {
-        let Some(job) = parsed.job.as_deref() else {
-            return err("invalid_request", "adoptPrivateRoot requires a job".into());
-        };
-        match adopt_private_root_into_grant(&path, job) {
-            Ok(status) => Some(status),
-            Err(response) => return response,
-        }
-    } else {
-        None
-    };
-    let moved_private = private_root == Some("moved");
-    let restore_private = |grant: &Path| {
-        if moved_private {
-            if let Some(home) = private_home.as_ref() {
-                restore_adopted_private_root(home, grant);
-            }
-        }
-    };
-    let prior_status = inspect_vault_root_at(&path);
-    let opened = match open_or_initialize_vault_root(&path, replace, prefs.as_ref()) {
-        Ok(opened) => opened,
-        Err(error) => {
-            restore_private(&path);
-            return map_core_err(error);
-        }
-    };
-    let root = opened.root;
-    let home = match upriv_core::app_home_dir() {
-        Ok(dir) => dir,
-        Err(error) => {
-            restore_private(root.root());
-            return map_core_err(error);
-        }
-    };
-    if let Err(error) = match parsed.custom_uri.as_deref() {
-        Some(uri) => write_vault_root_alias_for_root_with_custom(&home, &root, Some(uri)),
-        None => write_vault_root_alias_for_root(&home, &root),
-    } {
-        restore_private(root.root());
-        return map_core_err(error);
-    }
-    let alias_path = home.join(VAULT_ROOT_ALIAS_FILE);
-    let root_path = match path_utf8(root.root()) {
-        Ok(p) => p,
-        Err(response) => return response,
-    };
-    let alias = match path_utf8(&alias_path) {
-        Ok(p) => p,
-        Err(response) => return response,
-    };
-    leave_then_reopen_logging(
-        prev_logger.as_deref(),
-        from_path.as_deref(),
-        &root_path,
-        "custom_root",
-    );
-    log_vault_root_setup(
-        "custom_root",
-        opened.created,
-        prior_status,
-        replace,
-        &root_path,
-        from_path.as_deref(),
-    );
-    let mut body = json!({
-        "rootPath": root_path,
-        "aliasPath": alias,
-    });
-    if let Some(status) = private_root {
-        body["privateRoot"] = json!(status);
-    }
-    ok(body)
-}
-
-fn vault_root_read_alias() -> RpcResponse {
-    let home = match app_home_dir() {
-        Ok(dir) => dir,
-        Err(error) => return map_core_err(error),
-    };
-    match read_vault_root_alias(&home) {
-        Ok(None) => ok(json!(null)),
-        Ok(Some(alias)) => match path_utf8(&alias.path) {
-            Ok(path) => {
-                let mut body = json!({
-                    "path": path,
-                    "active": alias.active,
-                });
-                if let Some(custom) = alias.custom_uri {
-                    body["customPath"] = json!(custom);
-                }
-                ok(body)
-            }
-            Err(response) => response,
-        },
-        Err(error) => map_core_err(error),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RememberCustomParams {
-    path: String,
-}
-
-/// Store the Android Custom folder on `.upriv-data-folder` (`android_custom_folder=`). Does not switch mode.
-fn vault_root_remember_custom(params: Value) -> RpcResponse {
-    let parsed: RememberCustomParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    match remember_vault_root_custom_uri(parsed.path.trim()) {
-        Ok(()) => ok(json!(null)),
-        Err(error) => map_core_err(error),
-    }
 }
 
 fn app_settings_get() -> RpcResponse {
@@ -932,8 +554,7 @@ fn log_delete(params: Value) -> RpcResponse {
         }
         Err(
             error @ (upriv_core::UprivError::VaultRootNotFound(_)
-            | upriv_core::UprivError::VaultRootIncomplete { .. }
-            | upriv_core::UprivError::VaultRootAliasInvalid(_)),
+            | upriv_core::UprivError::VaultRootIncomplete { .. }),
         ) => map_core_err(error),
         Err(error) => {
             let touched_active = parsed
@@ -954,46 +575,15 @@ fn log_delete(params: Value) -> RpcResponse {
     }
 }
 
-/// How a missing bootstrap root is reported after this process has had a folder.
-enum BootstrapAbsence {
-    /// No `.upriv` yet this process. List stays empty; Gate owns first-run.
-    FirstRun,
-    /// The storage-access grant is unmounted. The pointer is still there.
-    Unreachable,
-    /// The folder that was ready is gone.
-    Missing,
-}
-
-fn classify_bootstrap_absence(was_ready: bool, unmounted_saf: bool) -> BootstrapAbsence {
-    if !was_ready {
-        BootstrapAbsence::FirstRun
-    } else if unmounted_saf {
-        BootstrapAbsence::Unreachable
-    } else {
-        BootstrapAbsence::Missing
-    }
-}
-
 /// Bootstrap (never `vault_root_ready` this process, no `.upriv` yet) → `Ok(None)`.
-/// After a root was ready, absence is mid-session integrity (`vault_root_not_found`),
-/// except an unmounted storage-access alias: that volume is unreachable, not gone.
+/// After a data folder was ready, finding none is mid-session integrity: the
+/// data folder in use was lost (case B). Its selection stays, and the call
+/// answers `vault_root_not_found`, so the Gate resolves again.
 fn optional_vault_root() -> Result<Option<upriv_core::VaultRoot>, RpcResponse> {
     match discover_bootstrap_root() {
         Ok(Some(root)) => Ok(Some(root)),
-        Ok(None) => match classify_bootstrap_absence(
-            vault_root_was_ready(),
-            active_alias_is_unmounted_saf(),
-        ) {
-            BootstrapAbsence::FirstRun => Ok(None),
-            BootstrapAbsence::Unreachable => Err(err(
-                "vault_root_unreachable",
-                "data folder is not reachable".into(),
-            )),
-            BootstrapAbsence::Missing => Err(err(
-                "vault_root_not_found",
-                "vault-root missing after it was ready".into(),
-            )),
-        },
+        Ok(None) if vault_root_was_ready() => Err(map_core_err(data_folder_lost())),
+        Ok(None) => Ok(None),
         Err(error) => Err(map_core_err(error)),
     }
 }
@@ -1356,6 +946,7 @@ fn vault_list_item_json(item: &VaultListItem) -> Value {
         "lastAccessedAt": item.last_accessed_at,
         "unlockPreset": unlock_preset,
         "plainLeftover": item.plain_leftover,
+        "plainRecords": item.plain_records,
         "outsideBackups": item.outside_backups,
     })
 }
@@ -1585,7 +1176,7 @@ fn vault_close(params: Value) -> RpcResponse {
         Ok(outcome) => ok(json!({
             "backupFailed": outcome.backup_failed,
             "backupFailure": outcome.backup_failure,
-            "backupFallback": outcome.backup_fallback,
+            "backupSwitches": outcome.backup_switches,
             "plain": outcome.plain,
         })),
         Err(error) => map_core_err(error),
@@ -1660,6 +1251,7 @@ fn vault_disk_usage_rpc(params: Value) -> RpcResponse {
         Ok(usage) => ok(json!({
             "storeBytes": usage.store_bytes,
             "heldBytes": usage.held_bytes,
+            "filesBytes": usage.files_bytes,
         })),
         Err(error) => map_core_err(error),
     }
@@ -1700,7 +1292,11 @@ fn vault_config_get(params: Value) -> RpcResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultConfigSaveParams {
     id: String,
+    /// The settings as the window holds them. Their folder lists are not
+    /// read: `lists` carries what changed in them.
     settings: VaultConfig,
+    #[serde(default)]
+    lists: upriv_core::VaultListChanges,
 }
 
 fn vault_config_save(params: Value) -> RpcResponse {
@@ -1720,8 +1316,8 @@ fn vault_config_save(params: Value) -> RpcResponse {
     if !dir.host_is_dir() {
         return map_core_err(upriv_core::UprivError::VaultNotFound(dir));
     }
-    match upriv_core::save_vault_config_checked(&root, id, &parsed.settings) {
-        Ok(()) => ok(json!({ "id": id })),
+    match upriv_core::save_vault_config_checked(&root, id, &parsed.settings, &parsed.lists) {
+        Ok(saved) => ok(json!({ "id": id, "keptFolders": saved.kept_folders })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1756,16 +1352,11 @@ fn vault_rename(params: Value) -> RpcResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AppSettingsSaveParams {
-    /// Nested `AppSettings` (snake_case sections: `ui`, `logging`, `app`).
+    /// Nested `AppSettings` (snake_case sections: `ui`, `logging`, `app`). Its
+    /// folder lists are not read: `lists` carries what changed in them.
     settings: AppSettings,
-    /// When false, write TOML only (caller already mutated `.upriv-data-folder`). Default true.
-    /// Wire name is camelCase `syncAlias` only — `sync_alias` is rejected by deny_unknown_fields.
-    #[serde(default = "default_sync_alias", rename = "syncAlias")]
-    sync_alias: bool,
-}
-
-fn default_sync_alias() -> bool {
-    true
+    #[serde(default)]
+    lists: upriv_core::AppListChanges,
 }
 
 fn app_settings_save(params: Value) -> RpcResponse {
@@ -1774,52 +1365,16 @@ fn app_settings_save(params: Value) -> RpcResponse {
         Err(error) => return err("invalid_request", error.to_string()),
     };
     let settings = parsed.settings;
-    // Reject relative custom paths the same way as setup_path.
-    if settings.app.vault_root_mode == VaultRootMode::CustomRoot {
-        let path = settings.app.upriv_root_path.trim();
-        if path.is_empty() {
-            return err(
-                "invalid_request",
-                "custom_root mode requires a non-empty upriv_root_path".into(),
-            );
-        }
-        if let Err(response) = require_absolute_path(Path::new(path)) {
-            return response;
-        }
-    }
-    let from_path = current_root_path_for_log();
-    let prev_logger = session_logger();
-    let to_path = intended_root_path_for_settings(&settings);
-    let mode = match settings.app.vault_root_mode {
-        VaultRootMode::CustomRoot => "custom_root",
-        VaultRootMode::DefaultRoot => "default_root",
-    };
-    let switched = match (from_path.as_deref(), to_path.as_deref()) {
-        (Some(from), Some(to)) => !root_paths_equal(from, to),
-        _ => false,
-    };
-
-    match save_app_settings_session_with_alias_sync(&settings, parsed.sync_alias) {
-        Ok(wrote) => {
-            // Only leave/enter when the save actually moved the active root.
-            // `Ok(false)` is only empty custom_root path (bootstrap); missing/corrupt
-            // target is `Err` (`vault_root_not_found` / `incomplete`) — do not treat as soft success.
-            if wrote && switched {
-                // `switched` is only true when both paths are Some and distinct.
-                let from = from_path.as_deref().expect("switched implies from_path");
-                let to = to_path.as_deref().expect("switched implies to_path");
-                leave_then_reopen_logging(prev_logger.as_deref(), Some(from), to, mode);
-                log_vault_root_entered(from, to, mode);
-            } else {
-                // Re-open writer so `[logging]` / vault-root changes apply immediately.
-                let _ = ensure_logging_session();
-            }
-            let wrote_str = if wrote { "true" } else { "false" };
+    match save_app_settings_session(&settings, &parsed.lists) {
+        Ok(saved) => {
+            let wrote = saved.is_some();
+            // Re-open the writer so `[logging]` changes apply at once.
+            let _ = ensure_logging_session();
             log_event(
                 LogLevel::Info,
                 "settings_save",
                 &[
-                    ("wrote", wrote_str),
+                    ("wrote", if wrote { "true" } else { "false" }),
                     ("locale", settings.ui.locale.as_str()),
                     ("theme", settings.ui.theme.as_str()),
                     (
@@ -1833,43 +1388,18 @@ fn app_settings_save(params: Value) -> RpcResponse {
                     ("log_level", settings.logging.level.as_str()),
                 ],
             );
-            ok(json!({ "wrote": wrote }))
+            let saved = saved.unwrap_or_default();
+            ok(json!({
+                "wrote": wrote,
+                "unchangedVaults": saved.unchanged_vaults,
+                "keptFolders": saved.kept_folders,
+            }))
         }
         Err(error) => {
             // Code only. The Display string of a settings error includes a path.
             log_event(LogLevel::Error, "settings_save_failed", &[]);
             map_core_err_response(error, false)
         }
-    }
-}
-
-/// Params for `app_settings_parse_toml` — RAM-only TOML parse.
-///
-/// Mobile SAF flow calls this after reading `.upriv/settings.toml` bytes via
-/// the Android DocumentFile bridge, so wire settings hydration stays identical
-/// on desktop (Rust disk read) and SAF (Kotlin bridge read → Rust parse).
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ParseSettingsTomlParams {
-    toml: String,
-}
-
-fn app_settings_parse_toml(params: Value) -> RpcResponse {
-    let parsed: ParseSettingsTomlParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    match parse_settings_toml_str(&parsed.toml) {
-        Ok(settings) => ok(json!({ "settings": settings })),
-        Err(error) => map_core_err(error),
-    }
-}
-
-fn source_str(source: VaultRootSource) -> &'static str {
-    match source {
-        VaultRootSource::Explicit => "explicit",
-        VaultRootSource::CustomRoot => "custom_root",
-        VaultRootSource::DefaultRoot => "default_root",
     }
 }
 
@@ -1892,18 +1422,6 @@ fn current_root_path_for_log() -> Option<String> {
     root.to_str().map(str::to_string)
 }
 
-fn intended_root_path_for_settings(settings: &AppSettings) -> Option<String> {
-    if settings.app.vault_root_mode == VaultRootMode::CustomRoot {
-        let path = settings.app.upriv_root_path.trim();
-        if path.is_empty() {
-            return None;
-        }
-        return Some(path.to_string());
-    }
-    let anchor = upriv_core::setup_default_root_anchor().ok()?;
-    anchor.to_str().map(str::to_string)
-}
-
 fn root_paths_equal(a: &str, b: &str) -> bool {
     if a == b {
         return true;
@@ -1920,18 +1438,18 @@ fn leave_then_reopen_logging(
     prev_logger: Option<&Logger>,
     from: Option<&str>,
     to: &str,
-    mode: &str,
+    source: &str,
 ) {
     if let (Some(logger), Some(from)) = (prev_logger, from) {
         if !root_paths_equal(from, to) {
-            log_vault_root_leaving_on(logger, from, to, mode);
+            log_vault_root_leaving_on(logger, from, to, source);
         }
     }
     let _ = ensure_logging_session();
 }
 
 fn log_vault_root_setup(
-    mode: &str,
+    source: &str,
     created: bool,
     prior_status: VaultRootDirStatus,
     replace: Option<IncompleteReplacePolicy>,
@@ -1943,22 +1461,22 @@ fn log_vault_root_setup(
             log_event(
                 LogLevel::Warn,
                 "vault_root_replace_incomplete",
-                &[("policy", replace_policy_str(policy)), ("mode", mode)],
+                &[("policy", replace_policy_str(policy)), ("source", source)],
             );
         }
     }
     log_app_start("vault_root_setup");
     if let Some(from) = from_path.filter(|from| !root_paths_equal(from, root_path)) {
         // Entered writes on the new root (session already points there after setup).
-        log_vault_root_entered(from, root_path, mode);
+        log_vault_root_entered(from, root_path, source);
     } else {
-        log_vault_root_ready(mode, root_path);
+        log_vault_root_ready(source, root_path);
     }
     log_event(
         LogLevel::Info,
         "vault_root_setup",
         &[
-            ("mode", mode),
+            ("source", source),
             ("created", if created { "true" } else { "false" }),
             ("prior", vault_root_status_str(prior_status)),
             ("path", root_path),
@@ -1976,9 +1494,9 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultRootIncomplete { path, .. } => {
             ("vault_root_incomplete", Some(path.as_path()))
         }
-        upriv_core::UprivError::VaultRootAliasInvalid(p) => {
-            ("vault_root_alias_invalid", Some(p.as_path()))
-        }
+        upriv_core::UprivError::DataFolderListInvalid { .. } => ("data_folder_list_invalid", None),
+        upriv_core::UprivError::DataFolderUnavailable(_) => ("data_folder_unavailable", None),
+        upriv_core::UprivError::VaultRootBusy => ("vault_root_busy", None),
         upriv_core::UprivError::VaultNotFound(p) => ("vault_not_found", Some(p.as_path())),
         upriv_core::UprivError::VaultConfigInvalid { path, .. } => {
             ("vault_config_invalid", Some(path.as_path()))
@@ -2000,9 +1518,6 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultStoreInvalid { path, .. } => {
             ("vault_store_invalid", Some(path.as_path()))
         }
-        upriv_core::UprivError::PlainDestinationUnconfirmed { path, .. } => {
-            ("plain_destination_unconfirmed", Some(path.as_path()))
-        }
         upriv_core::UprivError::PlainDestinationInvalid { path, .. } => {
             ("plain_destination_invalid", Some(path.as_path()))
         }
@@ -2010,16 +1525,29 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::PlainNamesUnsupported { .. } => ("plain_names_unsupported", None),
         upriv_core::UprivError::PlainSpaceShort { .. } => ("plain_space_short", None),
         upriv_core::UprivError::PlainFolderUnwritable { .. } => ("plain_folder_unwritable", None),
-        upriv_core::UprivError::WorkspacePathInvalid { path, .. } => {
-            ("workspace_path_invalid", Some(path.as_path()))
+        upriv_core::UprivError::UnlockedFolderUnset => ("unlocked_folder_unset", None),
+        upriv_core::UprivError::UnlockedFolderUnavailable(p) => {
+            ("unlocked_folder_unavailable", Some(p.as_path()))
         }
-        upriv_core::UprivError::WorkspacePathReserved(p) => {
-            ("workspace_path_reserved", Some(p.as_path()))
+        upriv_core::UprivError::PlainFolderUnreachable { .. } => ("plain_folder_unreachable", None),
+        upriv_core::UprivError::FolderListInvalid { .. } => ("folder_list_invalid", None),
+        upriv_core::UprivError::FolderPathRefused { issue, .. } => (
+            match issue {
+                upriv_core::folder_list::PathIssue::Reserved => "folder_path_reserved",
+                upriv_core::folder_list::PathIssue::Overlap => "folder_overlap",
+                upriv_core::folder_list::PathIssue::Empty
+                | upriv_core::folder_list::PathIssue::NotAbsolute => "folder_path_invalid",
+            },
+            None,
+        ),
+        upriv_core::UprivError::FolderPathDuplicate { .. } => ("folder_path_duplicate", None),
+        upriv_core::UprivError::FolderInUse { .. } => ("folder_in_use", None),
+        upriv_core::UprivError::MountDriverMissing => ("vault_mount_driver_missing", None),
+        upriv_core::UprivError::MountFilesystemUnsupported(p) => {
+            ("vault_mount_filesystem", Some(p.as_path()))
         }
-        upriv_core::UprivError::WorkspaceUnset => ("workspace_unset", None),
-        upriv_core::UprivError::WorkspaceUnavailable(p) => {
-            ("workspace_unavailable", Some(p.as_path()))
-        }
+        upriv_core::UprivError::BackupUnavailable(_) => ("backup_unavailable", None),
+        upriv_core::UprivError::BackupNameInvalid => ("backup_name_invalid", None),
         upriv_core::UprivError::LogFileTooLarge { path, .. } => {
             ("log_file_too_large", Some(path.as_path()))
         }
@@ -2070,6 +1598,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::DataFolderExportNameTaken(p) => {
             ("data_folder_export_name_taken", Some(p.as_path()))
         }
+        upriv_core::UprivError::DeviceUnknown => ("device_unknown", None),
+        upriv_core::UprivError::VaultPlainElsewhere { .. } => ("vault_plain_elsewhere", None),
         upriv_core::UprivError::Io(io) if upriv_core::host_fs::is_unreachable(io) => {
             ("vault_root_unreachable", None)
         }
@@ -2079,6 +1609,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
     if emit_log {
         let level = match code {
             "vault_root_incomplete"
+            | "vault_root_busy"
             | "wrong_password"
             | "vault_unlock_blocked"
             | "rewrap_password_unchanged"
@@ -2104,10 +1635,6 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultFileUnreadable { problem, .. } => {
             Some(json!({ "problem": problem.as_str() }))
         }
-        upriv_core::UprivError::PlainDestinationUnconfirmed { class, .. } => {
-            let path = path.and_then(|p| p.to_str()).unwrap_or("");
-            Some(json!({ "path": path, "class": class }))
-        }
         upriv_core::UprivError::PlainDestinationInvalid { reason, .. } => {
             let path = path.and_then(|p| p.to_str()).unwrap_or("");
             Some(json!({ "path": path, "reason": reason.as_str() }))
@@ -2121,6 +1648,25 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             Some(json!({ "needed": needed, "available": available }))
         }
         upriv_core::UprivError::PlainFolderUnwritable { count } => Some(json!({ "count": count })),
+        upriv_core::UprivError::VaultPlainElsewhere {
+            device,
+            system,
+            path,
+        }
+        | upriv_core::UprivError::PlainFolderUnreachable {
+            device,
+            system,
+            path,
+        } => Some(json!({ "device": device, "system": system, "path": path })),
+        upriv_core::UprivError::FolderPathRefused { path, issue } => {
+            Some(json!({ "path": path, "issue": issue.as_str() }))
+        }
+        upriv_core::UprivError::FolderPathDuplicate { path }
+        | upriv_core::UprivError::FolderInUse { path } => Some(json!({ "path": path })),
+        upriv_core::UprivError::BackupUnavailable(reason)
+        | upriv_core::UprivError::DataFolderUnavailable(reason) => {
+            Some(json!({ "reason": reason.as_str() }))
+        }
         _ => path.and_then(|p| p.to_str().map(|s| json!({ "path": s }))),
     };
     err_with_details(code, message, details)
@@ -2161,67 +1707,6 @@ pub(crate) fn isolate_app_home() {
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
         home
     });
-}
-
-#[cfg(test)]
-mod bootstrap_absence_tests {
-    use super::{classify_bootstrap_absence, BootstrapAbsence};
-
-    #[test]
-    fn unmounted_saf_after_ready_is_unreachable_not_missing() {
-        assert!(matches!(
-            classify_bootstrap_absence(true, true),
-            BootstrapAbsence::Unreachable
-        ));
-        assert!(matches!(
-            classify_bootstrap_absence(true, false),
-            BootstrapAbsence::Missing
-        ));
-        assert!(matches!(
-            classify_bootstrap_absence(false, true),
-            BootstrapAbsence::FirstRun
-        ));
-    }
-}
-
-#[cfg(test)]
-mod adopt_restore_tests {
-    use super::restore_adopted_private_root;
-
-    #[test]
-    fn restore_moves_the_data_folder_back_to_the_app_home() {
-        crate::isolate_app_home();
-        let home = tempfile::tempdir().unwrap();
-        let grant = tempfile::tempdir().unwrap();
-        let marker = home.path().join(".upriv/marker.txt");
-        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
-        std::fs::write(&marker, b"vault").unwrap();
-        upriv_core::relocate_upriv_dir(home.path(), grant.path()).unwrap();
-        assert!(!marker.exists());
-        restore_adopted_private_root(home.path(), grant.path());
-        assert_eq!(std::fs::read(&marker).unwrap(), b"vault");
-        assert!(!grant.path().join(".upriv").exists());
-    }
-
-    #[test]
-    fn restore_does_not_replace_a_private_data_folder() {
-        crate::isolate_app_home();
-        let home = tempfile::tempdir().unwrap();
-        let grant = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(home.path().join(".upriv")).unwrap();
-        std::fs::write(home.path().join(".upriv/marker.txt"), b"private").unwrap();
-        std::fs::create_dir_all(grant.path().join(".upriv")).unwrap();
-        std::fs::write(grant.path().join(".upriv/marker.txt"), b"grant").unwrap();
-        restore_adopted_private_root(home.path(), grant.path());
-        assert_eq!(
-            std::fs::read(home.path().join(".upriv/marker.txt")).unwrap(),
-            b"private"
-        );
-        assert_eq!(
-            std::fs::read(grant.path().join(".upriv/marker.txt")).unwrap(),
-            b"grant"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2313,18 +1798,17 @@ mod contract_tests {
     const REGISTERED_METHODS: &[&str] = &[
         "app_version",
         "app_shutdown",
+        "device_info",
+        "device_identity_set",
+        "device_trees",
+        "folder_status",
         "app_settings_get",
         "app_settings_save",
-        "app_settings_parse_toml",
         "vault_root_resolve",
-        "vault_root_setup_default_root",
-        "vault_root_setup_path",
-        "vault_root_deactivate_alias",
-        "vault_root_read_alias",
-        "vault_root_remember_custom",
-        "vault_root_default_root_status",
-        "vault_root_inspect_path",
         "vault_root_suggested_custom_path",
+        "data_folder_list",
+        "data_folder_apply",
+        "data_folder_search",
         "log_list",
         "log_get",
         "log_delete",
@@ -2340,7 +1824,6 @@ mod contract_tests {
         "vault_list",
         "vault_create",
         "vault_open",
-        "vault_plain_confirm",
         "vault_plain_destination",
         "vault_plain_leftover",
         "vault_plain_remove",
@@ -2349,6 +1832,9 @@ mod contract_tests {
         "vault_plain_deletions",
         "vault_plain_send",
         "vault_plain_unsend",
+        "plain_record_forget",
+        "vault_unlocked_folder_attach",
+        "vault_unlocked_folder_info",
         "vault_close",
         "vault_change_password",
         "vault_change_kdf",
@@ -2391,8 +1877,8 @@ mod contract_tests {
         "vault_fs_os_path",
         "vault_fs_move",
         "backup_list",
-        "backup_folder_check",
-        "backup_folder_reuse",
+        "backup_rename",
+        "backup_folder_forget",
         "backup_delete",
         "backup_promote",
         "backup_save",
@@ -2476,12 +1962,14 @@ mod contract_tests {
             ("backup_save", json!({ "id": "notes" })),
             (
                 "backup_export",
-                json!({ "id": "notes", "stamps": ["20260101000000"], "destDir": "/media/usb" }),
+                json!({ "id": "notes", "keys": ["data/20260101000000-notes.zip"], "destDir": "/media/usb" }),
             ),
+            ("vault_unlocked_folder_attach", json!({ "id": "notes" })),
             (
                 "data_folder_export",
                 json!({ "destDir": "/media/usb", "name": "copy" }),
             ),
+            ("data_folder_search", json!({})),
         ] {
             assert_eq!(
                 error_code(&call(method, params)),
@@ -2580,35 +2068,6 @@ mod contract_tests {
     }
 
     #[test]
-    fn app_settings_parse_toml_reads_ui_prefs() {
-        let toml = "\
-[package]
-version = 1
-[ui]
-locale = \"pt-BR\"
-[logging]
-enabled = true
-level = \"info\"
-";
-        let parsed = handle_rpc(RpcRequest {
-            method: "app_settings_parse_toml".into(),
-            params: json!({ "toml": toml }),
-        });
-        assert!(parsed.ok, "{parsed:?}");
-        let settings = parsed.result.as_ref().unwrap()["settings"].clone();
-        assert_eq!(settings["ui"]["locale"], "pt-BR");
-    }
-
-    #[test]
-    fn app_settings_parse_toml_rejects_garbage() {
-        let response = handle_rpc(RpcRequest {
-            method: "app_settings_parse_toml".into(),
-            params: json!({ "toml": "not toml {{{" }),
-        });
-        assert!(!response.ok);
-    }
-
-    #[test]
     fn log_event_vault_hidden_has_no_name_fields() {
         let ok_response = handle_rpc(RpcRequest {
             method: "log_event".into(),
@@ -2669,73 +2128,61 @@ level = \"info\"
     }
 
     #[test]
-    fn require_bootstrap_locale_rejects_missing_empty_and_whitespace() {
-        assert!(require_bootstrap_locale(None).is_err());
-        assert!(require_bootstrap_locale(Some(&bootstrap(None))).is_err());
-        assert!(require_bootstrap_locale(Some(&bootstrap(Some("")))).is_err());
-        assert!(require_bootstrap_locale(Some(&bootstrap(Some("   ")))).is_err());
+    fn bootstrap_prefs_need_a_locale() {
+        assert!(bootstrap_prefs(None).is_err());
+        assert!(bootstrap_prefs(Some(&bootstrap(None))).is_err());
+        assert!(bootstrap_prefs(Some(&bootstrap(Some("")))).is_err());
+        assert!(bootstrap_prefs(Some(&bootstrap(Some("   ")))).is_err());
         assert_eq!(
-            require_bootstrap_locale(Some(&bootstrap(Some("pt-BR")))).unwrap(),
-            "pt-BR"
-        );
-        assert_eq!(
-            require_bootstrap_locale(Some(&bootstrap(Some("  es  ")))).unwrap(),
-            "es"
-        );
-    }
-
-    /// A2/A3 create path: absent `.upriv/` at target → bootstrap.locale required before disk.
-    #[test]
-    fn bootstrap_prefs_for_dir_requires_locale_when_absent() {
-        crate::isolate_app_home();
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(
-            inspect_vault_root_at(dir.path()),
-            VaultRootDirStatus::Absent
-        );
-        let err = bootstrap_prefs_for_dir(dir.path(), None).unwrap_err();
-        assert_eq!(
-            err.error.as_ref().map(|e| e.code.as_str()),
-            Some("invalid_request")
-        );
-        let prefs = bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("pt-BR"))))
-            .unwrap()
-            .expect("bootstrap prefs when creating");
-        assert_eq!(prefs.locale.as_deref(), Some("pt-BR"));
-    }
-
-    /// AGENT.md contract: selecting a Valid existing root must not require
-    /// bootstrap prefs (settings.toml is not rewritten on this path).
-    #[test]
-    fn bootstrap_prefs_for_dir_none_when_valid() {
-        crate::isolate_app_home();
-        let dir = tempfile::tempdir().unwrap();
-        upriv_core::initialize_vault_root(dir.path()).unwrap();
-        assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
-        assert!(bootstrap_prefs_for_dir(dir.path(), None).unwrap().is_none());
-        assert!(
-            bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("pt-BR"))))
+            bootstrap_prefs(Some(&bootstrap(Some("  es  "))))
                 .unwrap()
-                .is_none()
+                .locale
+                .as_deref(),
+            Some("es")
         );
     }
 
-    /// A2/A3 create path: incomplete `.upriv/` at target → bootstrap.locale
-    /// still required before disk (incomplete→replace path also creates).
     #[test]
-    fn bootstrap_prefs_for_dir_requires_locale_when_incomplete() {
-        crate::isolate_app_home();
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
-        assert_eq!(
-            inspect_vault_root_at(dir.path()),
-            VaultRootDirStatus::Incomplete
+    fn data_folder_apply_needs_a_locale_and_a_job_to_adopt() {
+        let no_locale = call("data_folder_apply", json!({}));
+        assert_eq!(error_code(&no_locale), Some("invalid_request"));
+        let no_job = call(
+            "data_folder_apply",
+            json!({ "bootstrap": { "locale": "en" }, "adoptPrivateRoot": true }),
         );
-        assert!(bootstrap_prefs_for_dir(dir.path(), None).is_err());
-        let prefs = bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("es"))))
-            .unwrap()
-            .expect("bootstrap prefs on incomplete→replace");
-        assert_eq!(prefs.locale.as_deref(), Some("es"));
+        assert_eq!(error_code(&no_job), Some("invalid_request"));
+        let no_policy = call(
+            "data_folder_apply",
+            json!({ "bootstrap": { "locale": "en" }, "replaceIncomplete": true }),
+        );
+        assert_eq!(error_code(&no_policy), Some("invalid_request"));
+    }
+
+    #[test]
+    fn the_data_folder_list_answers_with_defaults_folder() {
+        let listed = call("data_folder_list", json!({}));
+        let result = listed.result.expect("result");
+        assert!(result["defaultFolder"].is_string(), "{result}");
+        assert!(result["list"].is_object(), "{result}");
+    }
+
+    #[test]
+    fn a_data_folder_row_status_needs_no_data_folder_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = call(
+            "folder_status",
+            json!({ "list": "data_folder", "path": dir.path().to_str().unwrap() }),
+        );
+        let result = status.result.expect("result");
+        assert_eq!(result["state"], "ok");
+        assert_eq!(result["content"], "empty");
+        let refused = call(
+            "folder_status",
+            json!({ "list": "data_folder", "path": "relative" }),
+        );
+        assert_eq!(refused.result.expect("result")["state"], "refused");
+        let no_path = call("folder_status", json!({ "list": "backup" }));
+        assert_eq!(error_code(&no_path), Some("invalid_request"));
     }
 
     #[test]
@@ -2759,31 +2206,8 @@ level = \"info\"
         assert!(parse_replace_policy_flag(true, None).is_err());
     }
 
-    /// Settings emptied by a pulled drive: the reset policy keeps the vaults.
     #[test]
-    fn vault_root_setup_path_reset_settings_keeps_vaults() {
-        crate::isolate_app_home();
-        let dir = tempfile::tempdir().unwrap();
-        upriv_core::initialize_vault_root(dir.path()).unwrap();
-        let vault_dir = dir.path().join(".upriv/vaults/notes");
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        std::fs::write(vault_dir.join("config.toml"), b"[vault]\nid = \"notes\"\n").unwrap();
-        std::fs::write(dir.path().join(".upriv/settings.toml"), b"").unwrap();
-
-        let prefs = bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("es")))).unwrap();
-        let opened = open_or_initialize_vault_root(
-            dir.path(),
-            parse_replace_policy_flag(true, Some("reset_settings")).unwrap(),
-            prefs.as_ref(),
-        )
-        .unwrap();
-        assert!(!opened.created);
-        assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
-        assert!(vault_dir.join("config.toml").is_file());
-    }
-
-    #[test]
-    fn vault_root_setup_refuses_while_vault_session_open() {
+    fn data_folder_apply_refuses_while_vault_session_open() {
         crate::isolate_app_home();
         let dir = tempfile::tempdir().unwrap();
         upriv_core::initialize_vault_root(dir.path()).unwrap();
@@ -2798,7 +2222,7 @@ level = \"info\"
                 password_hint: String::new(),
             },
             storage: upriv_core::VaultStorageSection::default(),
-            mount: Default::default(),
+            unlocked_folder: Default::default(),
             backup: Default::default(),
             security: Default::default(),
             auto_close: Default::default(),
@@ -2814,37 +2238,18 @@ level = \"info\"
         .expect("create");
         upriv_core::open_vault(&root, "busy-root", b"pass-word-ok").expect("open");
 
-        let blocked = handle_rpc(RpcRequest {
-            method: "vault_root_setup_default_root".into(),
-            params: json!({ "bootstrap": { "locale": "en" } }),
-        });
-        assert_eq!(
-            blocked.error.as_ref().map(|e| e.code.as_str()),
-            Some("vault_root_busy"),
-            "{blocked:?}"
+        let blocked = call(
+            "data_folder_apply",
+            json!({ "bootstrap": { "locale": "en" } }),
         );
-
-        let blocked_path = handle_rpc(RpcRequest {
-            method: "vault_root_setup_path".into(),
-            params: json!({
-                "path": dir.path().to_str().unwrap(),
-                "bootstrap": { "locale": "en" }
-            }),
-        });
-        assert_eq!(
-            blocked_path.error.as_ref().map(|e| e.code.as_str()),
-            Some("vault_root_busy"),
-            "{blocked_path:?}"
-        );
+        assert_eq!(error_code(&blocked), Some("vault_root_busy"), "{blocked:?}");
 
         upriv_core::close_vault(&root, "busy-root").expect("close");
-        let after = handle_rpc(RpcRequest {
-            method: "vault_root_setup_path".into(),
-            params: json!({
-                "path": dir.path().to_str().unwrap(),
-                "bootstrap": { "locale": "en" }
-            }),
-        });
+        // The list is left alone: the app home is shared by every test here.
+        let after = call(
+            "data_folder_apply",
+            json!({ "bootstrap": { "locale": "en" }, "replaceIncomplete": true }),
+        );
         assert_ne!(
             after.error.as_ref().map(|e| e.code.as_str()),
             Some("vault_root_busy"),

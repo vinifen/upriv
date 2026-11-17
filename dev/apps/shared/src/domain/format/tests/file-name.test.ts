@@ -7,6 +7,8 @@ describe("fileNameOfPath", () => {
       "upriv-2026-10-19-101500.zip",
     );
     expect(fileNameOfPath("E:\\Backups\\Notes 2.7z")).toBe("Notes 2.7z");
-    expect(fileNameOfPath("/upriv-saf-export/Notes.zip")).toBe("Notes.zip");
+    expect(fileNameOfPath("/upriv-saf-tree/0f1e2d3c4b5a69788796a5b4c3d2e1f0/Notes.zip")).toBe(
+      "Notes.zip",
+    );
   });
 });

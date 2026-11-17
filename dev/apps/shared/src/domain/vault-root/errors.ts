@@ -1,22 +1,21 @@
 import { RpcError, isRpcError } from "../core-rpc/errors";
 
 /**
- * Vault-root discovery / setup wire codes from upriv-core / daemon.
- * Keep in sync with `upriv-daemon` `map_core_err` and locales.
+ * Data folder wire codes from upriv-core. Keep in sync with `upriv-rpc`
+ * `map_core_err` and locales.
  *
  * `io_error` is **transport** (disk full, permission on a valid root) — not Gate A/B.
- * Keep the constant for i18n / Gate lockout; do not treat it as integrity.
  */
 export const VAULT_ROOT_ERROR_CODES = {
   NOT_FOUND: "vault_root_not_found",
   INCOMPLETE: "vault_root_incomplete",
-  ALIAS_INVALID: "vault_root_alias_invalid",
-  /** Open session or in-flight Argon2 — refuse data-folder switch (not Gate A/B). */
+  /** The data folder list in the app home cannot be read as one. */
+  LIST_INVALID: "data_folder_list_invalid",
+  /** The folder the list selects cannot hold a data folder now (`details.reason`). */
+  UNAVAILABLE: "data_folder_unavailable",
+  /** A vault is busy: the data folder in use cannot change (not Gate A/B). */
   BUSY: "vault_root_busy",
-  /**
-   * The data folder's volume is gone (drive unplugged) but the pointer is kept.
-   * Not integrity: nothing on disk is wrong, so never Setup or Repair.
-   */
+  /** A phone's data folder answered that its drive is away, mid-operation. */
   UNREACHABLE: "vault_root_unreachable",
   IO_ERROR: "io_error",
 } as const;
@@ -24,58 +23,52 @@ export const VAULT_ROOT_ERROR_CODES = {
 export type VaultRootErrorCode =
   (typeof VAULT_ROOT_ERROR_CODES)[keyof typeof VAULT_ROOT_ERROR_CODES];
 
-/** Mid-session A/B: missing / incomplete / alias — Gate must re-resolve. */
+/** Mid-session integrity: the Gate must resolve again. */
 export type VaultRootIntegrityCode =
   | typeof VAULT_ROOT_ERROR_CODES.NOT_FOUND
   | typeof VAULT_ROOT_ERROR_CODES.INCOMPLETE
-  | typeof VAULT_ROOT_ERROR_CODES.ALIAS_INVALID;
+  | typeof VAULT_ROOT_ERROR_CODES.LIST_INVALID;
 
 const VAULT_ROOT_INTEGRITY_CODES = new Set<string>([
   VAULT_ROOT_ERROR_CODES.NOT_FOUND,
   VAULT_ROOT_ERROR_CODES.INCOMPLETE,
-  VAULT_ROOT_ERROR_CODES.ALIAS_INVALID,
+  VAULT_ROOT_ERROR_CODES.LIST_INVALID,
 ]);
 
 export function isVaultRootErrorCode(code: string): code is VaultRootIntegrityCode {
   return VAULT_ROOT_INTEGRITY_CODES.has(code);
 }
 
-/** Android SAF: lost persistable grant — treat like a dead custom alias (first-run Setup). */
+/** A phone lost the grant of its data folder's tree. */
 const SAF_VAULT_ROOT_GONE_CODES = new Set(["saf_unauthorized", "saf_invalid_tree"]);
 
 /**
- * Mid-session A/B (missing / incomplete / alias): Gate must re-resolve.
- * Transport `io_error` and case C (`vault_not_found`) do **not** bump epoch.
- * A lost SAF grant also bumps so the Gate does not keep a dead tree.
- * An unreachable data folder bumps so the Gate shows the reconnect prompt.
+ * Mid-session A/B (missing / incomplete / an unreadable list): the Gate
+ * must resolve again. Transport `io_error` and case C (`vault_not_found`) do
+ * **not** bump the epoch. A lost phone grant and an unreachable data folder
+ * bump it too.
  */
 export function shouldBumpVaultRootEpoch(error: unknown): boolean {
   if (!isRpcError(error)) return false;
   if (isVaultRootErrorCode(error.code)) return true;
-  if (isVaultRootUnreachableError(error)) return true;
+  if (error.code === VAULT_ROOT_ERROR_CODES.UNREACHABLE) return true;
   return SAF_VAULT_ROOT_GONE_CODES.has(error.code);
 }
 
 /**
- * `.upriv` is gone (missing marker, or custom alias target no longer a vault-root).
- * Drop RAM prefs and show first-run Setup — not Repair, not alias Recovery.
- * Incomplete leftover is **not** gone (Repair). Lost SAF grant matches alias-invalid.
+ * The data folder in use is gone (case B): the in-memory preferences reset,
+ * and the Gate resolves again. The selection stays, so the Gate shows the
+ * list while a search looks for a data folder that answers. An incomplete
+ * leftover is **not** gone (Repair).
  */
 export function isVaultRootGoneError(error: unknown): boolean {
   if (!isRpcError(error)) return false;
   return (
-    error.code === VAULT_ROOT_ERROR_CODES.NOT_FOUND ||
-    error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID ||
-    SAF_VAULT_ROOT_GONE_CODES.has(error.code)
+    error.code === VAULT_ROOT_ERROR_CODES.NOT_FOUND || SAF_VAULT_ROOT_GONE_CODES.has(error.code)
   );
-}
-
-/** The data folder is kept but cannot be reached right now (reconnect the drive). */
-export function isVaultRootUnreachableError(error: unknown): boolean {
-  return isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.UNREACHABLE;
 }
 
 /** Wire error for mid-session missing `.upriv` (toast `modal.vault_root_setup.lost`). */
 export function vaultRootGoneRpcError(): RpcError {
-  return new RpcError(VAULT_ROOT_ERROR_CODES.NOT_FOUND, "vault-root gone");
+  return new RpcError(VAULT_ROOT_ERROR_CODES.NOT_FOUND, "data folder gone");
 }

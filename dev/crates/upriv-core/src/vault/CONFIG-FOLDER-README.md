@@ -18,10 +18,10 @@ Los archivos de la bóveda están en la carpeta junto a esta.
 如果导出时包含了保险库设置，它们保存在 `config.toml` 中。
 अगर एक्सपोर्ट में वॉल्ट की सेटिंग शामिल थीं, तो वे `config.toml` में हैं।
 
-`workspace.json` holds the file manager layout, when the export included it: open tabs, expanded folders, and view choices.
-`workspace.json` contiene el diseño del gestor de archivos, si la exportación lo incluyó: pestañas abiertas, carpetas expandidas y opciones de vista.
-如果导出时包含了文件管理器布局，它保存在 `workspace.json` 中：打开的标签页、展开的文件夹和视图选项。
-अगर एक्सपोर्ट में फ़ाइल मैनेजर का लेआउट शामिल था, तो वह `workspace.json` में है: खुले टैब, खुले फ़ोल्डर और व्यू के विकल्प।
+`.upriv-workspace.json` holds the file manager workspace, when the export included it: open tabs, expanded folders, and view choices.
+`.upriv-workspace.json` contiene el espacio de trabajo del gestor de archivos, si la exportación lo incluyó: pestañas abiertas, carpetas expandidas y opciones de vista.
+如果导出时包含了文件管理器工作区，它保存在 `.upriv-workspace.json` 中：打开的标签页、展开的文件夹和视图选项。
+अगर एक्सपोर्ट में फ़ाइल मैनेजर का वर्कस्पेस शामिल था, तो वह `.upriv-workspace.json` में है: खुले टैब, खुले फ़ोल्डर और व्यू के विकल्प।
 
 Importing works without either file. Do not edit them by hand.
 La importación funciona sin ninguno de los dos. No los edite a mano.

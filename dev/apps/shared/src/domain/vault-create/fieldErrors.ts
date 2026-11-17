@@ -7,7 +7,8 @@ export type CreateVaultErrorField =
   | "passwordConfirm"
   | "group"
   | "groupName"
-  | "mount"
+  | "unlockedFolder"
+  | "backupFolder"
   | "storage";
 
 const FIELD_CODES: Record<CreateVaultErrorField, readonly CreateVaultValidationCode[]> = {
@@ -23,13 +24,8 @@ const FIELD_CODES: Record<CreateVaultErrorField, readonly CreateVaultValidationC
   group: ["group_missing"],
   groupName: ["group_name_empty", "group_name_too_long", "group_name_invalid"],
   storage: [],
-  mount: [
-    "mount_path_empty",
-    "mount_path_not_absolute",
-    "mount_path_saf_tree",
-    "mount_path_reserved",
-    "mount_path_root_unknown",
-  ],
+  unlockedFolder: ["unlocked_folder_row_invalid", "unlocked_folder_unchosen"],
+  backupFolder: ["backup_folder_row_invalid"],
 };
 
 /** Codes that belong under a specific control — never invent extras. */

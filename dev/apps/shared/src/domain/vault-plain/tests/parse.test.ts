@@ -1,20 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePendingPlainConfirm, parsePlainCloseSummary, plainRecoveryOffers } from "..";
-
-describe("parsePendingPlainConfirm", () => {
-  it("reads the folder core is waiting to write", () => {
-    expect(
-      parsePendingPlainConfirm({
-        pendingPlainConfirm: { path: "/data/workspace/Notes", class: "cloud" },
-      }),
-    ).toEqual({ path: "/data/workspace/Notes", class: "cloud" });
-  });
-
-  it("treats a finished open as no confirm", () => {
-    expect(parsePendingPlainConfirm(null)).toBeNull();
-    expect(parsePendingPlainConfirm({})).toBeNull();
-  });
-});
+import { parsePlainCloseSummary, plainRecoveryOffers } from "..";
 
 describe("plainRecoveryOffers", () => {
   it("wipes the folder when it is still there", () => {

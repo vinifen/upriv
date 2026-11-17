@@ -10,10 +10,7 @@ import {
 describe("vaultRootContentorPath", () => {
   it("uses found rootPath (vault-root, not .upriv)", () => {
     expect(
-      vaultRootContentorPath(
-        { status: "found", rootPath: "/data", source: "default_root" },
-        "/mock",
-      ),
+      vaultRootContentorPath({ status: "found", rootPath: "/data", source: "default" }, "/mock"),
     ).toBe("/data");
   });
 
@@ -22,9 +19,9 @@ describe("vaultRootContentorPath", () => {
       vaultRootContentorPath(
         {
           status: "needs_setup",
-          aliasPath: "/home/.upriv-data-folder",
           defaultRootAnchor: "/home",
           distribution: "dev",
+          ended: [],
         },
         "/mock",
       ),

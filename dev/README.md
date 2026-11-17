@@ -31,7 +31,7 @@ dev/
 
 1. **Node.js 22.12+** — `nvm use` in this folder (see `.nvmrc`)
 2. **Rust 1.94.0** — `cd dev` (rustup reads `rust-toolchain.toml`) or `rustup toolchain install 1.94.0`
-3. **Linux vault mount (optional):** `libfuse3-dev` to compile the mount helper (`upriv-fuse`). The app and `upriv-daemon` start without `fuse3`. Turning the file manager folder on looks for `fusermount3` and `/dev/fuse`, then asks once to install the distro `fuse3` package. Declining leaves the switch unchanged. The in-app file manager works either way. **Windows vault folder while developing:** install [WinFsp](https://winfsp.dev/) once on this PC, or turn the file manager folder on after `apps/electron/scripts/fetch-winfsp.cjs` has the MSI. The Windows setup and the portable app carry that installer and ask when the folder is turned on. Declining leaves the switch unchanged. Without the driver the app still runs and the in-app file manager is the folder. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos — https://github.com/winfsp/winfsp
+3. **Linux vault mount (optional):** `libfuse3-dev` to compile the mount helper (`upriv-fuse`). The app and `upriv-daemon` start without `fuse3`. Turning encrypted vaults' unlocked folders on, or opening an encrypted vault whose unlocked folder is on, looks for `fusermount3` and `/dev/fuse`, then asks once to install the distro `fuse3` package. Declining leaves the switch unchanged, or the vault in the in-app file manager. The in-app file manager works either way. **Windows unlocked folder while developing:** install [WinFsp](https://winfsp.dev/) once on this PC, or turn unlocked folders on after `apps/electron/scripts/fetch-winfsp.cjs` has the MSI. The Windows setup and the portable app carry that installer and ask at those same moments. Without the driver the app still runs and the in-app file manager is the folder. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos — https://github.com/winfsp/winfsp
 
 ## Node dependencies
 
@@ -119,7 +119,7 @@ Where vault data lives (`UPRIV_DISTRIBUTION`) — **portable is only a desktop p
 | **macOS**   | DMG → Application Support (`installed` always; never portable-beside-`.app`) | **No**                                           | Mac only (experimental / unsigned scaffold) |
 | **Android** | Storage-access grant, Documents/Upriv by default                             | **No** — no “USB beside APK” model; not Electron | Android SDK + NDK (`scripts/build-android-ffi.sh`) |
 
-`custom_root` (pick any folder) works with either packaging; it is not the same as portable packaging.
+Adding folders to the data folder list (⋯ → Data folder) works with either packaging; it is not the same as portable packaging. The list is per device, so a portable copy on a USB drive opens the folder beside it on a machine it has not seen.
 
 ## Linux packaging
 
@@ -162,7 +162,7 @@ Build **on a Mac** only (`electron-builder --mac`). Not cross-built from Linux/W
 
 | Symptom                                                                             | Likely cause                                             | Fix                                                                                                                                                 |
 | ----------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Want the OS folder                                                                      | `fuse3` is not installed yet                             | Turn the file manager folder on. One system password dialog installs `fuse3`. Declining leaves the switch off.                                      |
+| Want the OS folder                                                                      | `fuse3` is not installed yet                             | Turn unlocked folders on for encrypted vaults. One system password dialog installs `fuse3`. Declining leaves the switch off.                         |
 | AppImage: `setuid_sandbox_host` / Trace/breakpoint trap under `/tmp/.mount_Upriv-*` | Started without the wrapper; the FUSE mount is `nosuid` → `chrome-sandbox` useless | Start the `.AppImage` file itself: the wrapper disables the sandbox **only when `$APPIMAGE` is set**. `.deb` keeps chrome-sandbox. |
 | AppImage won't start / sandbox error                                                | Chromium sandbox vs AppArmor                             | Same as above; renderer sandbox stays on. Dev `npm run electron:dev` always uses `--no-sandbox` (dev-only).                                         |
 | `upriv-daemon not found`                                                            | Release binary missing before pack                       | Run `npm run daemon:build:release` or full `npm run electron:build`                                                                                 |

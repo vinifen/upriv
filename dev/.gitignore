@@ -24,9 +24,8 @@ apps/electron/build/winfsp/*.msi
 
 # Local vault-root created by `electron:dev` (app home = this `dev/` folder)
 .upriv/
-# Mount parent folder beside `.upriv/` only — do NOT use unanchored `workspace/`
-# (that would ignore `apps/shared/src/domain/workspace/`).
-/workspace/
+# Unlocked folder beside the data folder (Beside the data folder choice)
+/upriv-unlocked/
 .upriv-data-folder
 .upriv-invalidated-*
 

@@ -1,39 +1,26 @@
-import { createLiveBackupService } from "@upriv/shared";
+import type { BackupService } from "@upriv/shared";
 import {
   rpcBackupDelete,
   rpcBackupExport,
-  rpcBackupFolderCheck,
-  rpcBackupFolderReuse,
+  rpcBackupFolderForget,
   rpcBackupList,
   rpcBackupPromote,
+  rpcBackupRename,
   rpcBackupSave,
 } from "@/lib/rpc";
-import { nativeSafExportMount } from "./safExportMount";
+import { nativeExportTrees } from "./exportTrees";
 
-/** Native → `upriv-ffi` `backup_*` (skipped on SAF trees). */
-export const nativeBackupService = createLiveBackupService({
-  async listBackups(vaultId) {
-    return rpcBackupList(vaultId);
-  },
-  async deleteBackups(vaultId, stamps) {
-    return rpcBackupDelete(vaultId, stamps);
-  },
-  async promoteToSave(vaultId, stamp) {
-    return rpcBackupPromote(vaultId, stamp);
-  },
-  async saveNow(vaultId, job) {
-    return rpcBackupSave(vaultId, job);
-  },
-  // A picked folder is mounted for the export, so Rust writes the file straight into it.
-  async exportTo(vaultId, keys, destDir, job) {
-    return nativeSafExportMount.withExportFolder(destDir, job, (dir) =>
+/** Native → `upriv-ffi` `backup_*`. */
+export const nativeBackupService: BackupService = {
+  listBackups: (vaultId) => rpcBackupList(vaultId),
+  deleteBackups: (vaultId, keys) => rpcBackupDelete(vaultId, keys),
+  promoteToSave: (vaultId, key) => rpcBackupPromote(vaultId, key),
+  renameBackup: (vaultId, key, name) => rpcBackupRename(vaultId, key, name),
+  forgetFolder: (vaultId, folder) => rpcBackupFolderForget(vaultId, folder),
+  saveNow: (vaultId, job) => rpcBackupSave(vaultId, job),
+  // A picked folder is reached at its tree's root, so Rust writes the file straight into it.
+  exportTo: (vaultId, keys, destDir, job) =>
+    nativeExportTrees.withExportFolder(destDir, job, (dir) =>
       rpcBackupExport(vaultId, keys, dir, job),
-    );
-  },
-  async checkFolder(path, vaultId) {
-    return rpcBackupFolderCheck(path, vaultId);
-  },
-  async reuseFolder(vaultId) {
-    return rpcBackupFolderReuse(vaultId);
-  },
-});
+    ),
+};

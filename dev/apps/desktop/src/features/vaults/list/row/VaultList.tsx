@@ -105,6 +105,10 @@ interface VaultListProps {
   onCloseNow: (vault: VaultListItem) => void;
   /** Stop the work the row shows (`pipelineListStatus.rowWork`). */
   onStopWork: (vault: VaultListItem) => void;
+  /** Check a plain-text folder on record again. */
+  onPlainRecordRetry: () => void;
+  /** Forget a plain-text folder on record. */
+  onPlainRecordForget: (vault: VaultListItem, token: string) => void;
 }
 
 export function VaultList({
@@ -134,6 +138,8 @@ export function VaultList({
   onUnlockVault,
   onCloseNow,
   onStopWork,
+  onPlainRecordRetry,
+  onPlainRecordForget,
 }: VaultListProps) {
   useRowArmingDismiss();
   const { t } = useTranslation();
@@ -281,6 +287,8 @@ export function VaultList({
         onUnlockVault={onUnlockVault}
         onCloseNow={onCloseNow}
         onStopWork={onStopWork}
+        onPlainRecordRetry={onPlainRecordRetry}
+        onPlainRecordForget={onPlainRecordForget}
       />
     );
 
@@ -399,6 +407,8 @@ export function VaultList({
               onUnlockVault={onUnlockVault}
               onCloseNow={onCloseNow}
               onStopWork={onStopWork}
+              onPlainRecordRetry={onPlainRecordRetry}
+              onPlainRecordForget={onPlainRecordForget}
             />
           );
         }
@@ -464,6 +474,8 @@ export function VaultList({
                       onUnlockVault={onUnlockVault}
                       onCloseNow={onCloseNow}
                       onStopWork={onStopWork}
+                      onPlainRecordRetry={onPlainRecordRetry}
+                      onPlainRecordForget={onPlainRecordForget}
                     />
                   );
                 })}

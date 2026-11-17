@@ -1,8 +1,7 @@
 /** @vitest-environment jsdom */
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  VAULT_ROOT_PATH_CHECK_DELAY_MS,
   createEmptyCreateVaultDraft,
   type CreateVaultDraft,
   type CreateVaultStepId,
@@ -10,10 +9,7 @@ import {
 import { renderCreateVaultStep } from "../createVaultSteps";
 
 vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key, locale: "en" }) }));
-const backupService = vi.hoisted(() => ({ checkFolder: vi.fn(async () => "missing") }));
-
 vi.mock("@/platform/services", () => ({
-  useBackupService: () => backupService,
   useCreateVaultService: () => ({}),
   useVaultRootService: () => ({}),
 }));
@@ -58,51 +54,6 @@ function isDisabled(label: string): boolean {
 function switchOn(label: string): boolean {
   return input(label).getAttribute("aria-checked") === "true";
 }
-
-describe("the backup folder check", () => {
-  const FOLDER = { place: "custom" as const, path: "/mnt/usb" };
-  const FOLDERS = { linux: FOLDER, windows: FOLDER, macos: FOLDER };
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
-  });
-
-  async function blockingAfterCheck(carried: boolean): Promise<boolean | undefined> {
-    const empty = createEmptyCreateVaultDraft([]);
-    const onBlocking = vi.fn<(blocking: boolean) => void>();
-    render(
-      renderCreateVaultStep("general", {
-        draft: {
-          ...empty,
-          source: "scratch",
-          backup: { ...empty.backup, ...FOLDERS },
-          carriedBackupFolders: carried ? FOLDERS : null,
-        },
-        errors: [],
-        onChange: () => undefined,
-        vaultRootPath: "/data",
-        onBackupFolderBlockingChange: onBlocking,
-      }),
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(VAULT_ROOT_PATH_CHECK_DELAY_MS);
-    });
-    expect(backupService.checkFolder).toHaveBeenCalled();
-    return onBlocking.mock.lastCall?.[0];
-  }
-
-  it("holds the step for a folder typed here that does not work", async () => {
-    await expect(blockingAfterCheck(false)).resolves.toBe(true);
-  });
-
-  it("never holds a folder a file carried, which may be on another computer's drive", async () => {
-    await expect(blockingAfterCheck(true)).resolves.toBe(false);
-  });
-});
 
 describe("the .7z field locks", () => {
   afterEach(cleanup);

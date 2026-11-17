@@ -28,8 +28,13 @@ import {
   VAULT_SETTINGS_AREA_ICON,
   vaultSettingsToListPatch,
   vaultSettingsIdentityListPatch,
-  vaultRootPathForWorkspaceValidation,
   vaultConfigEditAllowed,
+  VAULT_BACKUP_LIST,
+  VAULT_UNLOCKED_LIST,
+  isEmptyVaultListChanges,
+  listDraftBlocks,
+  requireVaultConfigEditLockedI18nKey,
+  vaultListChanges,
   vaultConfigEditHold,
   vaultDeleteHold,
   vaultRowControls,
@@ -48,7 +53,8 @@ import {
   type KdfUnlockPreset,
   type VaultRewrapKind,
 } from "@upriv/shared";
-import { useVaultRootService, useVaultService } from "@/platform/services";
+import { hereDevice, useDeviceInfo } from "@upriv/shared/react";
+import { useDeviceService, useVaultService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
@@ -70,6 +76,7 @@ import { spacing } from "@/theme/tokens";
 import {
   FieldHint,
   SettingsAccordionSection,
+  SwitchRow,
   VaultChangeKdfFields,
   VaultChangePasswordFields,
 } from "@/components/settings";
@@ -126,7 +133,8 @@ interface VaultSettingsModalProps {
     vaultId: string,
     assignment: CreateVaultGroupAssignment,
   ) => Promise<void> | void;
-  onVaultDelete?: (vaultId: string) => void;
+  /** `outsideBackups`: also remove what this vault wrote to backup folders outside the data folder. */
+  onVaultDelete?: (vaultId: string, outsideBackups: boolean) => void;
 }
 
 export function VaultSettingsModal({
@@ -150,7 +158,9 @@ export function VaultSettingsModal({
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const vaultService = useVaultService();
-  const vaultRootService = useVaultRootService();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
+  const hereIdRef = useRef(here?.id ?? null);
+  hereIdRef.current = here?.id ?? null;
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultId = vault?.id ?? null;
   const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
@@ -165,7 +175,8 @@ export function VaultSettingsModal({
   const storageModeLocked = !editAllowed("storage.mode");
   const plainFilesLocked = !editAllowed("storage.plain_files");
   const displayNameLocked = !editAllowed("vault.display_name");
-  const mountLocked = !editAllowed("mount.workspace_path");
+  /** This device's unlocked folder group and the encrypted switch — `vault_quiet`. */
+  const unlockedLocked = !editAllowed("unlocked_folder");
   const rewrapBlocked = Boolean(
     vault && !vaultConfigEditAllowed("action.change_password", vault, pipelineListStatus),
   );
@@ -223,8 +234,8 @@ export function VaultSettingsModal({
   const [headerUnlockPreset, setHeaderUnlockPreset] = useState<KdfUnlockPreset | undefined>();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
-  const [mountPathIssue, setMountPathIssue] = useState(false);
-  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  /** Never saved: each delete starts with backups outside the data folder kept. */
+  const [removeOutsideBackups, setRemoveOutsideBackups] = useState(false);
 
   const loadGen = useRef(0);
   /** Draft object seeded from the last read. A different object means the user edited. */
@@ -245,33 +256,6 @@ export function VaultSettingsModal({
     // List row already probed `header/vault.header`. Missing ≠ 256 MiB.
     setHeaderUnlockPreset(vault?.unlockPreset);
   }, [open, vaultId, vault?.unlockPreset]);
-
-  useEffect(() => {
-    if (!open) {
-      setResolvedRootPath(null);
-      setMountPathIssue(false);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: appSettings.app.vault_root_mode,
-        });
-        if (cancelled) return;
-        if (resolved.status === "found") {
-          setResolvedRootPath(resolved.rootPath);
-        } else {
-          setResolvedRootPath(resolved.defaultRootAnchor);
-        }
-      } catch {
-        if (!cancelled) setResolvedRootPath(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, appSettings.app.vault_root_mode, vaultRootService]);
 
   if (open && vaultId && seededFor !== vaultId) {
     const migrating = identityMigratingRef.current && identityMigratingToRef.current === vaultId;
@@ -532,7 +516,9 @@ export function VaultSettingsModal({
         if (section === "vault" && "display_name" in patch && displayNameLocked) {
           return current;
         }
-        if (section === "mount" && mountLocked) return current;
+        if (section === "unlocked_folder" && "encrypted" in patch && unlockedLocked) {
+          return current;
+        }
 
         return {
           ...current,
@@ -540,7 +526,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [storageModeLocked, plainFilesLocked, displayNameLocked, mountLocked],
+    [storageModeLocked, plainFilesLocked, displayNameLocked, unlockedLocked],
   );
 
   const submitLimit = useOperationLimit(busy);
@@ -654,7 +640,18 @@ export function VaultSettingsModal({
         return;
       }
       if (otherDirty) {
-        await vaultService.registerSettings(toSave.vault.id, toSave);
+        // This device's unlocked folder group keeps its rows while the vault is not quiet.
+        const lists = vaultListChanges(baseline, toSave, hereIdRef.current, {
+          unlockedHere: unlockedLocked,
+        });
+        const saved = await vaultService.registerSettings(toSave.vault.id, toSave, lists);
+        for (const folder of saved.keptFolders) {
+          showToast(t("folder_list.toast.folder_kept", { path: folder }));
+        }
+        if (!isEmptyVaultListChanges(lists)) {
+          // Core applied the change to the lists as the file held them: read them back.
+          toSave = (await vaultService.getSettings(toSave.vault.id)) ?? toSave;
+        }
       }
       onSaved(fromId, vaultSettingsToListPatch(toSave));
       if (generation !== busyGenRef.current) return;
@@ -701,6 +698,7 @@ export function VaultSettingsModal({
     flashSaved,
     showToast,
     t,
+    unlockedLocked,
   ]);
 
   const persistGroupAssignment = useCallback(async () => {
@@ -857,6 +855,7 @@ export function VaultSettingsModal({
     setDiscardConfirmOpen(false);
     setDeleteOpen(false);
     setDeleteConfirm("");
+    setRemoveOutsideBackups(false);
     onClose();
   }, [onClose]);
 
@@ -865,7 +864,7 @@ export function VaultSettingsModal({
   const handleConfirmDelete = useCallback(() => {
     if (!canConfirmDelete || !canDeleteNow || !vault || busy || !vaultService.canDeleteVault)
       return;
-    onVaultDelete?.(vault.id);
+    onVaultDelete?.(vault.id, vault.outsideBackups === true && removeOutsideBackups);
     handleCloseModal();
   }, [
     canConfirmDelete,
@@ -874,6 +873,7 @@ export function VaultSettingsModal({
     busy,
     onVaultDelete,
     handleCloseModal,
+    removeOutsideBackups,
     vaultService.canDeleteVault,
   ]);
 
@@ -978,11 +978,26 @@ export function VaultSettingsModal({
           ? t("modal.settings.save_confirm_action")
           : t("modal.settings.save");
 
+  const hereId = here?.id ?? null;
+  /** A row of a list misses its path, or names one it may not. */
+  const listsBlocked = Boolean(
+    activeArea === "preferences" &&
+    draft &&
+    baseline &&
+    (listDraftBlocks(
+      baseline.unlocked_folder.devices,
+      draft.unlocked_folder.devices,
+      VAULT_UNLOCKED_LIST,
+      hereId,
+    ) ||
+      listDraftBlocks(baseline.backup.devices, draft.backup.devices, VAULT_BACKUP_LIST, hereId)),
+  );
+
   const saveDisabled =
     settingsSaveBlocked ||
     busy ||
     !areaDirty ||
-    mountPathIssue ||
+    listsBlocked ||
     (activeArea === "preferences" && !vaultService.canPersistSettings) ||
     (activeArea === "password" && !passwordCanSubmit) ||
     (activeArea === "kdf" && !kdfCanSubmit);
@@ -1140,15 +1155,21 @@ export function VaultSettingsModal({
               storageModeLocked={storageModeLocked}
               plainFilesLocked={plainFilesLocked}
               displayNameLocked={displayNameLocked}
-              mountLocked={mountLocked}
+              unlockedLockedHint={
+                unlockedLocked
+                  ? t(requireVaultConfigEditLockedI18nKey("unlocked_folder", editHold))
+                  : null
+              }
               editHold={editHold}
-              vaultRootPath={vaultRootPathForWorkspaceValidation(
-                appSettings.app.vault_root_mode,
-                appSettings.app.upriv_root_path,
-                resolvedRootPath,
-              )}
-              appWorkspace={appSettings.workspace}
-              onPathIssueChange={(issue) => setMountPathIssue(issue != null)}
+              lists={{
+                app: appSettings,
+                saved: {
+                  unlocked: (baseline ?? draft).unlocked_folder.devices,
+                  backups: (baseline ?? draft).backup.devices,
+                },
+                here,
+                vaultId,
+              }}
               hiddenLocked={hiddenLocked}
             >
               {onVaultDelete ? (
@@ -1187,6 +1208,14 @@ export function VaultSettingsModal({
                         spellCheck={false}
                         mono
                       />
+                      {vault.outsideBackups ? (
+                        <SwitchRow
+                          label={t("modal.settings.delete_outside_backups")}
+                          hint={t("modal.settings.delete_outside_backups_help")}
+                          value={removeOutsideBackups}
+                          onValueChange={setRemoveOutsideBackups}
+                        />
+                      ) : null}
                       <ModalFooterActions layout="dialog">
                         <Button
                           variant="ghost"
@@ -1195,6 +1224,7 @@ export function VaultSettingsModal({
                           onPress={() => {
                             setDeleteOpen(false);
                             setDeleteConfirm("");
+                            setRemoveOutsideBackups(false);
                           }}
                         />
                         <Button

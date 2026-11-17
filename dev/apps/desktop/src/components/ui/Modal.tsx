@@ -257,13 +257,14 @@ export function Modal({
     };
 
     // Recover when focus escapes the dialog (e.g. Continue unmounted mid-step).
-    // Leave focus alone when it moved into another dialog or a portaled list.
+    // Leave focus alone when it moved into another dialog, or into a portaled
+    // list or menu opened from inside it (a Select, a row's ⋯ menu): taking
+    // it back would close that menu before its click lands.
     const recoverIfFocusLeft = () => {
       const active = document.activeElement;
       if (active instanceof Node && panel.contains(active)) return;
       if (active instanceof Element) {
-        const role = active.getAttribute("role");
-        if (role === "listbox" || role === "option") return;
+        if (active.closest("[role='listbox'], [role='menu']")) return;
         const dialog = active.closest("[role='dialog']");
         if (dialog && dialog !== panel) return;
       }

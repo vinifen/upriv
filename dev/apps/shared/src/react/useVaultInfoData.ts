@@ -1,26 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  currentWorkspaceSystem,
-  encryptedShortcutActive,
-  resolveVaultMountPoint,
-  resolvedWorkspaceParent,
-  vaultWorkspace,
   shouldBumpVaultRootEpoch,
   vaultRootContentorPath,
   vaultRootGoneRpcError,
   vaultRootUprivOpenPath,
   vaultStoreDisplayPaths,
-  type AppSettingsConfig,
-  type ChosenBackupFolder,
-  type VaultBackupEntry,
+  type UnlockedFolderInfo,
+  type VaultBackupSection,
   type VaultGroup,
   type VaultInfoSnapshot,
   type VaultListItem,
-  type VaultRootMode,
   type VaultRuntimeStats,
 } from "../domain";
 import type {
   BackupService,
+  FolderListService,
   VaultLifecycleService,
   VaultRootService,
   VaultService,
@@ -35,29 +29,30 @@ export interface UseVaultInfoDataOptions {
   backupService: BackupService;
   lifecycleService: VaultLifecycleService;
   vaultRootService: VaultRootService;
-  vaultRootMode: VaultRootMode;
-  /** App workspace table used to resolve this system's mount point. */
-  workspace: AppSettingsConfig["workspace"];
+  folderListService: FolderListService;
   /**
    * Last-resort prefix when `vault_root_resolve` is not `found`
    * (pre-setup). Do not use this as the happy path.
    */
   fallbackVaultRootBase: string;
-  /** React Native `Platform.OS`. Omit in Electron; that renderer has no Node `process`. */
-  host?: string | null;
 }
 
+/** Slow on a big vault or a sleeping drive, so Info shows without them first. */
 interface SlowVaultInfo {
   vaultId: string;
   /** `null` while the list is read. */
-  backups: VaultBackupEntry[] | null;
-  chosenBackups: ChosenBackupFolder | null;
+  backupSections: VaultBackupSection[] | null;
+  unlockedFolder: UnlockedFolderInfo | null;
   storeBytes: VaultRuntimeStats["storeBytes"];
   heldBytes: VaultRuntimeStats["heldBytes"];
+  filesBytes: VaultRuntimeStats["filesBytes"];
 }
 
 /** Core does not report these session counters — Info shows an em dash, not a guess. */
-const UNAVAILABLE_RUNTIME_STATS: Omit<VaultRuntimeStats, "storeBytes" | "heldBytes"> = {
+const UNAVAILABLE_RUNTIME_STATS: Omit<
+  VaultRuntimeStats,
+  "storeBytes" | "heldBytes" | "filesBytes"
+> = {
   openCount: null,
   lastOpenedAt: null,
   sessionRamBytes: null,
@@ -73,13 +68,10 @@ export function useVaultInfoData({
   backupService,
   lifecycleService,
   vaultRootService,
-  vaultRootMode,
-  workspace,
+  folderListService,
   fallbackVaultRootBase,
-  host,
 }: UseVaultInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<VaultInfoSnapshot | null>(null);
-  /** Backups and disk usage: slow on a big vault, so Info shows without them first. */
   const [slow, setSlow] = useState<SlowVaultInfo | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [loadFailure, setLoadFailure] = useState<unknown>(null);
@@ -112,10 +104,11 @@ export function useVaultInfoData({
         ? prev
         : {
             vaultId: current.id,
-            backups: null,
-            chosenBackups: null,
+            backupSections: null,
+            unlockedFolder: null,
             storeBytes: "measuring",
             heldBytes: "measuring",
+            filesBytes: "measuring",
           },
     );
 
@@ -133,45 +126,41 @@ export function useVaultInfoData({
     };
     void backupService
       .listBackups(current.id)
-      .then(
-        (listing) => patchSlow({ backups: listing.backups, chosenBackups: listing.chosen }),
-        fail,
-      );
+      .then((listing) => patchSlow({ backupSections: listing.sections }), fail);
+    void folderListService
+      .unlockedFolderInfo(current.id)
+      .then((unlockedFolder) => patchSlow({ unlockedFolder }), fail);
     void vaultService
       .diskUsage(current.id)
       .catch(() => null)
       .then((usage) =>
-        patchSlow({ storeBytes: usage?.storeBytes ?? null, heldBytes: usage?.heldBytes ?? null }),
+        patchSlow({
+          storeBytes: usage?.storeBytes ?? null,
+          heldBytes: usage?.heldBytes ?? null,
+          filesBytes: usage?.filesBytes ?? null,
+        }),
       );
 
     void (async () => {
       try {
         const [settings, root] = await Promise.all([
           vaultService.getSettings(current.id),
-          vaultRootService.resolve({ vaultRootMode }),
+          vaultRootService.resolve(),
         ]);
         if (cancelled) return;
         if (root.status !== "found") {
           throw vaultRootGoneRpcError();
         }
 
-        const isOpen = current.session === "open";
         const passwordInSession = lifecycleService.hasPasswordInSession(current.id);
         const runtime = {
           ...UNAVAILABLE_RUNTIME_STATS,
           storeBytes: "measuring" as const,
           heldBytes: "measuring" as const,
+          filesBytes: "measuring" as const,
         };
         const vaultRootBase = vaultRootContentorPath(root, fallbackVaultRootBase);
         const storePaths = vaultStoreDisplayPaths(vaultRootBase, current.id);
-        const system = currentWorkspaceSystem(host);
-        const mount = settings?.mount ?? vaultWorkspace();
-        const parent = resolvedWorkspaceParent(workspace, mount, system, vaultRootBase);
-        const ownFolder = mount[system].path.trim() !== "";
-        const workspacePath = resolveVaultMountPoint(parent, current.displayName, ownFolder);
-        const mountOn = settings
-          ? encryptedShortcutActive(workspace, settings.mount, system)
-          : false;
 
         setSnapshot({
           vault: current,
@@ -179,15 +168,10 @@ export function useVaultInfoData({
           kdfPreset: current.unlockPreset ?? null,
           groupName,
           groupHidden,
-          backups: null,
-          chosenBackups: null,
+          backupSections: null,
           runtime,
           passwordInSession,
-          workspacePath,
-          // Mount is live only while the list session is open — not during
-          // opening/closing list badges (builder uses displayStatus too).
-          workspacePathIsActive: isOpen && mountOn,
-          workspaceSystem: system,
+          unlockedFolder: null,
           storePath: storePaths.storePath,
           backupsPath: storePaths.backupsPath,
           storeOpenPath: vaultRootUprivOpenPath(vaultRootBase, `vaults/${current.id}/store`),
@@ -223,10 +207,8 @@ export function useVaultInfoData({
     backupService,
     lifecycleService,
     vaultRootService,
-    vaultRootMode,
-    workspace,
+    folderListService,
     fallbackVaultRootBase,
-    host,
     loadAttempt,
   ]);
 
@@ -235,11 +217,13 @@ export function useVaultInfoData({
     const landed = slow?.vaultId === snapshot.vault.id ? slow : null;
     return {
       ...snapshot,
-      backups: landed ? landed.backups : null,
+      backupSections: landed ? landed.backupSections : null,
+      unlockedFolder: landed ? landed.unlockedFolder : null,
       runtime: {
         ...snapshot.runtime,
         storeBytes: landed ? landed.storeBytes : "measuring",
         heldBytes: landed ? landed.heldBytes : "measuring",
+        filesBytes: landed ? landed.filesBytes : "measuring",
       },
     } satisfies VaultInfoSnapshot;
   }, [slow, snapshot]);

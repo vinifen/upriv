@@ -9,6 +9,7 @@ import {
   type VaultBackupSaved,
 } from "@upriv/shared";
 import { useVaultBackupJob, type VaultBackupJobEvents } from "@upriv/shared/react";
+import { backupEntry, backupServiceStub } from "./backupStubs";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,24 +22,12 @@ function deferred<T>() {
 }
 
 const saved: VaultBackupSaved = {
-  backup: {
-    stamp: "20260101000000",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    saved: true,
-  },
-  fallback: null,
+  backup: backupEntry("20260101000000", { saved: true }),
+  switches: [],
 };
 
 function serviceSaving(saveNow: BackupService["saveNow"]): BackupService {
-  return {
-    listBackups: async () => ({ backups: [], chosen: null }),
-    deleteBackups: async () => undefined,
-    promoteToSave: async () => undefined,
-    saveNow,
-    exportTo: async (_vaultId, _keys, destDir) => ({ path: destDir, size: 0 }),
-    checkFolder: async () => "ok",
-    reuseFolder: async () => undefined,
-  };
+  return backupServiceStub({ saveNow });
 }
 
 function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {

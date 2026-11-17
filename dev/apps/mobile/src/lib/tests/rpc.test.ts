@@ -48,25 +48,33 @@ describe("mobile rpc parser guards", () => {
   });
 });
 
-describe("backup folder rows on a phone", () => {
+describe("folder lists on a phone", () => {
   beforeEach(() => {
     native.invoke.mockReset();
   });
 
-  it("sends the desktop rows back with a settings save, so a phone keeps them", async () => {
-    native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { wrote: true } }));
+  it("sends only what changed in the lists, and reads what the save left", async () => {
+    native.invoke.mockResolvedValueOnce(
+      JSON.stringify({
+        ok: true,
+        result: { wrote: true, unchangedVaults: ["notes"], keptFolders: ["/sd/upriv-unlocked"] },
+      }),
+    );
     const settings = createDefaultAppSettings();
-    settings.backups.windows = { place: "custom", path: "D:\\Backups" };
+    const lists = {
+      unlockedFolders: { groups: {} },
+      backups: { groups: { ["a".repeat(32)]: { selected: "data_folder" as const } } },
+    };
     const { rpcAppSettingsSave } = await import("../rpc");
 
-    await rpcAppSettingsSave(settings);
-
+    await expect(rpcAppSettingsSave(settings, lists)).resolves.toEqual({
+      wrote: true,
+      unchangedVaults: ["notes"],
+      keptFolders: ["/sd/upriv-unlocked"],
+    });
     const [method, params] = native.invoke.mock.calls[0];
     expect(method).toBe("app_settings_save");
-    expect(JSON.parse(params).settings.backups.windows).toEqual({
-      place: "custom",
-      path: "D:\\Backups",
-    });
+    expect(JSON.parse(params).lists).toEqual(lists);
   });
 
   it("sends the choice about outside backups with a delete, and reads what happened", async () => {
@@ -95,20 +103,20 @@ describe("data folder export rpc", () => {
     native.invoke.mockResolvedValueOnce(
       JSON.stringify({
         ok: true,
-        result: { path: "/upriv-saf-export/phone-copy.zip", size: 2048 },
+        result: { path: "/upriv-saf-tree/picked/phone-copy.zip", size: 2048 },
       }),
     );
     const { rpcDataFolderExport } = await import("../rpc");
     await expect(
-      rpcDataFolderExport("/upriv-saf-export", "phone-copy", false, "job-1"),
+      rpcDataFolderExport("/upriv-saf-tree/picked", "phone-copy", false, "job-1"),
     ).resolves.toEqual({
-      path: "/upriv-saf-export/phone-copy.zip",
+      path: "/upriv-saf-tree/picked/phone-copy.zip",
       size: 2048,
     });
     expect(native.invoke).toHaveBeenCalledWith(
       "data_folder_export",
       JSON.stringify({
-        destDir: "/upriv-saf-export",
+        destDir: "/upriv-saf-tree/picked",
         name: "phone-copy",
         includeBackups: false,
         job: "job-1",
@@ -120,7 +128,7 @@ describe("data folder export rpc", () => {
     native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { size: 1 } }));
     const { rpcDataFolderExport } = await import("../rpc");
     await expect(
-      rpcDataFolderExport("/upriv-saf-export", "phone-copy", true, "job-1"),
+      rpcDataFolderExport("/upriv-saf-tree/picked", "phone-copy", true, "job-1"),
     ).rejects.toBeInstanceOf(RpcError);
   });
 });
@@ -166,7 +174,7 @@ describe("job rpc", () => {
       .mockResolvedValueOnce(
         JSON.stringify({
           ok: true,
-          result: { path: "/upriv-saf-export/Notes.zip", size: 10, unreadable: [] },
+          result: { path: "/upriv-saf-tree/picked/Notes.zip", size: 10, unreadable: [] },
         }),
       )
       .mockResolvedValueOnce(
@@ -174,23 +182,25 @@ describe("job rpc", () => {
           ok: true,
           result: {
             backup: {
+              key: "data/saves/20260101000000-notes.zip",
               stamp: "20260101000000",
               fileName: "20260101000000-notes.zip",
               createdAt: "2026-01-01T00:00:00Z",
               sizeBytes: 10,
               saved: true,
             },
+            switches: [],
           },
         }),
       );
     const { rpcBackupSave, rpcVaultExportToFolder } = await import("../rpc");
     await expect(
-      rpcVaultExportToFolder("notes", { format: "store_zip" }, "/upriv-saf-export", "job-2"),
-    ).resolves.toEqual({ path: "/upriv-saf-export/Notes.zip", size: 10, unreadable: [] });
+      rpcVaultExportToFolder("notes", { format: "store_zip" }, "/upriv-saf-tree/picked", "job-2"),
+    ).resolves.toEqual({ path: "/upriv-saf-tree/picked/Notes.zip", size: 10, unreadable: [] });
     await rpcBackupSave("notes", "job-3");
     expect(JSON.parse(native.invoke.mock.calls[0][1] as string)).toMatchObject({
       id: "notes",
-      destDir: "/upriv-saf-export",
+      destDir: "/upriv-saf-tree/picked",
       job: "job-2",
     });
     expect(native.invoke).toHaveBeenNthCalledWith(
@@ -204,19 +214,24 @@ describe("job rpc", () => {
     native.invoke.mockResolvedValueOnce(
       JSON.stringify({
         ok: true,
-        result: { path: "/upriv-saf-export/upriv-backups-notes.zip", size: 10 },
+        result: { path: "/upriv-saf-tree/picked/upriv-backups-notes.zip", size: 10 },
       }),
     );
     const { rpcBackupExport } = await import("../rpc");
     await expect(
-      rpcBackupExport("notes", ["a.zip", "saves/b.zip"], "/upriv-saf-export", "job-4"),
-    ).resolves.toEqual({ path: "/upriv-saf-export/upriv-backups-notes.zip", size: 10 });
+      rpcBackupExport(
+        "notes",
+        ["data/a.zip", "data/saves/b.zip"],
+        "/upriv-saf-tree/picked",
+        "job-4",
+      ),
+    ).resolves.toEqual({ path: "/upriv-saf-tree/picked/upriv-backups-notes.zip", size: 10 });
     expect(native.invoke).toHaveBeenCalledWith(
       "backup_export",
       JSON.stringify({
         id: "notes",
-        stamps: ["a.zip", "saves/b.zip"],
-        destDir: "/upriv-saf-export",
+        keys: ["data/a.zip", "data/saves/b.zip"],
+        destDir: "/upriv-saf-tree/picked",
         job: "job-4",
       }),
     );
@@ -225,8 +240,8 @@ describe("job rpc", () => {
   it("refuses a backup export answer without a path", async () => {
     native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { size: 10 } }));
     const { rpcBackupExport } = await import("../rpc");
-    await expect(rpcBackupExport("notes", ["a.zip"], "/upriv-saf-export", "job-5")).rejects.toThrow(
-      "backup_export: expected path+size",
-    );
+    await expect(
+      rpcBackupExport("notes", ["a.zip"], "/upriv-saf-tree/picked", "job-5"),
+    ).rejects.toThrow("backup_export: expected path+size");
   });
 });

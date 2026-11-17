@@ -1056,7 +1056,7 @@ mode = "encrypted_dir"
         assert_eq!(zip_names(&zip), ["docs/", "docs/hi.txt", "empty/"]);
         assert_eq!(
             config_names(&zip),
-            ["README.md", "config.toml", "workspace.json"]
+            [".upriv-workspace.json", "README.md", "config.toml"]
         );
         let names: Vec<String> = zip::ZipArchive::new(std::io::Cursor::new(zip.as_slice()))
             .unwrap()
@@ -1074,7 +1074,7 @@ mode = "encrypted_dir"
             found.expect("entry").1.clone()
         };
         assert_eq!(body("docs/hi.txt"), b"hello-export");
-        assert_eq!(body("workspace.json"), LAYOUT);
+        assert_eq!(body(".upriv-workspace.json"), LAYOUT);
         let settings = body("config.toml");
         let parsed = crate::vault::embedded_settings::parse_embedded_settings(&settings).unwrap();
         assert_eq!(parsed.config.vault.display_name, "My notes");

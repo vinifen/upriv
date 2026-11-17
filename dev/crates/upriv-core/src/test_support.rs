@@ -98,3 +98,56 @@ pub fn test_job_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     format!("test-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
+
+/// This device's unlocked folder rows for `config`, one per parent, the
+/// first selected.
+pub fn unlocked_rows(config: &mut crate::config::VaultConfig, parents: &[&Path]) {
+    use crate::folder_list::{DeviceGroup, Row, Selection};
+    let device = crate::device::this_device();
+    let id = device.id.clone().expect("tests need this device's ID");
+    let rows: Vec<Row> = parents
+        .iter()
+        .zip(1..)
+        .map(|(parent, number)| Row {
+            number,
+            name: String::new(),
+            path: parent.display().to_string(),
+        })
+        .collect();
+    let next_number = rows.len() as u32 + 1;
+    config.unlocked_folder.devices.0.insert(
+        id,
+        DeviceGroup {
+            rows,
+            selected: Selection::Row(1),
+            next_number,
+            ..DeviceGroup::for_device(device)
+        },
+    );
+}
+
+/// This device's backup rows for `config`, one per folder, the first selected.
+pub fn backup_rows(config: &mut crate::config::VaultConfig, folders: &[&Path]) {
+    use crate::folder_list::{DeviceGroup, Row, Selection};
+    let device = crate::device::this_device();
+    let id = device.id.clone().expect("tests need this device's ID");
+    let rows: Vec<Row> = folders
+        .iter()
+        .zip(1..)
+        .map(|(folder, number)| Row {
+            number,
+            name: String::new(),
+            path: folder.display().to_string(),
+        })
+        .collect();
+    let next_number = rows.len() as u32 + 1;
+    config.backup.devices.0.insert(
+        id,
+        DeviceGroup {
+            rows,
+            selected: Selection::Row(1),
+            next_number,
+            ..DeviceGroup::for_device(device)
+        },
+    );
+}

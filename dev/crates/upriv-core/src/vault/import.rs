@@ -14,7 +14,7 @@ use crate::paths::{display_name_to_vault_id, VaultRoot};
 use crate::session::{with_vault_dir_lock, Job, JobKind};
 use crate::store::{content_hash_hex, load_header, INDEX_DIR_NAME};
 
-use super::backup::{backup_locator_from_leaf, backup_zip_file, copy_ciphertext_tree};
+use super::backup::{backup_zip_file, copy_ciphertext_tree, split_backup_locator};
 use super::create::claim_new_vault_dir;
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::package::imported_vault_name;
@@ -176,9 +176,8 @@ fn import_store_tree(
     })
 }
 
-/// Locator `vaults/<id>/backups/<leaf>` or `…/backups/saves/<leaf>`.
-/// The leaf is a stamp or the on-disk name `<stamp>-<id>.zip`. The file name
-/// selects one zip when two store zips share a stamp.
+/// Locator `vaults/<id>/backups/<key>`: the backup a new vault is made from,
+/// named by its key (`<folder>/<file>` or `<folder>/saves/<file>`).
 pub fn parse_backup_import_path(path: &str) -> Option<(String, String)> {
     let normalized = path.replace('\\', "/");
     let parts: Vec<&str> = normalized
@@ -187,37 +186,14 @@ pub fn parse_backup_import_path(path: &str) -> Option<(String, String)> {
         .collect();
     let vaults_idx = parts.iter().rposition(|part| *part == "vaults")?;
     let id = (*parts.get(vaults_idx + 1)?).to_string();
-    if id.is_empty() || id == ".." {
+    if !crate::paths::slug_id_is_valid(&id) {
         return None;
     }
     if parts.get(vaults_idx + 2).copied() != Some("backups") {
         return None;
     }
-    let mut at = vaults_idx + 3;
-    let place = if parts.get(at).copied() == Some("chosen") {
-        at += 1;
-        "chosen/"
-    } else {
-        ""
-    };
-    match parts.get(at).copied() {
-        Some("saves") => {
-            let raw = (*parts.get(at + 1)?).to_string();
-            let stamp = backup_locator_from_leaf(&raw)?;
-            if parts.len() != at + 2 {
-                return None;
-            }
-            Some((id, format!("{place}saves/{stamp}")))
-        }
-        Some(raw) => {
-            let stamp = backup_locator_from_leaf(raw)?;
-            if parts.len() != at + 1 {
-                return None;
-            }
-            Some((id, format!("{place}{stamp}")))
-        }
-        None => None,
-    }
+    let key = parts.get(vaults_idx + 3..)?.join("/");
+    split_backup_locator(&key).map(|key| (id, key))
 }
 
 /// What a store zip carries for the vault made from it.
@@ -254,8 +230,8 @@ fn store_zip_settings<R: Read + Seek>(reader: R) -> Result<StoreZipSettings> {
 /// Public settings and the vault's name inside a store zip or a backup
 /// locator. A missing `config.toml` is no settings.
 pub fn read_import_zip_settings(root: &VaultRoot, archive_path: &str) -> Result<StoreZipSettings> {
-    let zip_path = if let Some((id, stamp)) = parse_backup_import_path(archive_path) {
-        backup_zip_file(root, &id, &stamp)?
+    let zip_path = if let Some((id, key)) = parse_backup_import_path(archive_path) {
+        backup_zip_file(root, &id, &key)?
     } else {
         let path = Path::new(archive_path);
         if !path.is_absolute() || !path.host_is_file() {
@@ -272,15 +248,15 @@ pub fn read_import_zip_bytes_settings(zip_bytes: &[u8]) -> Result<StoreZipSettin
     store_zip_settings(std::io::Cursor::new(zip_bytes))
 }
 
-/// Unpack `backups/<stamp>-<id>.zip` into a new vault.
+/// Unpack the backup `key` of `source_vault_id` into a new vault.
 fn import_from_backup(
     root: &VaultRoot,
     source_vault_id: &str,
-    stamp: &str,
+    key: &str,
     config: VaultConfig,
     job: &Job,
 ) -> Result<String> {
-    let zip = backup_zip_file(root, source_vault_id, stamp)?;
+    let zip = backup_zip_file(root, source_vault_id, key)?;
     import_store_zip_path(root, config, &zip, job)
 }
 
@@ -313,8 +289,8 @@ pub fn import_store_from_archive_path(
 ) -> Result<String> {
     let vault_id = config.vault.id.clone();
     Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
-        if let Some((source_id, stamp)) = parse_backup_import_path(archive_path) {
-            match import_from_backup(root, &source_id, &stamp, config.clone(), job) {
+        if let Some((source_id, key)) = parse_backup_import_path(archive_path) {
+            match import_from_backup(root, &source_id, &key, config.clone(), job) {
                 Ok(id) => return Ok(id),
                 Err(error) => {
                     let path = Path::new(archive_path);
@@ -357,48 +333,37 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn parse_backup_import_path_accepts_relative_and_absolute() {
+    fn a_backup_locator_names_a_backup_by_its_key() {
         assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/20260528120000-notes.zip"),
-            Some(("notes".into(), "20260528120000-notes.zip".into()))
+            parse_backup_import_path("vaults/notes/backups/data/20260528120000-notes.zip"),
+            Some(("notes".into(), "data/20260528120000-notes.zip".into()))
         );
         assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/saves/20260528120000-notes.zip"),
-            Some(("notes".into(), "saves/20260528120000-notes.zip".into()))
-        );
-        assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/20260528120000.zip"),
-            None
-        );
-        assert_eq!(
-            parse_backup_import_path("/home/u/.upriv/vaults/notes/backups/saves/20260528120000"),
-            Some(("notes".into(), "saves/20260528120000".into()))
-        );
-        assert_eq!(parse_backup_import_path("/tmp/Notes.zip"), None);
-        assert_eq!(parse_backup_import_path("vaults/notes/store"), None);
-        assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/chosen/20260528120000-notes.zip"),
-            Some(("notes".into(), "chosen/20260528120000-notes.zip".into()))
-        );
-        assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/chosen/saves/20260528120000-notes.zip"),
+            parse_backup_import_path(
+                "/home/u/.upriv/vaults/notes/backups/f2/saves/20260528120000-notes Trip.zip"
+            ),
             Some((
                 "notes".into(),
-                "chosen/saves/20260528120000-notes.zip".into()
+                "f2/saves/20260528120000-notes Trip.zip".into()
             ))
         );
         assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/chosen/chosen/20260528120000.zip"),
-            None
+            parse_backup_import_path(
+                r"C:\Upriv\.upriv\vaults\notes\backups\use\20260528120000-notes.zip"
+            ),
+            Some(("notes".into(), "use/20260528120000-notes.zip".into()))
         );
-        assert_eq!(
-            parse_backup_import_path("/tmp/vaults/notes/backups/Notes.zip"),
-            None
-        );
-        assert_eq!(
-            parse_backup_import_path("vaults/notes/backups/20260528T120000"),
-            None
-        );
+        for refused in [
+            "vaults/notes/backups/20260528120000-notes.zip",
+            "vaults/notes/backups/data/20260528120000.zip",
+            "vaults/notes/backups/elsewhere/20260528120000-notes.zip",
+            "vaults/notes/backups/data/saves/saves/20260528120000-notes.zip",
+            "vaults/../backups/data/20260528120000-notes.zip",
+            "/tmp/Notes.zip",
+            "vaults/notes/store",
+        ] {
+            assert_eq!(parse_backup_import_path(refused), None, "{refused}");
+        }
     }
 
     #[test]
@@ -415,11 +380,11 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
         let backups = list_backups(&root, "notes").unwrap();
         assert!(!backups.is_empty(), "close should freeze a backup");
-        let stamp = backups[0].stamp.clone();
+        let key = backups[0].key.clone();
         let new_id = import_from_backup(
             &root,
             "notes",
-            &stamp,
+            &key,
             sample_config("notes-backup", "Notes backup"),
             &Job::untracked(),
         )
@@ -460,9 +425,9 @@ mode = "encrypted_dir"
             })
             .unwrap();
         close_vault(&root, "notes").unwrap();
-        let stamp = list_backups(&root, "notes").unwrap()[0].stamp.clone();
+        let key = list_backups(&root, "notes").unwrap()[0].key.clone();
         let mut bytes =
-            crate::host_fs::read(backup_zip_file(&root, "notes", &stamp).unwrap()).unwrap();
+            crate::host_fs::read(backup_zip_file(&root, "notes", &key).unwrap()).unwrap();
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
         let blob = (0..archive.len())
             .find(|&index| archive.by_index(index).unwrap().name().ends_with(&a_blob))
@@ -597,12 +562,12 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         close_vault(&root, "notes").unwrap();
-        let stamp = list_backups(&root, "notes").unwrap()[0].stamp.clone();
+        let key = list_backups(&root, "notes").unwrap()[0].key.clone();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         let new_id = import_from_backup(
             &root,
             "notes",
-            &stamp,
+            &key,
             sample_config("notes-backup", "Notes backup"),
             &Job::untracked(),
         )
@@ -630,12 +595,12 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         close_vault(&root, "notes").unwrap();
-        let stamp = list_backups(&root, "notes").unwrap()[0].stamp.clone();
+        let key = list_backups(&root, "notes").unwrap()[0].key.clone();
         open_vault(&root, "other", b"pass-word-ok").unwrap();
         let new_id = import_from_backup(
             &root,
             "notes",
-            &stamp,
+            &key,
             sample_config("notes-backup", "Notes backup"),
             &Job::untracked(),
         )

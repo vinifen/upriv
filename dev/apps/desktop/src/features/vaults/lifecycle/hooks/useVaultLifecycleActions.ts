@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   appConfigEditAllowed,
-  applyPlainPlaceChoice,
   canRunIdleAutoClose,
-  currentWorkspaceSystem,
   errorOnPasswordField,
   idleWarningText,
   type AutoCloseWhenBusy,
@@ -16,24 +14,26 @@ import {
   vaultExportToast,
   vaultRowJobWork,
   type VaultRowWork,
-  normalizeVaultSettingsConfig,
   plainFolderClassI18nKey,
+  plainPlaceChanges,
   storageModeIsPlaintext,
   BACKUP_CLOSE_TOAST_MS,
   backupCloseFailureToastKey,
-  backupFellBackToastKey,
-  closeAllFellBackToast,
+  switchesMessage,
+  type AttachAnswer,
   type BackupFailureReason,
-  type BackupFellBack,
-  type BackupFolderStatus,
+  type DeviceGroups,
+  type FolderSwitch,
   type PlainCloseSummary,
   type PlainFolderClass,
   type PlainLeftover,
+  type PlainPlaceChoice,
   type PlainRecoveryAction,
   type VaultExportRequest,
   type VaultLifecycleIntent,
   type VaultClosePrompt,
   type VaultRuntimePatch,
+  type VaultUnlockedChoice,
   vaultCloseBlocker,
   askCloseToHurry,
   closeNowApplies,
@@ -47,17 +47,24 @@ import {
   type VaultPipelineKind,
   scheduleOpenFileManagerIfIdle,
   saveDirtyVaultDrafts,
-  WORKSPACE_ERROR_CODES,
+  JOB_ERROR_CODES,
+  NO_APP_LIST_CHANGES,
+  NO_VAULT_LIST_CHANGES,
+  VAULT_ERROR_CODES,
+  newJobId,
 } from "@upriv/shared";
 import {
   TOAST_DEFAULT_MS,
+  hereDevice,
   useClosingDisplayHold,
+  useDeviceInfo,
   usePlainRemoveJob,
   useVaultExportJob,
   useVaultPipelineRun,
 } from "@upriv/shared/react";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import {
+  useDeviceService,
   useJobService,
   useVaultFileSystemService,
   useVaultLifecycleService,
@@ -70,8 +77,9 @@ import {
   hasUnsavedWorkspaceChanges,
   useFileManager,
 } from "@/features/vaults/file-manager";
-import type { I18nKey } from "@/i18n/types";
+import type { I18nKey, I18nParams } from "@/i18n/types";
 import {
+  rpcFuseInstall,
   rpcVaultConfigGet,
   rpcVaultConfigSave,
   rpcVaultPlainDeletions,
@@ -79,7 +87,9 @@ import {
   rpcVaultPlainHeld,
   rpcVaultPlainLeftover,
   rpcVaultPlainRemove,
+  rpcWinFspInstall,
 } from "@/lib/rpc";
+import { useAttachWhenFoldersTurnOn } from "./useAttachWhenFoldersTurnOn";
 import { useVaultAutoClose } from "./useVaultAutoClose";
 
 interface UseVaultLifecycleActionsOptions {
@@ -89,7 +99,7 @@ interface UseVaultLifecycleActionsOptions {
   showToast: (message: string, durationMs?: number) => void;
   showError: (error: unknown, fallback: I18nKey) => void;
   dismissToast: () => void;
-  t: (key: I18nKey, params?: Record<string, string>) => string;
+  t: (key: I18nKey, params?: I18nParams) => string;
   /** Vault ids whose settings persist is in flight — Open/Unlock must wait. */
   settingsPersistVaultIdsRef?: MutableRefObject<Set<string>>;
   /** Closed-vault work (password / unlock RAM) that must refuse open. */
@@ -111,7 +121,8 @@ export function useVaultLifecycleActions({
   const fs = useVaultFileSystemService();
   const lifecycleService = useVaultLifecycleService();
   const jobs = useJobService();
-  const { settings, patchSettings, getSettingsSnapshot } = useAppSettingsContext();
+  const { settings, patchSettings, replaceSettings, getSettingsSnapshot } = useAppSettingsContext();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
   const {
     purgeForVaultClose,
     flushWorkspaceSnapshot,
@@ -156,11 +167,18 @@ export function useVaultLifecycleActions({
   const unlockRetainPasswordsRef = useRef(new Map<string, string>());
   /** Drops a stale close-all loop when the user starts another. */
   const closeAllGenRef = useRef(0);
-  /** A Close all reports its backups that fell back in one toast. */
-  const closeAllBackupsRef = useRef<{ waiting: Set<string>; fellBack: BackupFellBack[] } | null>(
+  /** A Close all reports the backup folders its closes switched in one toast. */
+  const closeAllBackupsRef = useRef<{ waiting: Set<string>; switches: FolderSwitch[] } | null>(
     null,
   );
-  const backupFallbackRef = useRef<BackupFolderStatus | null>(null);
+  const backupSwitchesRef = useRef<FolderSwitch[]>([]);
+  /** The switches an open made, shown once it lands. */
+  const openSwitchesRef = useRef(new Map<string, FolderSwitch[]>());
+  /** The attach running for each vault, by job id. */
+  const attachJobsRef = useRef(new Map<string, string>());
+  /** An encrypted vault whose unlocked folder needs a driver that is not installed. */
+  const [driverPrompt, setDriverPrompt] = useState<{ vaultId: string } | null>(null);
+  const [driverInstalling, setDriverInstalling] = useState(false);
   const [closePrompt, setClosePrompt] = useState<VaultClosePrompt | null>(null);
   const closePromptRef = useRef(closePrompt);
   closePromptRef.current = closePrompt;
@@ -253,6 +271,30 @@ export function useVaultLifecycleActions({
   const [placeVaultId, setPlaceVaultId] = useState<string | null>(null);
   const [placeSubmitting, setPlaceSubmitting] = useState(false);
   const [placeWarningClass, setPlaceWarningClass] = useState<PlainFolderClass | null>(null);
+  /**
+   * The vault's own unlocked folders while "Where should the files go?" is
+   * open, so a typed folder is checked against them; `null` while they load.
+   */
+  const [placeVaultUnlocked, setPlaceVaultUnlocked] =
+    useState<DeviceGroups<VaultUnlockedChoice> | null>(null);
+  useEffect(() => {
+    setPlaceVaultUnlocked(null);
+    if (!placeVaultId) return;
+    let cancelled = false;
+    void rpcVaultConfigGet(placeVaultId).then(
+      (config) => {
+        if (!cancelled) setPlaceVaultUnlocked(config.unlocked_folder.devices);
+      },
+      () => {
+        // Unread, the folder is checked without the vault's rows; Continue
+        // reads the settings again and reports what fails.
+        if (!cancelled) setPlaceVaultUnlocked({});
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [placeVaultId]);
   const [heldPrompt, setHeldPrompt] = useState<{
     vaultId: string;
     count: number;
@@ -507,6 +549,99 @@ export function useVaultLifecycleActions({
     [dismissToast, showToast, t, vaults],
   );
 
+  /** A vault's name for a toast, by id. */
+  const vaultName = useCallback(
+    (vaultId: string) =>
+      vaultsRef.current.find((item) => item.id === vaultId)?.displayName ?? vaultId,
+    [],
+  );
+
+  /** The attach's answer as its toast. A mounted folder, or a switch that is off, says nothing. */
+  const reportAttach = useCallback(
+    (vaultId: string, answer: AttachAnswer) => {
+      const name = vaultName(vaultId);
+      switch (answer.outcome) {
+        case "mounted":
+        case "off":
+          return;
+        case "switched": {
+          const switched = switchesMessage(answer.switches, t, vaultName);
+          if (switched) showToast(switched);
+          return;
+        }
+        case "driver_missing":
+          setDriverPrompt({ vaultId });
+          return;
+        case "unavailable":
+          showToast(
+            `${t("unlocked_folder.none.unavailable", { name })} ${t(`folder_list.status.${answer.reason}`)}.`,
+          );
+          return;
+        case "unset":
+          showToast(t("unlocked_folder.none.unset", { name }));
+          return;
+        case "failed":
+          showToast(t("unlocked_folder.none.failed", { name }));
+      }
+    },
+    [showToast, t, vaultName],
+  );
+
+  /**
+   * Give an encrypted vault its unlocked folder, outside the one-at-a-time
+   * open/close queue: right after its open, or when the app's switch turns
+   * on while it is open. Core decides whether a folder is wanted; a close
+   * stops the attach. A vault whose attach runs already waits for that one.
+   */
+  const startAttach = useCallback(
+    (vaultId: string) => {
+      const attach = lifecycleService.attachUnlockedFolder;
+      if (!attach || attachJobsRef.current.has(vaultId)) return;
+      const job = newJobId();
+      attachJobsRef.current.set(vaultId, job);
+      void attach(vaultId, job).then(
+        (answer) => {
+          if (attachJobsRef.current.get(vaultId) !== job) return;
+          attachJobsRef.current.delete(vaultId);
+          reportAttach(vaultId, answer);
+        },
+        (error: unknown) => {
+          if (attachJobsRef.current.get(vaultId) !== job) return;
+          attachJobsRef.current.delete(vaultId);
+          // A close stopped it, or began first: the vault is going away.
+          if (
+            isRpcError(error) &&
+            (error.code === JOB_ERROR_CODES.CANCELLED ||
+              error.code === VAULT_ERROR_CODES.VAULT_NOT_OPEN)
+          ) {
+            return;
+          }
+          showToast(t("unlocked_folder.none.failed", { name: vaultName(vaultId) }));
+        },
+      );
+    },
+    [lifecycleService, reportAttach, showToast, t, vaultName],
+  );
+
+  useAttachWhenFoldersTurnOn(settings.unlocked_folders.encrypted_vaults, vaultsRef, startAttach);
+
+  /** Install the driver the unlocked folder needs, then attach again. */
+  const installUnlockedFolderDriver = useCallback(() => {
+    const prompt = driverPrompt;
+    if (!prompt || driverInstalling) return;
+    setDriverInstalling(true);
+    const install = here?.system === "windows" ? rpcWinFspInstall : rpcFuseInstall;
+    void install()
+      .catch(() => false)
+      .then((installed) => {
+        setDriverInstalling(false);
+        setDriverPrompt(null);
+        if (installed) startAttach(prompt.vaultId);
+        else
+          showToast(t("unlocked_folder.none.driver_missing", { name: vaultName(prompt.vaultId) }));
+      });
+  }, [driverInstalling, driverPrompt, here?.system, showToast, startAttach, t, vaultName]);
+
   const startOpenPipeline = useCallback(
     (vaultId: string): boolean => {
       if (settingsPersistVaultIdsRef?.current.has(vaultId)) return false;
@@ -521,7 +656,12 @@ export function useVaultLifecycleActions({
         stepCount: lifecycleService.openingStepCount,
         presentation: "background",
         failureMode: "advance",
-        runPipeline: (id, onStep, job) => lifecycleService.runOpeningPipeline(id, onStep, job),
+        runPipeline: async (id, onStep, job) => {
+          openSwitchesRef.current.set(
+            id,
+            await lifecycleService.runOpeningPipeline(id, onStep, job),
+          );
+        },
         onComplete: () => {
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
@@ -548,14 +688,18 @@ export function useVaultLifecycleActions({
             lifecycleService.setPasswordInSession(vaultId, retain);
           }
           notifyPipelineComplete(vaultId, "open");
+          const switched = switchesMessage(
+            openSwitchesRef.current.get(vaultId) ?? [],
+            t,
+            vaultName,
+          );
+          openSwitchesRef.current.delete(vaultId);
+          if (switched) showToast(switched);
+          const opened = vaultsRef.current.find((item) => item.id === vaultId);
+          if (opened && !storageModeIsPlaintext(opened.storageMode)) startAttach(vaultId);
         },
         onError: (errorI18nKey) => {
-          if (errorI18nKey === "plain.open.cancelled") {
-            lifecycleService.clearPasswordInSession(vaultId);
-            unlockRetainPasswordsRef.current.delete(vaultId);
-            if (lifecycleRequestRef.current?.vaultId === vaultId) setLifecycleRequest(null);
-            return;
-          }
+          openSwitchesRef.current.delete(vaultId);
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
             if (lifecycleRequestRef.current?.vaultId === vaultId) {
@@ -620,7 +764,9 @@ export function useVaultLifecycleActions({
       setVaultRuntimeState,
       settingsPersistVaultIdsRef,
       showToast,
+      startAttach,
       t,
+      vaultName,
       vaultOpenHeld,
     ],
   );
@@ -712,21 +858,21 @@ export function useVaultLifecycleActions({
 
   /**
    * A close in a Close all ended. True when it belongs to that batch, whose
-   * backups that fell back are reported once, by the last close to end.
+   * backup folder switches are reported once, by the last close to end.
    */
   const settleCloseAllBackup = useCallback(
-    (vaultId: string, name: string, fallback: BackupFolderStatus | null): boolean => {
+    (vaultId: string, switches: readonly FolderSwitch[]): boolean => {
       const batch = closeAllBackupsRef.current;
       if (!batch?.waiting.has(vaultId)) return false;
       batch.waiting.delete(vaultId);
-      if (fallback) batch.fellBack.push({ name, status: fallback });
+      batch.switches.push(...switches);
       if (batch.waiting.size > 0) return true;
       closeAllBackupsRef.current = null;
-      const toast = closeAllFellBackToast(batch.fellBack);
-      if (toast) showToast(t(toast.key, toast.params), BACKUP_CLOSE_TOAST_MS);
+      const switched = switchesMessage(batch.switches, t, vaultName);
+      if (switched) showToast(switched, BACKUP_CLOSE_TOAST_MS);
       return true;
     },
-    [showToast, t],
+    [showToast, t, vaultName],
   );
 
   const startClosePipeline = useCallback(
@@ -774,7 +920,7 @@ export function useVaultLifecycleActions({
           backupFailureRef.current = outcome.backupFailed
             ? (outcome.backupFailure ?? "other")
             : null;
-          backupFallbackRef.current = outcome.backupFallback;
+          backupSwitchesRef.current = outcome.backupSwitches;
         },
         onComplete: () => {
           const immediate = forgetCloseNow(vault.id) || opts?.now === true;
@@ -792,13 +938,9 @@ export function useVaultLifecycleActions({
           plainCloseRef.current = null;
           const backupFailure = backupFailureRef.current;
           backupFailureRef.current = null;
-          const backupFallback = backupFallbackRef.current;
-          backupFallbackRef.current = null;
-          const reportedWithCloseAll = settleCloseAllBackup(
-            vault.id,
-            vault.displayName,
-            backupFallback,
-          );
+          const backupSwitches = backupSwitchesRef.current;
+          backupSwitchesRef.current = [];
+          const reportedWithCloseAll = settleCloseAllBackup(vault.id, backupSwitches);
           closingHold.settle(
             vault.id,
             () => {
@@ -819,11 +961,11 @@ export function useVaultLifecycleActions({
                 );
                 return;
               }
-              if (backupFallback && !reportedWithCloseAll) {
-                showToast(
-                  t(backupFellBackToastKey(backupFallback), { name: vault.displayName }),
-                  BACKUP_CLOSE_TOAST_MS,
-                );
+              const switched = reportedWithCloseAll
+                ? null
+                : switchesMessage(backupSwitches, t, vaultName);
+              if (switched) {
+                showToast(switched, BACKUP_CLOSE_TOAST_MS);
                 return;
               }
               if (summary && summary.kept > 0) {
@@ -843,7 +985,7 @@ export function useVaultLifecycleActions({
         },
         onError: (errorI18nKey) => {
           forgetCloseNow(vault.id);
-          settleCloseAllBackup(vault.id, vault.displayName, null);
+          settleCloseAllBackup(vault.id, []);
           if (isCredentialVerifying(vault.id)) {
             clearCredentialVerify(vault.id);
             if (lifecycleRequestRef.current?.vaultId === vault.id) {
@@ -901,6 +1043,7 @@ export function useVaultLifecycleActions({
       settleCloseAllBackup,
       showToast,
       t,
+      vaultName,
     ],
   );
 
@@ -1072,7 +1215,7 @@ export function useVaultLifecycleActions({
         }
       }
       if (generation !== closeAllGenRef.current) return;
-      if (started > 1) closeAllBackupsRef.current = { waiting: startedIds, fellBack: [] };
+      if (started > 1) closeAllBackupsRef.current = { waiting: startedIds, switches: [] };
       if (importing.length > 0) {
         setClosePrompt({ blocker: "import", vaultIds: importing, all: importing.length > 1 });
       }
@@ -1211,7 +1354,7 @@ export function useVaultLifecycleActions({
           await rpcVaultPlainDestination(vault.id);
           setLifecycleRequest({ vaultId: vault.id });
         } catch (error) {
-          if (isRpcError(error) && error.code === WORKSPACE_ERROR_CODES.UNSET) {
+          if (isRpcError(error) && error.code === VAULT_ERROR_CODES.UNLOCKED_FOLDER_UNSET) {
             setPlaceWarningClass(null);
             setPlaceVaultId(vault.id);
             return;
@@ -1460,32 +1603,32 @@ export function useVaultLifecycleActions({
     [setLifecycleRequest],
   );
 
+  /** Save "Where should the files go?" as a choice or a new row of one list, then go on. */
   const applyPlace = useCallback(
-    async (choice: "default" | "custom" | "vault_only", path: string) => {
-      if (!placeVaultId) return;
+    async (choice: PlainPlaceChoice, path: string) => {
+      if (!placeVaultId || !here) return;
       const vaultId = placeVaultId;
       setPlaceSubmitting(true);
       try {
-        const system = currentWorkspaceSystem();
-        await applyPlainPlaceChoice({
+        const vaultSettings = await rpcVaultConfigGet(vaultId);
+        const appSettings = getSettingsSnapshot();
+        const place = plainPlaceChanges({
           choice,
           path,
-          system,
-          saveWorkspace: (entry) => patchSettings({ workspace: { [system]: entry } }),
-          saveVaultFolder: async (folder) => {
-            const settings = await rpcVaultConfigGet(vaultId);
-            await rpcVaultConfigSave(
-              vaultId,
-              normalizeVaultSettingsConfig({
-                ...settings,
-                mount: {
-                  ...settings.mount,
-                  [system]: { ...settings.mount[system], place: "unset", path: folder },
-                },
-              }),
-            );
-          },
+          here,
+          appUnlocked: appSettings.unlocked_folders.devices,
+          vaultUnlocked: vaultSettings.unlocked_folder.devices,
         });
+        if (place.list === "app") {
+          await replaceSettings(appSettings, {
+            lists: { ...NO_APP_LIST_CHANGES, unlockedFolders: place.changes },
+          });
+        } else {
+          await rpcVaultConfigSave(vaultId, vaultSettings, {
+            ...NO_VAULT_LIST_CHANGES,
+            unlockedFolder: place.changes,
+          });
+        }
         const dest = await rpcVaultPlainDestination(vaultId);
         if (plainFolderClassI18nKey(dest.class)) {
           setPlaceWarningClass(dest.class);
@@ -1498,7 +1641,7 @@ export function useVaultLifecycleActions({
         setPlaceSubmitting(false);
       }
     },
-    [openPasswordAfterPlace, patchSettings, placeVaultId, showError],
+    [getSettingsSnapshot, here, openPasswordAfterPlace, placeVaultId, replaceSettings, showError],
   );
 
   const handleVaultDelete = useCallback(
@@ -1600,7 +1743,9 @@ export function useVaultLifecycleActions({
     recoveryLeftover,
     placeOpen: placeVaultId !== null,
     placeVaultName: placeVault?.displayName ?? "",
-    placeWorkspaceChoices: appConfigEditAllowed("workspace.path", vaults, pipelineListStatus),
+    placeAppChoices: appConfigEditAllowed("unlocked_folders", vaults, pipelineListStatus),
+    placeAppUnlocked: settings.unlocked_folders.devices,
+    placeVaultUnlocked,
     placeSubmitting,
     placeWarningClass,
     onPlaceClose: () => {
@@ -1608,7 +1753,7 @@ export function useVaultLifecycleActions({
       setPlaceVaultId(null);
       setPlaceWarningClass(null);
     },
-    onPlaceContinue: (choice: "default" | "custom" | "vault_only", path: string) => {
+    onPlaceContinue: (choice: PlainPlaceChoice, path: string) => {
       void applyPlace(choice, path);
     },
     onPlaceAcceptWarning: () => {
@@ -1620,5 +1765,12 @@ export function useVaultLifecycleActions({
     heldSubmitting,
     onHeldApply: () => settleHeld(true),
     onHeldRestore: () => settleHeld(false),
+    driverPromptVaultName: driverPrompt ? vaultName(driverPrompt.vaultId) : null,
+    driverKind: here?.system === "windows" ? ("winfsp" as const) : ("fuse" as const),
+    driverInstalling,
+    onDriverInstall: installUnlockedFolderDriver,
+    onDriverDismiss: () => {
+      if (!driverInstalling) setDriverPrompt(null);
+    },
   };
 }

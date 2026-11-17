@@ -1,12 +1,14 @@
 export type {
   AppSettingsLoadResult,
-  AppSettingsSaveOptions,
+  AppSettingsSaved,
   AppSettingsService,
 } from "./app-settings/AppSettingsService";
 export type { BackupService } from "./backup/BackupService";
 export type { CreateVaultService } from "./vault-create/CreateVaultService";
 export type { DataFolderService } from "./data-folder/DataFolderService";
+export type { DeviceService } from "./device/DeviceService";
 export type { ExportFolderGrants } from "./export-folders/ExportFolderGrants";
+export type { FolderListService, FolderStatusList } from "./folder-lists/FolderListService";
 export type { JobService, JobStopBy } from "./jobs/JobService";
 export type {
   FolderRemoval,
@@ -46,10 +48,10 @@ export {
   VAULT_FS_PREVIEW_MAX_BYTES,
 } from "./filesystem/createLiveVaultFileSystemService";
 export type { LiveVaultFileSystemRpc } from "./filesystem/createLiveVaultFileSystemService";
-export { createLiveBackupService, parsePathWriteResult } from "./backup/createLiveBackupService";
-export type { LiveBackupRpc, VaultPathWriteResult } from "./backup/createLiveBackupService";
+export { parsePathWriteResult } from "./backup/pathWriteResult";
+export type { VaultPathWriteResult } from "./backup/pathWriteResult";
 export type { VaultGroupService } from "./vault-groups/VaultGroupService";
-export type { VaultRootService } from "./vault-root/VaultRootService";
+export type { DataFolderApplyRequest, VaultRootService } from "./vault-root/VaultRootService";
 export type {
   ChangeVaultKdfInput,
   ChangeVaultPasswordInput,

@@ -1,5 +1,6 @@
-import { backupEntryFileName, backupFolderStatusI18nKey, type VaultBackupEntry } from "../backups";
-import { workspaceSystemHasShortcut } from "../workspace";
+import type { VaultBackupEntry, VaultBackupSection } from "../backups";
+import { deviceName } from "../device";
+import { choiceNameLabel, fixedChoiceLabel } from "../folder-lists";
 import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
 import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
@@ -38,19 +39,26 @@ function countOrDash(value: number | null): string {
 }
 
 function backupTotalBytes(backups: VaultBackupEntry[]): number {
-  return backups.reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0);
+  return backups.reduce((sum, entry) => sum + entry.sizeBytes, 0);
 }
 
-function latestBackupName(backups: VaultBackupEntry[], vaultId: string): string {
-  if (backups.length === 0) return "—";
-  const sorted = [...backups].sort((a, b) => {
+function latestBackupName(backups: VaultBackupEntry[]): string {
+  const latest = [...backups].sort((a, b) => {
     const byTime = Date.parse(b.createdAt) - Date.parse(a.createdAt);
-    if (byTime !== 0) return byTime;
-    return backupEntryFileName(a, vaultId).localeCompare(backupEntryFileName(b, vaultId));
-  });
-  const latest = sorted[0];
-  if (!latest) return "—";
-  return backupEntryFileName(latest, vaultId);
+    return byTime !== 0 ? byTime : a.fileName.localeCompare(b.fileName);
+  })[0];
+  return latest ? latest.fileName : "—";
+}
+
+function measured(value: number | null | "measuring", t: InfoTranslate): string {
+  return value === "measuring" ? t("modal.info.loading") : formatBytes(value ?? undefined);
+}
+
+/** A folder holding zips, with the device that wrote there. */
+function sectionValue(section: VaultBackupSection, t: InfoTranslate): string {
+  return section.device
+    ? `${section.path} · ${deviceName(section.device.id, section.device.system, t)}`
+    : section.path;
 }
 
 export function buildVaultInfoSections(
@@ -64,12 +72,10 @@ export function buildVaultInfoSections(
     kdfPreset,
     groupName,
     groupHidden,
-    backups,
-    chosenBackups,
+    backupSections,
     runtime,
     passwordInSession,
-    workspacePath,
-    workspacePathIsActive,
+    unlockedFolder,
     storePath,
     backupsPath,
     storeOpenPath,
@@ -182,42 +188,15 @@ export function buildVaultInfoSections(
       { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
       backupsOpenPath,
     ),
-    ...(chosenBackups
-      ? [
-          withOpenPath(
-            {
-              id: "backups_chosen_path",
-              label: t("modal.info.field.backups_chosen_path"),
-              value: chosenBackups.path,
-            },
-            chosenBackups.path,
-          ),
-          {
-            id: "backups_chosen_status",
-            label: t("modal.info.field.backups_chosen_status"),
-            value: t(backupFolderStatusI18nKey(chosenBackups.status)),
-          },
-        ]
-      : []),
-    withOpenPath(
-      {
-        id: "workspace_path",
-        label: t(
-          workspacePathIsActive
-            ? "modal.info.field.workspace_path"
-            : "modal.info.field.workspace_path_expected",
-        ),
-        value: emptyDash(workspacePath),
-      },
-      workspacePath,
-    ),
     {
       id: "store_size",
       label: t("modal.info.field.store_size"),
-      value:
-        runtime.storeBytes === "measuring"
-          ? t("modal.info.loading")
-          : formatBytes(runtime.storeBytes ?? undefined),
+      value: measured(runtime.storeBytes, t),
+    },
+    {
+      id: "files_size",
+      label: t("modal.info.field.files_size"),
+      value: measured(runtime.filesBytes, t),
     },
     // Only a vault that set data aside shows the row.
     ...(typeof runtime.heldBytes === "number" && runtime.heldBytes > 0
@@ -246,41 +225,51 @@ export function buildVaultInfoSections(
     },
   ];
 
-  const { workspaceSystem } = snapshot;
-  const mountPath = settings?.mount[workspaceSystem].path ?? "";
+  const unlockedPath = unlockedFolder?.path ?? "";
+  const unlockedFields = [
+    {
+      id: "unlocked_folder_choice",
+      label: t("modal.info.field.unlocked_folder_choice"),
+      value: unlockedFolder ? choiceNameLabel(unlockedFolder.choice, t) : t("modal.info.loading"),
+    },
+    withOpenPath(
+      {
+        id: "unlocked_folder_path",
+        label: t("modal.info.field.unlocked_folder_path"),
+        value: emptyDash(unlockedPath),
+      },
+      unlockedPath,
+    ),
+    ...(vault.storageMode === "encrypted_dir"
+      ? [
+          {
+            id: "unlocked_folder_mounted",
+            label: t("modal.info.field.unlocked_folder_mounted"),
+            value: yesNo(t, unlockedFolder?.mounted === true),
+          },
+          ...(settings
+            ? [
+                {
+                  id: "unlocked_folder_encrypted",
+                  label: t("modal.info.field.unlocked_folder_encrypted"),
+                  value: t(
+                    `modal.info.value.encrypted_switch.${settings.unlocked_folder.encrypted}`,
+                  ),
+                },
+              ]
+            : []),
+        ]
+      : []),
+  ];
+
   const configFields = settings
     ? [
-        withOpenPath(
-          {
-            id: "mount_workspace_path",
-            label: t("modal.info.field.mount_workspace_path"),
-            value: emptyDash(mountPath),
-          },
-          mountPath,
-        ),
         ...(settings.storage.mode === "upriv_plain"
           ? [
               {
                 id: "plain_files",
                 label: t("modal.info.field.plain_files"),
                 value: t(`modal.info.value.plain_files.${settings.storage.plain_files}`),
-              },
-            ]
-          : []),
-        ...(settings.storage.mode === "encrypted_dir" && workspaceSystemHasShortcut(workspaceSystem)
-          ? [
-              {
-                id: "vault_mount",
-                label: t("modal.info.field.vault_mount"),
-                value: t(
-                  `modal.info.value.vault_shortcut_${
-                    settings.mount[workspaceSystem].path.trim()
-                      ? settings.mount.custom_file_manager_folder
-                        ? "on"
-                        : "off"
-                      : settings.mount.app_file_manager_folder
-                  }`,
-                ),
               },
             ]
           : []),
@@ -323,7 +312,33 @@ export function buildVaultInfoSections(
     : [{ id: "config_unavailable", label: t("modal.info.field.config"), value: "—" }];
 
   const listing = t("modal.info.loading");
+  const backups = backupSections?.flatMap((section) => section.entries) ?? null;
+  const inUse = backupSections?.find((section) => section.kind === "in_use");
   const backupFields = [
+    {
+      id: "backup_folder_in_use",
+      label: t("modal.info.field.backup_folder_in_use"),
+      value: backupSections
+        ? inUse
+          ? sectionValue(inUse, t)
+          : fixedChoiceLabel("data_folder", t)
+        : listing,
+      ...(inUse ? { openPath: inUse.path } : {}),
+    },
+    ...(backupSections ?? [])
+      .filter((section) => section.entries.length > 0)
+      .map((section) =>
+        withOpenPath(
+          {
+            id: `backup_folder_${section.folder}`,
+            label: t("modal.info.field.backup_folder_holding", {
+              count: section.entries.length,
+            }),
+            value: sectionValue(section, t),
+          },
+          section.path,
+        ),
+      ),
     {
       id: "backup_count",
       label: t("modal.info.field.backup_count"),
@@ -332,7 +347,7 @@ export function buildVaultInfoSections(
     {
       id: "backup_latest",
       label: t("modal.info.field.backup_latest"),
-      value: backups ? latestBackupName(backups, vault.id) : listing,
+      value: backups ? latestBackupName(backups) : listing,
     },
     {
       id: "backup_total_size",
@@ -346,6 +361,11 @@ export function buildVaultInfoSections(
     { id: "status", title: t("modal.info.section.status"), fields: statusFields },
     { id: "runtime", title: t("modal.info.section.runtime"), fields: runtimeFields },
     { id: "storage", title: t("modal.info.section.storage"), fields: storageFields },
+    {
+      id: "unlocked_folder",
+      title: t("modal.info.section.unlocked_folder"),
+      fields: unlockedFields,
+    },
     { id: "crypto", title: t("modal.info.section.crypto"), fields: cryptoFields },
     { id: "config", title: t("modal.info.section.config"), fields: configFields },
     { id: "backups", title: t("modal.info.section.backups"), fields: backupFields },

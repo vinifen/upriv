@@ -14,6 +14,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::device::{this_device, DeviceSystem};
 use crate::error::{Result, UprivError};
 use crate::paths::{self, VaultRoot};
 
@@ -43,15 +44,21 @@ pub struct RuntimeVaultEntry {
     pub plain: Vec<PlainRecord>,
 }
 
-/// A plaintext folder a vault wrote on some computer.
+/// A plaintext folder a vault wrote on some device.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlainRecord {
-    /// Host name of the computer that wrote the folder.
-    pub host: String,
+    /// The device that wrote the folder ([`crate::device::ThisDevice::record_key`]).
+    pub device: String,
+    /// That device's system, so a message can name the device (its system and
+    /// the start of its ID) after its folder lists are gone.
+    pub system: DeviceSystem,
     /// Relative to the data folder (`/` separators) when [`Self::in_data_folder`],
     /// so a data folder on a removable drive still finds it under another mount.
     pub path: String,
     pub in_data_folder: bool,
+    /// The ID in the folder ID file of the `upriv-unlocked` the folder is in:
+    /// it proves which drive the folder is on.
+    pub folder_id: String,
     /// Also in the folder's marker. A folder without this token is never wiped.
     pub token: String,
     /// UTC time the folder was made (RFC 3339).
@@ -77,8 +84,8 @@ pub struct UnfinishedFileRecord {
     /// The vault it came from; none for the data-folder zip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_id: Option<String>,
-    /// Host name of the computer that wrote the file.
-    pub host: String,
+    /// The device that wrote the file ([`crate::device::ThisDevice::record_key`]).
+    pub device: String,
     /// The `.upriv-part` file.
     pub path: String,
     /// The `content://` tree the file went through on a phone, where `path`
@@ -90,10 +97,30 @@ pub struct UnfinishedFileRecord {
 }
 
 impl PlainRecord {
-    /// A folder inside the data folder is reachable from any computer that has
-    /// the data folder. Any other folder only from the computer that wrote it.
-    pub fn reachable_here(&self, this_host: Option<&str>) -> bool {
-        self.in_data_folder || this_host == Some(self.host.as_str())
+    /// The record of a folder this device writes now, at `path` (relative to
+    /// the data folder when `in_data_folder`).
+    pub(crate) fn written_here(
+        path: String,
+        in_data_folder: bool,
+        token: String,
+        folder_id: String,
+    ) -> Self {
+        let device = this_device();
+        Self {
+            device: device.record_key(),
+            system: device.system,
+            path,
+            in_data_folder,
+            folder_id,
+            token,
+            since: crate::time::utc_timestamp_iso_millis(),
+        }
+    }
+
+    /// A folder inside the data folder is reachable from any device that has
+    /// the data folder. Any other folder only from the device that wrote it.
+    pub fn reachable_here(&self) -> bool {
+        self.in_data_folder || self.device == this_device().record_key()
     }
 
     pub fn folder(&self, root: &VaultRoot) -> std::path::PathBuf {
@@ -108,8 +135,24 @@ impl PlainRecord {
     }
 }
 
-fn this_host() -> Option<String> {
-    crate::lockfile::hostname().ok()
+impl UnfinishedFileRecord {
+    /// The record of a file this device starts writing now.
+    pub(crate) fn written_here(
+        work: UnfinishedWork,
+        vault_id: Option<String>,
+        path: String,
+        tree: Option<String>,
+        job: String,
+    ) -> Self {
+        Self {
+            work,
+            vault_id,
+            device: this_device().record_key(),
+            path,
+            tree,
+            job,
+        }
+    }
 }
 
 impl RuntimeState {
@@ -310,6 +353,27 @@ pub(crate) fn remove_plain_record(root: &VaultRoot, vault_id: &str, token: &str)
     })
 }
 
+/// The record `token` of `vault_id` becomes this device's: its folder was
+/// found here with its marker.
+pub(crate) fn follow_plain_record(root: &VaultRoot, vault_id: &str, token: &str) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        let Some(entry) = state.vaults.get_mut(vault_id) else {
+            return Ok(());
+        };
+        let device = this_device();
+        for record in entry
+            .plain
+            .iter_mut()
+            .filter(|record| record.token == token)
+        {
+            record.device = device.record_key();
+            record.system = device.system;
+        }
+        save_runtime_state(root, &state)
+    })
+}
+
 /// Plaintext folders recorded for `vault_id`, from every computer.
 pub(crate) fn plain_records(root: &VaultRoot, vault_id: &str) -> Result<Vec<PlainRecord>> {
     Ok(load_runtime_state(root)?
@@ -319,23 +383,18 @@ pub(crate) fn plain_records(root: &VaultRoot, vault_id: &str) -> Result<Vec<Plai
         .unwrap_or_default())
 }
 
-/// The plaintext folder this computer can reach, if one is recorded.
+/// The plaintext folder this device can reach, if one is recorded.
 pub(crate) fn reachable_plain_record(
     root: &VaultRoot,
     vault_id: &str,
 ) -> Result<Option<PlainRecord>> {
-    let host = this_host();
     Ok(plain_records(root, vault_id)?
         .into_iter()
-        .find(|record| record.reachable_here(host.as_deref())))
+        .find(PlainRecord::reachable_here))
 }
 
-/// Record a file before any of it is written, on this computer.
-pub(crate) fn add_unfinished_file(
-    root: &VaultRoot,
-    mut record: UnfinishedFileRecord,
-) -> Result<()> {
-    record.host = this_host().unwrap_or_default();
+/// Record a file before any of it is written.
+pub(crate) fn add_unfinished_file(root: &VaultRoot, record: UnfinishedFileRecord) -> Result<()> {
     with_state_lock(|| {
         let mut state = load_runtime_state(root)?;
         state
@@ -359,11 +418,11 @@ pub(crate) fn remove_unfinished_file(root: &VaultRoot, path: &str) -> Result<()>
     })
 }
 
-/// Unfinished files this computer recorded.
+/// Unfinished files this device recorded.
 pub(crate) fn unfinished_files_here(root: &VaultRoot) -> Result<Vec<UnfinishedFileRecord>> {
-    let host = this_host().unwrap_or_default();
+    let here = this_device().record_key();
     let mut records = load_runtime_state(root)?.unfinished_files;
-    records.retain(|record| record.host == host);
+    records.retain(|record| record.device == here);
     Ok(records)
 }
 
@@ -447,16 +506,12 @@ pub(crate) fn refuse_if_held_elsewhere(root: &VaultRoot, id: &str) -> Result<()>
 
 /// Vault ids that need recovery and are not live in this process or behind a
 /// live lock: a session recorded as open (a crash), or a plaintext folder this
-/// computer can reach that was never wiped.
+/// device can reach that was never wiped.
 pub fn dirty_close_ids(root: &VaultRoot) -> Result<Vec<String>> {
     let state = load_runtime_state(root)?;
-    let host = this_host();
     let mut dirty = Vec::new();
     for (id, entry) in state.vaults {
-        let leftover = entry
-            .plain
-            .iter()
-            .any(|record| record.reachable_here(host.as_deref()));
+        let leftover = entry.plain.iter().any(PlainRecord::reachable_here);
         if entry.session != "open" && !leftover {
             continue;
         }

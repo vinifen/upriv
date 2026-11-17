@@ -1,10 +1,10 @@
-//! How the desktop app was distributed — drives default vault-root placement.
+//! How the desktop app was distributed — drives where Default is.
 //!
-//! | Kind | Vault data (`default_root`) | App home (`.upriv-data-folder` alias) |
-//! |------|---------------------------|----------------------------------|
-//! | **Portable** | Beside AppImage / portable exe | Same as vault anchor |
-//! | **Installed** | User data dir (same as app home) | User data dir |
-//! | **Dev** | `UPRIV_DEFAULT_ROOT_ANCHOR` / `dev/` | Same as vault anchor |
+//! | Kind | Default and app home (`.upriv-data-folder`, the data folder list) |
+//! |------|-------------------------------------------------------------------|
+//! | **Portable** | Beside AppImage / portable exe |
+//! | **Installed** | User data dir |
+//! | **Dev** | `UPRIV_DEFAULT_ROOT_ANCHOR` / `dev/` |
 //!
 //! Installed includes NSIS even when the install directory is writable.
 //! Uninstall removes that directory, so the data folder is the user-data dir
@@ -139,7 +139,7 @@ pub fn init_app_distribution() -> AppDistribution {
     detect_app_distribution()
 }
 
-/// Folder where “create default `.upriv/`” / default_root strict search runs.
+/// Default's folder: where the first run makes `.upriv/` and launch looks for it.
 ///
 /// Always the app home: beside the binary when portable/dev; OS user-data dir
 /// when installed (`~/.local/share/upriv`, …).
@@ -152,14 +152,14 @@ pub fn default_vault_root_anchor_for(binary_dir: Option<&std::path::Path>) -> Re
     if let Some(dir) = binary_dir {
         return Ok(dir.to_path_buf());
     }
-    // Portable, installed, and dev: default_root lives in app home.
+    // Portable, installed, and dev: Default is the app home.
     super::resolve::app_home_dir()
 }
 
-/// Suggested absolute path for the **`custom_root` folder picker only**.
+/// Where the data folder list's Add folder picker starts.
 ///
 /// Prefers `~/Documents/Upriv` (visible location); falls back to home/`Upriv`.
-/// Not used by `default_root` resolve/search — see [`default_vault_root_anchor`].
+/// Not Default, and never searched at launch — see [`default_vault_root_anchor`].
 ///
 /// Desktop calls this via daemon RPC `vault_root_suggested_custom_path`.
 /// Does not implement Windows Known Folder / OneDrive redirects — callers that

@@ -1884,7 +1884,7 @@ mod tests {
         crate::store::mkdir_logical(&mut index, "docs").unwrap();
         for (path, file_id) in [
             ("docs/a.txt", "a"),
-            (crate::store::PLAIN_POLICY_FILE, "policy"),
+            (crate::store::INTERNAL_WORKSPACE_FILE, "layout"),
         ] {
             crate::store::record_imported_file(
                 &mut index,
@@ -1899,7 +1899,7 @@ mod tests {
         }
         let view = store_view(&index);
         assert!(view.contains_key("docs/a.txt"));
-        assert!(!view.contains_key(crate::store::PLAIN_POLICY_FILE));
+        assert!(!view.contains_key(crate::store::INTERNAL_WORKSPACE_FILE));
     }
 
     #[test]

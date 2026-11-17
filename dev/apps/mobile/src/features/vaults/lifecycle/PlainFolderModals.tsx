@@ -2,37 +2,57 @@ import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import {
   plainFolderClassI18nKey,
-  suggestedDefaultWorkspacePath,
-  workspacePathDisplay,
-  vaultRootPathForWorkspaceValidation,
+  plainPlaceProblem,
+  type AppUnlockedChoice,
+  type DeviceGroups,
   type PlainFolderClass,
   type PlainPlaceChoice,
+  type RowProblem,
+  type VaultUnlockedChoice,
 } from "@upriv/shared";
+import { hereDevice, useDeviceInfo } from "@upriv/shared/react";
 import { Button, Modal, ModalFooterActions } from "@/components/ui";
 import { PathField } from "@/components/PathField";
 import { PolicyRadioOption } from "@/components/settings";
-import { useAppSettingsContext } from "@/features/system/settings";
+import { problemKey, shownPath } from "@/components/folder-list";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useVaultRootService } from "@/platform/services";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 
 interface PlainPlaceModalProps {
   open: boolean;
   vaultName: string;
-  workspaceChoices: boolean;
+  /** The app's unlocked folders can change only while no vault is open. */
+  appChoices: boolean;
+  /** The app's unlocked folders, which a folder picked for the app's list may not repeat. */
+  appUnlocked: DeviceGroups<AppUnlockedChoice>;
+  /** The vault's own unlocked folders; `null` while they load. */
+  vaultUnlocked: DeviceGroups<VaultUnlockedChoice> | null;
   submitting: boolean;
+  /** Set after a choice was saved and the folder is not a normal local disk. */
   warningClass: PlainFolderClass | null;
   onClose: () => void;
   onContinue: (choice: PlainPlaceChoice, path: string) => void;
   onAcceptWarning: () => void;
 }
 
+/**
+ * "Where should the files go?" before the password, when this phone has no
+ * unlocked folder chosen for a plain-text vault: Beside the data folder, a
+ * folder added to the app's list, or one added to this vault's own list.
+ * Folders are picked, for their grants. A picked folder is checked at once
+ * by the rules of the row it becomes (a folder already in that list, one
+ * inside a `.upriv`); Continue waits until it passes, then saves it as that
+ * list's choice on this phone.
+ */
 export function PlainPlaceModal({
   open,
   vaultName,
-  workspaceChoices,
+  appChoices,
+  appUnlocked,
+  vaultUnlocked,
   submitting,
   warningClass,
   onClose,
@@ -41,77 +61,70 @@ export function PlainPlaceModal({
 }: PlainPlaceModalProps) {
   const { t } = useTranslation();
   const { typography, colors } = useTheme();
-  const { settings } = useAppSettingsContext();
   const vaultRootService = useVaultRootService();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
   const warningKey = warningClass ? plainFolderClassI18nKey(warningClass) : null;
   const [choice, setChoice] = useState<PlainPlaceChoice | null>(null);
-  /** `null` while the folder beside the data folder is still being worked out. */
-  const [defaultPath, setDefaultPath] = useState<string | null>(null);
-  const [customPath, setCustomPath] = useState("");
+  const [appPath, setAppPath] = useState("");
   const [vaultPath, setVaultPath] = useState("");
   const [pickError, setPickError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) return;
     setChoice(null);
-    setDefaultPath(null);
-    setCustomPath("");
+    setAppPath("");
     setVaultPath("");
     setPickError(null);
   }, [open]);
 
-  // The first option starts chosen. With the shared workspace locked, only this
-  // vault's own folder is left.
+  // The first option starts chosen. With the app's folders locked, only this
+  // vault's own list is left.
   useEffect(() => {
     if (!open) return;
-    setChoice((current) => (workspaceChoices ? (current ?? "default") : "vault_only"));
-  }, [open, workspaceChoices]);
+    setChoice((current) => (appChoices ? (current ?? "beside") : "vault_folder"));
+  }, [open, appChoices]);
 
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: settings.app.vault_root_mode,
-        });
-        if (cancelled) return;
-        const root = resolved.status === "found" ? resolved.rootPath : null;
-        setDefaultPath(
-          suggestedDefaultWorkspacePath(
-            vaultRootPathForWorkspaceValidation(
-              settings.app.vault_root_mode,
-              settings.app.upriv_root_path,
-              root,
-            ),
-          ),
-        );
-      } catch {
-        if (!cancelled) setDefaultPath("");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, settings.app.upriv_root_path, settings.app.vault_root_mode, vaultRootService]);
+  /**
+   * What the row a folder choice adds gets wrong; `undefined` while the
+   * vault's list still loads. A phone's data folder is a tree address that no
+   * picked folder repeats, so only the list's own rows count.
+   */
+  const ruleProblem = (
+    folderChoice: "app_folder" | "vault_folder",
+    path: string,
+  ): RowProblem | null | undefined => {
+    if (!path.trim()) return "empty";
+    if (!here || (folderChoice === "vault_folder" && !vaultUnlocked)) return undefined;
+    return plainPlaceProblem({
+      choice: folderChoice,
+      path,
+      here,
+      appUnlocked,
+      vaultUnlocked: vaultUnlocked ?? {},
+      dataFolder: null,
+    });
+  };
+  const appRule = ruleProblem("app_folder", appPath);
+  const vaultRule = ruleProblem("vault_folder", vaultPath);
 
-  // A chosen option that still lacks its folder carries the attention border
-  // and holds Continue; choosing it opens nothing.
-  const defaultMissing = defaultPath !== null && defaultPath.trim() === "";
-  const customMissing = customPath.trim() === "";
-  const vaultMissing = vaultPath.trim() === "";
+  // A chosen option that still lacks its folder, or whose folder the list
+  // refuses, carries the attention border and holds Continue; choosing it
+  // opens nothing. Still loading holds Continue with no border.
+  const refused = (rule: RowProblem | null | undefined) => rule !== null && rule !== undefined;
   const canContinue =
-    (workspaceChoices && choice === "default" && Boolean(defaultPath?.trim())) ||
-    (workspaceChoices && choice === "custom" && !customMissing) ||
-    (choice === "vault_only" && !vaultMissing);
+    (appChoices && choice === "beside") ||
+    (appChoices && choice === "app_folder" && appRule === null) ||
+    (choice === "vault_folder" && vaultRule === null);
+  const ruleLine = (rule: RowProblem | null | undefined) =>
+    rule && rule !== "empty" ? t(problemKey(rule)) : null;
 
-  const pickInto = (apply: (path: string) => void, current: string) => {
+  const pickInto = (apply: (path: string) => void) => {
     void (async () => {
       setPickError(null);
       try {
         const picked = await vaultRootService.pickFolder(
-          current.trim() || null,
-          t("modal.app_settings.action.pick_workspace_folder"),
+          null,
+          t("modal.app_settings.action.choose_folder"),
         );
         if (picked?.trim()) apply(picked.trim());
       } catch (error) {
@@ -156,7 +169,7 @@ export function PlainPlaceModal({
               onPress={() => {
                 if (!choice || !canContinue) return;
                 const path =
-                  choice === "custom" ? customPath : choice === "vault_only" ? vaultPath : "";
+                  choice === "app_folder" ? appPath : choice === "vault_folder" ? vaultPath : "";
                 onContinue(choice, path.trim());
               }}
             />
@@ -170,52 +183,48 @@ export function PlainPlaceModal({
           <Text style={typography.bodyMuted}>{t(warningKey)}</Text>
         ) : (
           <View style={styles.actions}>
-            {!workspaceChoices ? (
-              <Text style={typography.bodyMuted}>{t("plain.place.workspace_locked")}</Text>
+            {!appChoices ? (
+              <Text style={typography.bodyMuted}>{t("plain.place.app_locked")}</Text>
             ) : null}
             <PolicyRadioOption
-              value="default"
-              checked={choice === "default"}
-              attention={defaultMissing}
-              title={t("plain.place.default")}
-              description={t("plain.place.default_desc")}
-              disabled={submitting || !workspaceChoices}
-              onSelect={() => setChoice("default")}
-              footer={
-                <PathField value={workspacePathDisplay(defaultPath ?? "")} editable={false} />
-              }
+              value="beside"
+              checked={choice === "beside"}
+              title={t("plain.place.beside")}
+              description={t("plain.place.beside_desc")}
+              disabled={submitting || !appChoices}
+              onSelect={() => setChoice("beside")}
             />
             <PolicyRadioOption
-              value="custom"
-              checked={choice === "custom"}
-              attention={customMissing}
-              title={t("plain.place.custom")}
-              description={t("plain.place.custom_desc")}
-              disabled={submitting || !workspaceChoices}
-              onSelect={() => setChoice("custom")}
+              value="app_folder"
+              checked={choice === "app_folder"}
+              attention={refused(appRule)}
+              title={t("plain.place.app_folder")}
+              description={t("plain.place.app_folder_desc")}
+              disabled={submitting || !appChoices}
+              onSelect={() => setChoice("app_folder")}
               footer={
-                <PlacePathEditor
-                  value={customPath}
+                <PlacePathPicker
+                  value={appPath}
+                  problem={ruleLine(appRule)}
                   disabled={submitting}
-                  onChange={setCustomPath}
-                  onPick={() => pickInto(setCustomPath, customPath)}
+                  onPick={() => pickInto(setAppPath)}
                 />
               }
             />
             <PolicyRadioOption
-              value="vault_only"
-              checked={choice === "vault_only"}
-              attention={vaultMissing}
-              title={t("plain.place.vault_only")}
-              description={t("plain.place.vault_only_desc")}
+              value="vault_folder"
+              checked={choice === "vault_folder"}
+              attention={refused(vaultRule)}
+              title={t("plain.place.vault_folder")}
+              description={t("plain.place.vault_folder_desc")}
               disabled={submitting}
-              onSelect={() => setChoice("vault_only")}
+              onSelect={() => setChoice("vault_folder")}
               footer={
-                <PlacePathEditor
+                <PlacePathPicker
                   value={vaultPath}
+                  problem={ruleLine(vaultRule)}
                   disabled={submitting}
-                  onChange={setVaultPath}
-                  onPick={() => pickInto(setVaultPath, vaultPath)}
+                  onPick={() => pickInto(setVaultPath)}
                 />
               }
             />
@@ -231,33 +240,43 @@ export function PlainPlaceModal({
   );
 }
 
-function PlacePathEditor({
+/** A picked folder, shown by its name: a phone folder is a grant, never a typed path. */
+function PlacePathPicker({
   value,
+  problem,
   disabled,
-  onChange,
   onPick,
 }: {
   value: string;
+  /** Why the list refuses this folder, under it. */
+  problem: string | null;
   disabled: boolean;
-  onChange: (path: string) => void;
   onPick: () => void;
 }) {
   const { t } = useTranslation();
+  const { typography, colors } = useTheme();
   return (
     <View style={styles.pathEditor}>
       <PathField
-        value={value}
-        disabled={disabled}
-        placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
-        onChangeText={onChange}
+        value={shownPath(value)}
+        editable={false}
+        placeholder={t("vault.create.action.choose_folder")}
       />
       <Button
         size="sm"
         variant="ghost"
-        label={t("modal.app_settings.action.pick_workspace_folder")}
+        label={t("modal.app_settings.action.choose_folder")}
         disabled={disabled}
         onPress={onPick}
       />
+      {problem ? (
+        <Text
+          accessibilityRole="alert"
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+        >
+          {problem}
+        </Text>
+      ) : null}
     </View>
   );
 }

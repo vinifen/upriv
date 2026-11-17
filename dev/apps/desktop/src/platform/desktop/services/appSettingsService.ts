@@ -1,20 +1,13 @@
-import type {
-  AppSettingsConfig,
-  AppSettingsLoadResult,
-  AppSettingsSaveOptions,
-  AppSettingsService,
-} from "@upriv/shared";
+import type { AppSettingsLoadResult, AppSettingsService } from "@upriv/shared";
 import { normalizeAppSettings } from "@upriv/shared";
 import { rpcAppSettingsGet, rpcAppSettingsSave } from "@/lib/rpc";
 
 /**
- * Desktop → daemon `app_settings_get` / `app_settings_save`.
- * Persists `.upriv/settings.toml` (`[ui]` / `[logging]` / other `[app]` keys).
- * Vault-root mode+path are derived from / written to `.upriv-data-folder` only (not TOML).
- * Before a vault-root exists, the UI keeps prefs in memory (`onDisk: false`) and
- * does not call save expecting a write. Mid-session missing/corrupt `.upriv` →
- * RPC error (`vault_root_not_found` / `incomplete`), not soft `wrote: false`.
- * Soft `wrote: false` remains only for empty custom_root path bootstrap.
+ * Desktop → daemon `app_settings_get` / `app_settings_save`: `.upriv/settings.toml`
+ * of the data folder in use. Before a data folder exists the UI keeps prefs in
+ * memory (`onDisk: false`) and a save writes nothing (`wrote: false`). Mid-session
+ * a missing or corrupt `.upriv` is an RPC error (`vault_root_not_found` /
+ * `incomplete`), never a soft `wrote: false`.
  */
 export const desktopAppSettingsService: AppSettingsService = {
   async load(): Promise<AppSettingsLoadResult> {
@@ -26,12 +19,5 @@ export const desktopAppSettingsService: AppSettingsService = {
     };
   },
 
-  async save(config, options?: AppSettingsSaveOptions) {
-    const { wrote } = await rpcAppSettingsSave(normalizeAppSettings(config), {
-      syncAlias: options?.syncAlias,
-    });
-    return wrote;
-  },
+  save: (config, lists) => rpcAppSettingsSave(normalizeAppSettings(config), lists),
 };
-
-export type { AppSettingsConfig };

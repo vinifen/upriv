@@ -1,18 +1,17 @@
 import { RpcError, VAULT_ROOT_ERROR_CODES } from "@upriv/shared";
-import { getUprivCoreNative, type SafRootStatus, type UprivCoreNativeModule } from "upriv-core";
-import { shouldReleaseImportTreePermission } from "./sameSafTreeUri";
+import { getUprivCoreNative, type UprivCoreNativeModule } from "upriv-core";
 
 /**
  * SAF (Android Storage Access Framework) surface used by mobile services.
  *
- * A picked `content://` folder is the data folder. Rust addresses it as
- * `/upriv-saf-root` and this module mounts that path onto the grant
- * (`mountSafRoot`). Inspect of a picked folder reads `.upriv/settings.toml`
- * through SAF without mounting it, so an open vault keeps its mount.
+ * The data folder the list selects is mounted at Rust `/upriv-saf-root`
+ * (`mountSafRoot`): a row's picked tree, or Default's Documents grant. Every
+ * other picked folder (a row of another list, an export's folder) is a tree
+ * Rust reaches at its own root (`mountTree`).
  *
  * Layering:
- * - Kotlin (`SafVaultRoot.kt`): grants and read-only probes
- * - Kotlin (`SafFs.kt`): the bridge Rust writes through
+ * - Kotlin (`SafVaultRoot.kt`): grants
+ * - Kotlin (`SafFs.kt`): the bridges Rust reads and writes through
  * - TS (this file): glue + narrow error boundary
  *
  * See SDD §9.4, ARCHITECTURE §6.
@@ -73,17 +72,6 @@ export function toSafRpcError(error: unknown, treeUri: string): RpcError {
   return new RpcError(safCode ?? fallbackCode, message, { path: treeUri });
 }
 
-/**
- * Runtime status of `.upriv/settings.toml` under a SAF tree URI.
- * Adds `"unauthorized"` on top of Rust `VaultRootDirStatus` for perm loss
- * (user cleared / OTG unmounted) — caller UI should re-persist / re-pick.
- */
-export type SafInspectStatus = SafRootStatus;
-
-export function safInspectRoot(treeUri: string): SafInspectStatus {
-  return requireNative().safInspectRoot(treeUri);
-}
-
 /** Take persistable read/write permission. Idempotent; safe after picker. */
 export function safPersist(treeUri: string): void {
   try {
@@ -93,57 +81,44 @@ export function safPersist(treeUri: string): void {
   }
 }
 
-/** Best-effort release of persistable permission. Missing perm not an error. */
-export function safRelease(treeUri: string): void {
-  requireNative().safReleasePermission(treeUri);
-}
-
 /**
- * Drop the persistable grant from a one-shot folder pick (file-manager import,
- * Export data folder).
- * No-op when native is missing (Expo Go) or when the URI is the active vault-root.
- * Native `safReleasePermission` also refuses to drop the active tree.
+ * Drop the grant of a one-shot folder pick (a file-manager import). Kotlin
+ * keeps the grants still in use: the data folder, Default's Documents grant,
+ * and a mounted tree.
  */
 export function safReleaseImportTree(treeUri: string): void {
-  const native = getUprivCoreNative();
-  if (!native) return;
-  const active = native.safGetActiveUri()?.trim() || null;
-  if (!shouldReleaseImportTreePermission(treeUri, active)) return;
+  if (!isSafTreeUri(treeUri)) return;
   try {
-    native.safReleasePermission(treeUri.trim());
+    getUprivCoreNative()?.safReleasePermission(treeUri.trim());
   } catch {
     /* already gone */
   }
 }
 
-export function safReadSettings(treeUri: string): string | null {
-  return requireNative().safReadSettings(treeUri);
-}
-
-/**
- * The tree mounted at `/upriv-saf-root` (empty string / null = nothing mounted).
- * SharedPreferences store only this pointer. The last Custom folder is the
- * `android_custom_folder=` line in the app-home `.upriv-data-folder`.
- */
-export function safGetActiveUri(): string | null {
-  const native = getUprivCoreNative();
-  if (!native) return null;
-  const uri = native.safGetActiveUri();
+/** The held grant Default lives in (Documents, or Documents/Upriv); `null` until confirmed. */
+export function safDocumentsGrant(): string | null {
+  const uri = getUprivCoreNative()?.safDocumentsGrant().trim();
   return uri && uri.length > 0 ? uri : null;
 }
 
-export function safSetActiveUri(uri: string | null): void {
-  requireNative().safSetActiveUri(uri ?? "");
-}
+/** Where Rust reaches the data folder. */
+const DATA_FOLDER_ROOT = "/upriv-saf-root";
+
+/** The tree `/upriv-saf-root` serves now; `null` while none is mounted. */
+let dataFolderTree: string | null = null;
+
+/** The tree each picked root serves, by the root Rust reaches it at. */
+const pickedRoots = new Map<string, string>();
 
 /**
  * Point Rust `/upriv-saf-root` at this persisted tree.
- * An unplugged drive throws `vault_root_unreachable`: the grant and the
- * pointer are kept so a reconnect works without picking the folder again.
+ * An unplugged drive throws `vault_root_unreachable`; the grant is kept so a
+ * reconnect works without picking the folder again.
  */
 export function mountSafRoot(treeUri: string): void {
   try {
     requireNative().mountSafRoot(treeUri);
+    dataFolderTree = treeUri.trim();
   } catch (error) {
     const rpc = toSafRpcError(error, treeUri);
     if (rpc.code === "saf_unreachable") {
@@ -155,6 +130,7 @@ export function mountSafRoot(treeUri: string): void {
 
 /** Drop the Rust mount. The persistable grant is left in place. */
 export function unmountSafRoot(): void {
+  dataFolderTree = null;
   const native = getUprivCoreNative();
   try {
     native?.unmountSafRoot();
@@ -164,22 +140,61 @@ export function unmountSafRoot(): void {
 }
 
 /**
- * Point Rust `/upriv-saf-export` at a folder picked for Export data folder.
- * The data folder mount is left as it is. An unplugged drive stays
- * `saf_unreachable`: it is the export folder that is gone, not the data folder.
+ * Let Rust reach a picked tree at its own root, and return that root. Binds
+ * only: a drive that is away fails on its first use.
  */
-export function mountSafExport(treeUri: string): void {
+export function mountTree(treeUri: string): string {
   try {
-    requireNative().mountSafExport(treeUri);
+    const root = requireNative().mountTree(treeUri.trim());
+    pickedRoots.set(root.replace(/\/+$/, ""), treeUri.trim());
+    return root;
   } catch (error) {
     throw toSafRpcError(error, treeUri);
   }
 }
 
-/** Drop the export mount. */
-export function unmountSafExport(): void {
+/**
+ * The tree a path Rust uses is in, and the rest of the path: the data folder
+ * at `/upriv-saf-root`, or a picked tree at its own root. `null` for any
+ * other path.
+ */
+export function treeOfPath(
+  path: string,
+): { tree: string; rest: string; dataFolder: boolean } | null {
+  const normalized = path.trim().replace(/\/+$/, "");
+  const inside = (root: string) =>
+    normalized === root
+      ? ""
+      : normalized.startsWith(`${root}/`)
+        ? normalized.slice(root.length + 1)
+        : null;
+  if (dataFolderTree) {
+    const rest = inside(DATA_FOLDER_ROOT);
+    if (rest !== null) return { tree: dataFolderTree, rest, dataFolder: true };
+  }
+  for (const [root, tree] of pickedRoots) {
+    const rest = inside(root);
+    if (rest !== null) return { tree, rest, dataFolder: false };
+  }
+  return null;
+}
+
+/** Throw `saf_unauthorized` when a picked tree's grant is gone, `saf_unreachable` when it is away. */
+export function checkTree(treeUri: string): void {
   try {
-    getUprivCoreNative()?.unmountSafExport();
+    requireNative().checkTree(treeUri.trim());
+  } catch (error) {
+    throw toSafRpcError(error, treeUri);
+  }
+}
+
+/** Drop a tree's mount. Its grant stays until it is released. */
+export function unmountTree(treeUri: string): void {
+  for (const [root, tree] of pickedRoots) {
+    if (tree === treeUri.trim()) pickedRoots.delete(root);
+  }
+  try {
+    getUprivCoreNative()?.unmountTree(treeUri.trim());
   } catch {
     /* already unmounted */
   }

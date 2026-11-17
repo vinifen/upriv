@@ -239,7 +239,7 @@ Do **not** expect to copy `dev/apps/desktop/src/App.tsx` verbatim into React Nat
 
 ## 6. Storage access (`host_fs`)
 
-Desktop and mobile share the same vault logic. `upriv-core` reaches disk through `host_fs`: desktop paths use `std::fs`; an Android storage-access tree is addressed as `/upriv-saf-root` (and `/upriv-saf-export` for the folder an export writes into), and `host_fs` sends those paths to the Kotlin `SafFs` bridge — URIs, never `/storage/…` paths.
+Desktop and mobile share the same vault logic. `upriv-core` reaches disk through `host_fs`: desktop paths use `std::fs`; an Android storage-access tree is addressed as `/upriv-saf-root` (the data folder in use) or `/upriv-saf-tree/<key>` (every other picked tree: a list row, an export's folder), and `host_fs` sends those paths to the Kotlin `SafFs` bridge — URIs, never `/storage/…` paths.
 
 See SDD §9.4 for Android SAF flow.
 
@@ -264,12 +264,12 @@ See SDD §9.4 for Android SAF flow.
 
 ## 8. Platform matrix
 
-| OS | Phase | UI | Mount / workspace | Status |
+| OS | Phase | UI | Unlocked folder | Status |
 |----|-------|-----|-------------------|--------|
 | Linux x86_64 / ARM64 | v1 | Electron + React | FUSE → encrypted store | In development |
 | Windows x86_64 / ARM64 | v1 | Electron + React | WinFsp.Disk on the vault folder | In development |
 | macOS | v1.1 | Electron + React | Platform mount | Planned |
-| Android | v2 | React Native | SAF; `workspace/` on OTG HD | Planned |
+| Android | v2 | React Native | SAF; plain-text vaults only, in picked trees (OTG HD, SD card) | Planned |
 | iOS | v3 | React Native | Document picker + SAF-like APIs | Planned |
 
 ---
@@ -289,4 +289,4 @@ See SDD §14.
 
 ---
 
-*This document is the source for stack choice. Rest layout, modes, backups, and export: SECURITY-CRYPTO. Product requirements: PRD §3.6 (SAF, APK, workspace on HD).*
+*This document is the source for stack choice. Rest layout, modes, backups, and export: SECURITY-CRYPTO. Product requirements: PRD §3.6 (SAF, APK, picked folders on HD).*

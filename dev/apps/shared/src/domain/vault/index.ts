@@ -12,7 +12,7 @@ export type {
 export {
   STORAGE_MODES,
   isVaultBlockingDataFolderChange,
-  isVaultBlockingWorkspaceClear,
+  isVaultSessionLive,
   isVaultFileManagerEligible,
   isVaultFileManagerRetained,
   isVaultListClosed,
@@ -24,7 +24,7 @@ export {
   isVaultCloseQueued,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
-  listHasVaultBlockingWorkspaceClear,
+  listHasLiveVaultSession,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   storageModeIsPlaintext,

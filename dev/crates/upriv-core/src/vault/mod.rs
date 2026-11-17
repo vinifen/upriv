@@ -8,16 +8,19 @@ mod backup;
 mod backup_folder;
 mod config_folder;
 mod create;
+mod data_folder;
 mod data_folder_export;
 mod delete;
 mod embedded_settings;
 mod export;
 mod export_folder;
 mod files_zip;
+mod folder_status;
 pub(crate) mod fs;
 mod import;
 mod import_job;
 mod import_slots;
+mod lost_sessions;
 mod open_close;
 mod os_import;
 mod package;
@@ -31,6 +34,7 @@ mod rewrap;
 mod seven_zip;
 mod seven_zip_pack;
 mod unfinished;
+mod unlocked_folder;
 mod welcome;
 pub(crate) mod wipe;
 mod zip_io;
@@ -38,22 +42,26 @@ mod zip_io;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::config::vault_config::{load_vault_config_raw, VaultConfig, VaultStorageMode};
+use crate::config::vault_config::{load_vault_config, VaultConfig, VaultStorageMode};
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
 use crate::session::is_vault_open_at;
 use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
 
+pub(crate) use backup::reuse_selected_backup_folder;
 pub use backup::{
-    backup_listing, backup_zip_file, delete_backups, export_backups, list_backups,
-    promote_backup_save, reuse_backup_folder, save_backup_now, BackupEntry, BackupListing,
-    BackupLocation, ChosenFolderState, SavedBackup,
+    backup_listing, backup_zip_file, delete_backups, export_backups, forget_backup_folder,
+    list_backups, promote_backup_save, rename_backup, save_backup_now, BackupEntry, BackupListing,
+    BackupSection, SavedBackup, SectionDevice, SectionKind, BACKUP_NAME_MAX_CHARS,
 };
-pub use backup_folder::{check_typed_backup_folder, BackupFolderStatus};
-pub(crate) use backup_folder::{refuse_app_backup_overlap, refuse_vault_backup_overlap};
 pub use config_folder::{ExportInclude, ImportExtras};
 pub use create::{create_vault, create_vault_as_job};
+pub use data_folder::{
+    apply_data_folder, data_folder_status, data_folder_view, search_data_folder, DataFolderApplied,
+    DataFolderApply, DataFolderContent, DataFolderDetails, DataFolderSearch, DataFolderStatus,
+    DataFolderView,
+};
 pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::{delete_vault, OutsideBackups, VaultDeleteOutcome};
 pub use embedded_settings::EmbeddedVaultSettings;
@@ -63,11 +71,12 @@ pub use files_zip::{
     import_logical_files_zip, import_logical_files_zip_path, probe_import_zip_bytes,
     probe_import_zip_path, ImportZipProbe, ZipImportClass,
 };
+pub use folder_status::{device_trees, folder_status, FolderDetails, FolderStatus, StatusList};
 pub use fs::{
     fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_held_delete, fs_held_list,
     fs_held_restore, fs_import_from_os_path, fs_list_tree, fs_mkdir, fs_move, fs_os_path,
     fs_preview_fits, fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate,
-    fs_write_file, fs_write_from_reader, fs_write_range, HeldFile, HeldItem,
+    fs_write_file, fs_write_from_reader, fs_write_range, HeldFile, HeldItem, OsFolder,
 };
 pub use import::{
     import_store_from_archive_path, import_store_zip, parse_backup_import_path,
@@ -75,24 +84,26 @@ pub use import::{
     StoreZipSettings,
 };
 pub use import_slots::{import_slots, import_slots_for};
+pub use lost_sessions::{data_folder_entered, end_lost_sessions, leave_lost_data_folder};
 pub use open_close::{
     close_all_vaults, close_all_vaults_now, close_state, close_vault, close_vault_auto,
-    close_vault_now, confirm_plain_destination, hurry_close, hurry_quit, open_vault,
-    open_vault_as_job, open_vault_confirmed, wait_for_previous_app, CloseState, CloseVaultOutcome,
-    OpenVaultOutcome,
+    close_vault_now, hurry_close, hurry_quit, open_vault, open_vault_as_job, wait_for_previous_app,
+    CloseState, CloseVaultOutcome, VaultOpened,
 };
 pub use os_import::{
     abort_import_vault, finish_import_session, import_logical_os_path, ingest_import_directory,
     ingest_import_reader, open_import_session,
 };
 pub use partial::{hurry_partial_wipes, wait_for_partial_wipes};
+pub(crate) use persistence::forget_backup_devices;
 pub use persistence::{load_vault_persistence, VaultPersistence};
-pub(crate) use plain::{ensure_no_leftover, holds_leftover, PlainSession};
+pub(crate) use plain::{ensure_no_leftover, PlainSession};
 pub use plain::{
-    plain_deletions, plain_destination, plain_leftover, plain_send, plain_status, plain_sync,
-    plain_unsend, remove_plain_leftover, set_plain_observer, PlainCloseSummary, PlainDestination,
-    PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
-    PlainTotals, PlainUnsend, PlainWipe,
+    plain_deletions, plain_destination, plain_leftover, plain_record_forget, plain_send,
+    plain_status, plain_sync, plain_unsend, remove_plain_leftover, set_plain_observer,
+    PlainCloseSummary, PlainDestination, PlainFolderClass, PlainLeftover, PlainObserver,
+    PlainRecordState, PlainRecordView, PlainStatus, PlainSyncReport, PlainTotals, PlainUnsend,
+    PlainWipe,
 };
 pub use rebuild::{rebuild_vault, VaultRebuild};
 pub use rename::{rename_vault, VaultRenameResult};
@@ -103,7 +114,24 @@ pub use seven_zip::{
 };
 pub use seven_zip_pack::seven_zip_export_available;
 pub use unfinished::sweep_unfinished;
+pub use unlocked_folder::{
+    attach_unlocked_folder, unlocked_folder_info, AttachAnswer, UnlockedFolderInfo,
+};
+pub(crate) use unlocked_folder::{
+    refuse_folders_in_use, release_unlocked_container, unlocked_containers_named,
+};
 pub use welcome::{VaultWelcome, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH};
+
+/// What the vault's files hold, in bytes, as its index counts them: the
+/// files only, not the store's own entries.
+pub(crate) fn files_bytes(index: &crate::store::VaultIndex) -> u64 {
+    index
+        .nodes()
+        .iter()
+        .filter(|node| !crate::store::is_reserved_logical(&node.path))
+        .filter_map(|node| node.as_file().map(|(_, size, _)| size))
+        .fold(0u64, u64::saturating_add)
+}
 
 /// Wire DTO for `vault_list`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,8 +149,11 @@ pub struct VaultListItem {
     /// A plaintext folder from an earlier session waits to be removed. Its
     /// folder path, mode, and name are locked until then.
     pub plain_leftover: bool,
-    /// Backups of this vault went to the folder it uses now outside the data
-    /// folder. Read from the vault's own files, with no drive access.
+    /// Plain-text folders of this vault on record: this device's leftover,
+    /// one on a drive that is away, and other devices'.
+    pub plain_records: Vec<PlainRecordView>,
+    /// Zips of this vault are recorded in folders outside the data folder.
+    /// Read from the vault's own files, with no drive access.
     pub outside_backups: bool,
 }
 
@@ -165,22 +196,8 @@ pub(crate) fn list_vault_entries(root: &VaultRoot) -> Result<Vec<VaultListEntry>
             continue;
         }
         let vault_dir = entry.path();
-        match load_vault_config_raw(&vault_dir) {
+        match load_vault_config(&vault_dir) {
             Ok(config) => {
-                // Warn on bad mount but keep the entry (open/save validates fully).
-                if let Err(error) =
-                    crate::paths::validate_workspace_table(&config.mount, Some(root.root()))
-                {
-                    let id = config.vault.id.as_str();
-                    eprintln!(
-                        "upriv-core: vault {id} has invalid [mount] (listed anyway): {error}"
-                    );
-                    crate::logging::log_event(
-                        crate::logging::LogLevel::Warn,
-                        "vault_mount_invalid",
-                        &[("id", id)],
-                    );
-                }
                 entries.push(VaultListEntry {
                     id: config.vault.id.clone(),
                     display_name: config.vault.display_name.clone(),
@@ -274,10 +291,27 @@ fn content_hash_mismatch(vault_dir: &Path, saved: Option<&str>) -> bool {
     }
 }
 
+/// Plain-text records of each vault, as `state.json` holds them.
+type RecordsByVault = std::collections::BTreeMap<String, Vec<crate::runtime_state::PlainRecord>>;
+
+fn records_by_vault(root: &VaultRoot) -> RecordsByVault {
+    crate::runtime_state::load_runtime_state(root)
+        .map(|state| {
+            state
+                .vaults
+                .into_iter()
+                .filter(|(_, entry)| !entry.plain.is_empty())
+                .map(|(id, entry)| (id, entry.plain))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn list_item_from_entry(
     root: &VaultRoot,
     entry: &VaultListEntry,
     dirty: &HashSet<String>,
+    records: &RecordsByVault,
 ) -> VaultListItem {
     let saved = listed_persistence(&entry.vault_dir, &entry.id);
     let last_accessed_at = saved
@@ -296,16 +330,22 @@ fn list_item_from_entry(
     } else {
         None
     };
-    // Every leftover is a dirty close, so a clean vault pays for no state read.
-    let plain_leftover =
-        session != Some("open") && dirty.contains(&entry.id) && holds_leftover(root, &entry.id);
+    let plain_records = if session == Some("open") {
+        Vec::new()
+    } else {
+        plain::plain_record_views(
+            root,
+            &entry.id,
+            records.get(&entry.id).cloned().unwrap_or_default(),
+        )
+    };
+    let plain_leftover = plain_records
+        .iter()
+        .any(|record| record.state == PlainRecordState::Leftover);
     // Almost no vault has any, so the settings are read only for one that does.
     let outside_backups = saved
         .as_ref()
-        .is_some_and(VaultPersistence::has_outside_backups)
-        && backup_folder::backup_places(root, &entry.id, &entry.vault_dir)
-            .chosen
-            .is_some();
+        .is_some_and(VaultPersistence::has_outside_backups);
     VaultListItem {
         id: entry.id.clone(),
         display_name: entry.display_name.clone(),
@@ -318,6 +358,7 @@ fn list_item_from_entry(
         last_accessed_at,
         unlock_preset,
         plain_leftover,
+        plain_records,
         outside_backups,
     }
 }
@@ -327,13 +368,15 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
     let _ = sweep_stale_mount_leaves(root);
     let entries = list_vault_entries(root)?;
     plain::adopt_orphans(root, &entries);
+    plain::follow_records(root, &entries);
     let dirty: HashSet<String> = dirty_close_ids(root)
         .unwrap_or_default()
         .into_iter()
         .collect();
+    let records = records_by_vault(root);
     Ok(entries
         .iter()
-        .map(|e| list_item_from_entry(root, e, &dirty))
+        .map(|e| list_item_from_entry(root, e, &dirty, &records))
         .collect())
 }
 
@@ -344,6 +387,9 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
 pub struct VaultDiskUsage {
     pub store_bytes: u64,
     pub held_bytes: u64,
+    /// About what the vault's files hold, as its last close, create, or
+    /// rebuild recorded it. `None` until one did.
+    pub files_bytes: Option<u64>,
 }
 
 /// [`VaultDiskUsage`] of a vault. Directory entries and symlink targets are
@@ -364,6 +410,10 @@ pub fn vault_disk_usage(root: &VaultRoot, vault_id: &str) -> Result<VaultDiskUsa
     Ok(VaultDiskUsage {
         store_bytes: sum_regular_file_bytes(&store)?,
         held_bytes: crate::store::held_disk_bytes(&store)?,
+        files_bytes: load_vault_persistence(&vault_dir)
+            .ok()
+            .flatten()
+            .and_then(|persistence| persistence.files_bytes),
     })
 }
 
@@ -409,7 +459,7 @@ pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let config = load_vault_config_raw(&vault_dir)?;
+    let config = load_vault_config(&vault_dir)?;
     Ok(list_item_from_entry(
         root,
         &VaultListEntry {
@@ -424,6 +474,7 @@ pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem
             config,
         },
         &dirty,
+        &records_by_vault(root),
     ))
 }
 
@@ -458,7 +509,8 @@ mod tests {
             vault_disk_usage(&root, "notes").unwrap(),
             VaultDiskUsage {
                 store_bytes: 10 + 25 + 4,
-                held_bytes: 0
+                held_bytes: 0,
+                files_bytes: None,
             }
         );
         let held = root
@@ -562,7 +614,7 @@ mode = "not_a_mode"
     }
 
     #[test]
-    fn list_includes_vault_with_relative_mount() {
+    fn a_vault_whose_row_path_does_not_validate_is_listed() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("good", "Good", 1)]);
         let bad_mount = root.vault_dir("rel-mount").unwrap();
         crate::host_fs::create_dir_all(&bad_mount).unwrap();
@@ -574,15 +626,12 @@ id = "rel-mount"
 display_name = "Relative Mount"
 [storage]
 mode = "encrypted_dir"
-[mount.linux]
-path = "not/absolute"
-[mount.windows]
-path = "not/absolute"
-[mount.macos]
-path = "not/absolute"
-[mount.android]
-path = "not/absolute"
-[mount.ios]
+[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64]
+system = "linux"
+selected = 1
+next_number = 2
+[[unlocked_folder.devices.3e301fc022fc5185e12822bc2a251f64.rows]]
+number = 1
 path = "not/absolute"
 "#,
         )
@@ -670,7 +719,7 @@ mode = "encrypted_dir"
         let looked_up = vault_list_item(&root, "  notes  ").expect("lookup padded id");
         assert_eq!(looked_up.id, "notes");
         let saved =
-            crate::config::load_vault_config_raw(root.vault_dir("notes").unwrap()).expect("config");
+            crate::config::load_vault_config(root.vault_dir("notes").unwrap()).expect("config");
         assert_eq!(saved.vault.id, "notes");
     }
 

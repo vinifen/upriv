@@ -1,8 +1,16 @@
 import { RpcError } from "../core-rpc/errors";
+import {
+  DATA_FOLDER_LIST,
+  parseChoiceName,
+  parseDeviceGroups,
+  parseFolderState,
+  parseOneSwitch,
+} from "../folder-lists";
 import type {
   AppDistribution,
-  DefaultRootStatusResult,
-  VaultRootInspectResult,
+  DataFolderApplied,
+  DataFolderListView,
+  DataFolderSearchResult,
   VaultRootPrivateRoot,
   VaultRootRelocateNotice,
   VaultRootResolveResult,
@@ -11,9 +19,22 @@ import type {
 
 const INVALID_RESPONSE = "invalid_response";
 
-function normalizeVaultRootSource(value: unknown): VaultRootResolveSource | null {
-  if (value === "explicit" || value === "custom_root" || value === "default_root") return value;
-  return null;
+function asRecord(raw: unknown, label: string): Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(INVALID_RESPONSE, `${label}: expected object`, raw);
+  }
+  return raw as Record<string, unknown>;
+}
+
+/** The names of the vaults that ended with a lost data folder (`ended`). */
+function parseEnded(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
+function parseSource(value: unknown): VaultRootResolveSource | null {
+  return value === "explicit" || value === "default" || value === "row" ? value : null;
 }
 
 function relocateFields(record: Record<string, unknown>): {
@@ -41,91 +62,79 @@ function isAppDistribution(value: unknown): value is AppDistribution {
   return value === "portable" || value === "installed" || value === "dev";
 }
 
-function isVaultRootDirStatus(value: unknown): value is DefaultRootStatusResult["status"] {
-  return (
-    value === "absent" ||
-    value === "valid" ||
-    value === "incomplete" ||
-    value === "unreadable" ||
-    value === "unauthorized" ||
-    value === "unreachable"
-  );
-}
-
-/** Parse `vault_root_resolve` wire. Shared by desktop and mobile RPC. */
+/** Parse `vault_root_resolve`. Shared by desktop and mobile RPC. */
 export function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
-  if (typeof raw !== "object" || raw === null) {
-    throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: expected object", raw);
-  }
-  const record = raw as Record<string, unknown>;
+  const record = asRecord(raw, "vault_root_resolve");
+  const relocate = relocateFields(record);
   if (record.status === "found") {
-    const source = normalizeVaultRootSource(record.source);
-    if (typeof record.rootPath !== "string" || source == null) {
-      throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: invalid found payload", raw);
+    const source = parseSource(record.source);
+    if (typeof record.rootPath !== "string" || !source) {
+      throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: invalid found", raw);
     }
-    return {
-      status: "found",
-      rootPath: record.rootPath,
-      source,
-      ...relocateFields(record),
-    };
+    return { status: "found", rootPath: record.rootPath, source, ...relocate };
   }
   if (record.status === "needs_setup") {
-    const defaultRootAnchor =
-      typeof record.defaultRootAnchor === "string" ? record.defaultRootAnchor : null;
-    if (
-      typeof record.aliasPath !== "string" ||
-      defaultRootAnchor == null ||
-      !isAppDistribution(record.distribution)
-    ) {
-      throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: invalid needs_setup payload", raw);
+    if (typeof record.defaultRootAnchor !== "string" || !isAppDistribution(record.distribution)) {
+      throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: invalid needs_setup", raw);
     }
     return {
       status: "needs_setup",
-      aliasPath: record.aliasPath,
-      defaultRootAnchor,
+      defaultRootAnchor: record.defaultRootAnchor,
       distribution: record.distribution,
-      ...relocateFields(record),
+      ended: parseEnded(record.ended),
+      ...relocate,
+    };
+  }
+  if (record.status === "selected_failed") {
+    const choice = parseChoiceName(record.choice);
+    if (!choice) {
+      throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: invalid choice", raw);
+    }
+    return {
+      status: "selected_failed",
+      choice,
+      reason: parseFolderState(record.reason),
+      ended: parseEnded(record.ended),
+      ...relocate,
     };
   }
   throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: unknown status", raw);
 }
 
-/** Parse `vault_root_default_root_status` wire. */
-export function parseDefaultRootStatus(raw: unknown): DefaultRootStatusResult {
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { defaultRootAnchor?: unknown }).defaultRootAnchor !== "string"
-  ) {
-    throw new RpcError(
-      INVALID_RESPONSE,
-      "vault_root_default_root_status: expected { status, defaultRootAnchor }",
-      raw,
-    );
-  }
-  const status = (raw as { status?: unknown }).status;
-  if (!isVaultRootDirStatus(status)) {
-    throw new RpcError(INVALID_RESPONSE, "vault_root_default_root_status: invalid status", raw);
-  }
+/** Parse `data_folder_list`. */
+export function parseDataFolderList(raw: unknown): DataFolderListView {
+  const record = asRecord(raw, "data_folder_list");
+  const list = asRecord(record.list ?? {}, "data_folder_list list");
   return {
-    status,
-    defaultRootAnchor: (raw as { defaultRootAnchor: string }).defaultRootAnchor,
+    groups: parseDeviceGroups(list.devices, DATA_FOLDER_LIST),
+    defaultFolder: typeof record.defaultFolder === "string" ? record.defaultFolder : null,
+    explicit: typeof record.explicit === "string" ? record.explicit : null,
   };
 }
 
-/** Parse `vault_root_inspect_path` wire. */
-export function parseVaultRootInspect(raw: unknown): VaultRootInspectResult {
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { path?: unknown }).path !== "string"
-  ) {
-    throw new RpcError(INVALID_RESPONSE, "vault_root_inspect_path: expected { status, path }", raw);
+/** Parse `data_folder_apply`. */
+export function parseDataFolderApplied(raw: unknown): DataFolderApplied {
+  const record = asRecord(raw, "data_folder_apply");
+  const source = parseSource(record.source);
+  if (typeof record.rootPath !== "string" || !source) {
+    throw new RpcError(INVALID_RESPONSE, "data_folder_apply: invalid result", raw);
   }
-  const status = (raw as { status?: unknown }).status;
-  if (!isVaultRootDirStatus(status)) {
-    throw new RpcError(INVALID_RESPONSE, "vault_root_inspect_path: invalid status", raw);
-  }
-  return { status, path: (raw as { path: string }).path };
+  const privateRoot = parseVaultRootPrivateRoot(record.privateRoot);
+  return {
+    rootPath: record.rootPath,
+    source,
+    switched: record.switched === true,
+    ...(privateRoot ? { privateRoot } : {}),
+    ended: parseEnded(record.ended),
+  };
+}
+
+/** Parse `data_folder_search`. */
+export function parseDataFolderSearch(raw: unknown): DataFolderSearchResult {
+  const record = asRecord(raw, "data_folder_search");
+  return {
+    found: record.found === true,
+    switch: parseOneSwitch(record.switch),
+    ended: parseEnded(record.ended),
+  };
 }

@@ -262,6 +262,18 @@ pub(super) fn stop(dir: &Path) {
         return;
     };
     worker.cancel.store(true, Ordering::Relaxed);
+    end(worker);
+}
+
+/// Let go of the worker of a fill that ended without a folder: no pass
+/// runs, and the open it belongs to goes on to the next folder.
+pub(super) fn release(dir: &Path) {
+    if let Some(worker) = workers().remove(dir) {
+        end(worker);
+    }
+}
+
+fn end(worker: Arc<Worker>) {
     lock(&worker.schedule).stop = true;
     worker.wake.notify_all();
     if let Some(observer) = observer() {

@@ -5,6 +5,7 @@ import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import {
   useBackupService,
+  useFolderListService,
   useVaultLifecycleService,
   useVaultRootService,
   useVaultService,
@@ -39,6 +40,7 @@ export function VaultInfoModal({
   const backupService = useBackupService();
   const lifecycleService = useVaultLifecycleService();
   const vaultRootService = useVaultRootService();
+  const folderListService = useFolderListService();
   const { snapshot, loadError, loadFailure, retryLoad } = useVaultInfoData({
     vault,
     open,
@@ -48,8 +50,7 @@ export function VaultInfoModal({
     backupService,
     lifecycleService,
     vaultRootService,
-    vaultRootMode: settings.app.vault_root_mode,
-    workspace: settings.workspace,
+    folderListService,
     fallbackVaultRootBase: "",
   });
 

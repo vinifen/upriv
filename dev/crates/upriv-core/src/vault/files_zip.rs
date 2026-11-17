@@ -92,7 +92,7 @@ pub(crate) enum PlannedZipEntry {
     Settings {
         index: usize,
     },
-    /// `.upriv-config/workspace.json`.
+    /// `.upriv-config/.upriv-workspace.json`.
     Workspace {
         index: usize,
     },
@@ -651,7 +651,12 @@ mod tests {
             &[
                 meta(0, "Notes-plain-text/.upriv-config/", true, 0),
                 meta(1, "Notes-plain-text/.upriv-config/config.toml", false, 5),
-                meta(2, "Notes-plain-text/.upriv-config/workspace.json", false, 5),
+                meta(
+                    2,
+                    "Notes-plain-text/.upriv-config/.upriv-workspace.json",
+                    false,
+                    5,
+                ),
                 meta(3, "Notes-plain-text/.upriv-config/README.md", false, 5),
                 meta(4, "Notes-plain-text/.upriv-config/unknown.txt", false, 5),
                 // A vault never holds the name, so inside the vault folder it is skipped.

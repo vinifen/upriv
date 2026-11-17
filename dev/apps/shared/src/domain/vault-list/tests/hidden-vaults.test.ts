@@ -10,7 +10,6 @@
  */
 import { describe, expect, it } from "vitest";
 import { createDefaultAppSettings } from "../../app-settings";
-import { appWorkspace } from "../../workspace";
 import { createEmptyCreateVaultDraft, buildCreateVaultResult } from "../../vault-create";
 import { createVaultDraftFixture } from "../../vault-create/tests/fixtures";
 import { applyVaultListHierarchySort, filterVaultListRowsBySearch } from "../../vault-groups";
@@ -125,16 +124,13 @@ describe("hidden vaults", () => {
     const sections = buildSystemInfoSections(
       {
         app: { version: "0.1.0-beta", distribution: "dev", versionOffline: true },
-        root: { status: "found", rootPath: "/data", source: "default_root" },
-        rootMode: "default_root",
+        device: { id: null, system: "linux" },
+        root: { status: "found", rootPath: "/data", source: "default" },
+        dataFolders: { groups: {}, defaultFolder: "/data", explicit: null },
         inventory: { vaultsTotal: 1, vaultsOpen: 0, groupsTotal: 0 },
         ui: settings.ui,
         logging: settings.logging,
-        workspace: {
-          ...appWorkspace(),
-          linux: { place: "custom", path: "/data/workspace" },
-        },
-        workspaceSystem: "linux",
+        unlockedFolders: settings.unlocked_folders,
         backups: settings.backups,
         lastOpenedVault: "",
         paths: {

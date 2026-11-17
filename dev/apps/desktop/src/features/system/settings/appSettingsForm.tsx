@@ -1,19 +1,21 @@
-import { Fragment, useId } from "react";
-import { PathField } from "@/components/PathField";
-import { Button, Select, SwitchRow } from "@/components/ui";
+import { useId } from "react";
+import { Select, SwitchRow } from "@/components/ui";
+import { FolderList } from "@/components/folder-list";
 import {
-  BackupFolderChoices,
   DisplayNameFieldError,
   PolicyRadioOption,
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
+  UnlockedFolderDriverNotice,
+  usePickFolder,
+  useRowStatuses,
+  useUnlockedFolderDriver,
 } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { useVaultRootService } from "@/platform/services";
 import {
-  BACKUP_FOLDER_SYSTEMS,
-  backupFolderSystem,
+  APP_BACKUP_LIST,
+  APP_UNLOCKED_LIST,
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
@@ -21,27 +23,19 @@ import {
   LOG_LEVEL_PRESETS,
   SUPPORTED_LOCALES,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
+  appUnlockedFixedFolders,
+  besideFolder,
+  encryptedFolderUnchosen,
   liveDisplayNameError,
+  isPhoneSystem,
   logFileCountForKeepLast,
-  workspaceSystemsCurrentFirst,
-  appWorkspaceChoice,
-  appWorkspacePlace,
-  validateWorkspaceTable,
-  suggestedDefaultWorkspacePath,
-  currentWorkspaceSystem,
-  workspaceSystemHasShortcut,
-  workspacePathIssueI18nKey,
   type AppSettingsConfig,
+  type HereDevice,
   type UiTheme,
   type VaultGroup,
   type VaultListItem,
 } from "@upriv/shared";
 import { GroupedVaultPicker } from "@/features/vaults/list/modals/GroupedVaultPicker";
-import {
-  FileManagerDriverNotice,
-  useFileManagerMountHost,
-} from "@/features/system/settings/fileManagerMountHost";
-import { useErrorToast } from "@/hooks/useErrorToast";
 
 interface SectionPatchProps<S extends keyof AppSettingsConfig> {
   config: AppSettingsConfig[S];
@@ -516,262 +510,127 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
 }
 
 interface AppSettingsBackupsSectionProps extends SectionPatchProps<"backups"> {
-  /** Rows as saved: a folder already saved that fails never holds Save. */
+  /** As loaded: a row loaded as it is keeps its path unchecked. */
   saved: AppSettingsConfig["backups"];
-  vaultRootPath?: string | null;
-  onBlockingChange?: (blocking: boolean) => void;
+  here: HereDevice | null;
 }
 
-/** Where backups go by default. Each vault follows this unless it sets its own. */
+/** Where backups go on this device for every vault that follows the app's list. */
 export function AppSettingsBackupsSection({
   config,
   onChange,
   saved,
-  vaultRootPath = null,
-  onBlockingChange,
+  here,
 }: AppSettingsBackupsSectionProps) {
   const { t } = useTranslation();
-  const current = backupFolderSystem(currentWorkspaceSystem());
-  const dataFolderLabel = t("modal.app_settings.field.backups.data_folder");
-
+  const { renderStatus } = useRowStatuses("backup", config.devices, here, null);
+  const pickFolder = usePickFolder();
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
         {t("modal.app_settings.section.backups_intro")}
       </p>
-      {BACKUP_FOLDER_SYSTEMS.filter((system) => system === current).map((system) => (
-        <SettingsField
-          key={system}
-          label={t(`modal.app_settings.field.workspace.system.${system}`)}
-        >
-          <BackupFolderChoices
-            groupLabel={t(`modal.app_settings.field.workspace.system.${system}`)}
-            active
-            place={config[system].place}
-            path={config[system].path}
-            dataFolderTitle={dataFolderLabel}
-            dataFolderDescription={t("modal.app_settings.field.backups.data_folder_desc")}
-            customTitle={t("modal.app_settings.field.backups.custom")}
-            customDescription={t("modal.app_settings.field.backups.custom_desc")}
-            vaultId={null}
-            vaultRootPath={vaultRootPath}
-            savedPlace={saved[system].place}
-            savedPath={saved[system].path}
-            onChange={(place, path) =>
-              onChange({ [system]: { place: place === "custom" ? "custom" : "data_folder", path } })
-            }
-            onBlockingChange={onBlockingChange}
-          />
-        </SettingsField>
-      ))}
-      {BACKUP_FOLDER_SYSTEMS.filter((system) => system !== current).map((system) => (
-        <SettingsField
-          key={system}
-          label={t(`modal.app_settings.field.workspace.system.${system}`)}
-          hint={t("modal.app_settings.field.workspace.other_system")}
-          disabled
-        >
-          <PathField
-            value={config[system].place === "custom" ? config[system].path : ""}
-            disabled
-            placeholder={dataFolderLabel}
-          />
-        </SettingsField>
-      ))}
+      <FolderList
+        label={t("modal.app_settings.section.backups")}
+        policy={APP_BACKUP_LIST}
+        groups={config.devices}
+        saved={saved.devices}
+        here={here}
+        fixed={[
+          {
+            choice: "data_folder",
+            title: t("folder_list.choice.data_folder"),
+            description: t("modal.settings.field.backup.folder_data_desc"),
+          },
+        ]}
+        renderStatus={renderStatus}
+        pickFolder={pickFolder}
+        onChange={(devices) => onChange({ devices })}
+      />
     </SettingsFormGrid>
   );
 }
 
-interface AppSettingsWorkspaceSectionProps extends SectionPatchProps<"workspace"> {
-  /** Resolved vault-root path for reserved-path checks; null when unknown. */
-  vaultRootPath?: string | null;
-  /** When true, Clear is disabled (e.g. a vault session is open). */
-  clearDisabled?: boolean;
+interface AppSettingsUnlockedFoldersSectionProps extends SectionPatchProps<"unlocked_folders"> {
+  /** As loaded: a row loaded as it is keeps its path unchecked. */
+  saved: AppSettingsConfig["unlocked_folders"];
+  here: HereDevice | null;
+  /** The data folder in use: Beside the data folder is in it. */
+  vaultRootPath: string | null;
+  /** Why this device's group cannot change now (a vault is open); `null` when it can. */
+  lockedHint?: string | null;
 }
 
-export function AppSettingsWorkspaceSection({
+/**
+ * Where open vaults' files appear on this device for every vault that follows
+ * the app's list, and whether encrypted vaults get a folder at all.
+ */
+export function AppSettingsUnlockedFoldersSection({
   config,
   onChange,
-  vaultRootPath = null,
-  clearDisabled = false,
-}: AppSettingsWorkspaceSectionProps) {
+  saved,
+  here,
+  vaultRootPath,
+  lockedHint = null,
+}: AppSettingsUnlockedFoldersSectionProps) {
   const { t } = useTranslation();
-  const { showError } = useErrorToast();
-  const pathId = useId();
-  const placeGroup = useId();
-  const vaultRootService = useVaultRootService();
-  const current = currentWorkspaceSystem();
-  const currentPlace = appWorkspacePlace(config[current]);
-  const showShortcut = workspaceSystemHasShortcut(current);
-  const pathIssue = validateWorkspaceTable(config, vaultRootPath);
-  const defaultWorkspacePath = suggestedDefaultWorkspacePath(vaultRootPath);
-  const driver = useFileManagerMountHost();
-
+  const driver = useUnlockedFolderDriver();
+  const { renderStatus } = useRowStatuses("unlocked", config.devices, here, null);
+  const pickFolder = usePickFolder();
+  const phone = here ? isPhoneSystem(here.system) : false;
+  const beside = vaultRootPath && here ? besideFolder(here.system, vaultRootPath) : null;
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("modal.app_settings.section.workspace_intro")}
+        {t("modal.app_settings.section.unlocked_folders_intro")}
       </p>
-      {clearDisabled ? (
-        <p className="text-xs text-on-surface-variant">
-          {t("modal.app_settings.action.clear_workspace_path_blocked_open")}
-        </p>
-      ) : null}
-      {workspaceSystemsCurrentFirst().map((system) => {
-        const active = system === current && !clearDisabled;
-        const entry = config[system];
-        const place = appWorkspaceChoice(entry);
-        const customMissing = place === "custom" && !entry.path.trim();
-        return (
-          <Fragment key={system}>
-            <SettingsField
-              label={t(`modal.app_settings.field.workspace.system.${system}`)}
-              hint={
-                system === current
-                  ? t(
-                      showShortcut
-                        ? "modal.app_settings.field.workspace.path_help"
-                        : "modal.app_settings.field.workspace.phone_help",
-                    )
-                  : t("modal.app_settings.field.workspace.other_system")
-              }
-              htmlFor={system === current ? pathId : undefined}
-            >
-              <div className={active ? "flex flex-col gap-2" : "flex flex-col gap-2 opacity-60"}>
-                {system === current ? (
-                  <div
-                    role="radiogroup"
-                    aria-label={t(`modal.app_settings.field.workspace.system.${system}`)}
-                    className="grid gap-2"
-                  >
-                    <PolicyRadioOption
-                      groupName={placeGroup}
-                      value="unset"
-                      checked={place === "unset"}
-                      title={t("modal.app_settings.field.workspace.unset")}
-                      description={t("modal.app_settings.field.workspace.unset_desc")}
-                      disabled={!active}
-                      onSelect={() => {
-                        if (!active) return;
-                        onChange({
-                          [system]: { ...entry, place: "unset", path: "" },
-                        });
-                      }}
-                    />
-                    <PolicyRadioOption
-                      groupName={placeGroup}
-                      value="beside"
-                      checked={place === "beside"}
-                      title={t("modal.app_settings.field.workspace.default")}
-                      description={t("modal.app_settings.field.workspace.default_desc")}
-                      disabled={!active}
-                      onSelect={() => {
-                        if (!active) return;
-                        onChange({ [system]: { ...entry, place: "beside", path: "" } });
-                      }}
-                      footer={<PathField value={defaultWorkspacePath} readOnly />}
-                    />
-                    <PolicyRadioOption
-                      groupName={placeGroup}
-                      value="custom"
-                      checked={place === "custom"}
-                      attention={customMissing}
-                      title={t("modal.app_settings.field.workspace.custom")}
-                      description={t("modal.app_settings.field.workspace.custom_desc")}
-                      disabled={!active}
-                      onSelect={() => {
-                        if (!active || place === "custom") return;
-                        // The folder is the step left: Save waits for it (`empty`).
-                        onChange({ [system]: { ...entry, place: "custom", path: "" } });
-                      }}
-                      footer={
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                          <PathField
-                            id={pathId}
-                            className="sm:flex-1"
-                            value={entry.path}
-                            disabled={!active || place !== "custom"}
-                            placeholder={t("modal.folder_field.placeholder")}
-                            onChange={(path) => {
-                              if (!active) return;
-                              onChange({ [system]: { ...entry, place: "custom", path } });
-                            }}
-                          />
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="md"
-                            className="w-full shrink-0 sm:w-auto"
-                            disabled={!active}
-                            onClick={() => {
-                              if (!active) return;
-                              void (async () => {
-                                try {
-                                  const picked = await vaultRootService.pickFolder(
-                                    entry.path.trim() || null,
-                                    t("modal.app_settings.action.pick_workspace_folder"),
-                                  );
-                                  if (!picked?.trim()) return;
-                                  onChange({
-                                    [system]: { ...entry, place: "custom", path: picked.trim() },
-                                  });
-                                } catch (error) {
-                                  showError(error, "error.unexpected");
-                                }
-                              })();
-                            }}
-                          >
-                            {t("modal.app_settings.action.pick_workspace_folder")}
-                          </Button>
-                        </div>
-                      }
-                    />
-                  </div>
-                ) : (
-                  <PathField
-                    value={
-                      appWorkspacePlace(entry) === "beside"
-                        ? t("modal.app_settings.field.workspace.default")
-                        : entry.path
-                    }
-                    disabled
-                    placeholder={t("modal.app_settings.field.workspace.unset")}
-                  />
-                )}
-              </div>
-            </SettingsField>
-            {system === current && showShortcut ? (
-              <>
-                <SwitchRow
-                  label={t("modal.app_settings.field.workspace.mount")}
-                  hint={t("modal.app_settings.field.workspace.mount_help")}
-                  checked={config.file_manager_folder}
-                  disabled={
-                    clearDisabled || currentPlace === "unset" || driver.busy || !driver.known
-                  }
-                  onChange={(file_manager_folder) => {
-                    void (async () => {
-                      if (file_manager_folder && !(await driver.ensureInstalled())) return;
-                      onChange({ file_manager_folder });
-                    })();
-                  }}
-                />
-                <FileManagerDriverNotice
-                  kind={driver.kind}
-                  missing={driver.missing}
-                  busy={driver.busy}
-                  onInstall={driver.ensureInstalled}
-                />
-              </>
-            ) : null}
-          </Fragment>
-        );
-      })}
-      {pathIssue ? (
-        <p className="text-xs text-on-error-container" role="alert">
-          {t(workspacePathIssueI18nKey(pathIssue))}
-        </p>
-      ) : null}
+      <SwitchRow
+        label={t("modal.app_settings.field.encrypted_vaults")}
+        hint={t(
+          phone
+            ? "modal.settings.field.unlocked_folder.phone"
+            : "modal.app_settings.field.encrypted_vaults_help",
+        )}
+        checked={config.encrypted_vaults}
+        disabled={phone || !driver.known || driver.busy}
+        onChange={(encrypted_vaults) => {
+          void (async () => {
+            if (encrypted_vaults && !(await driver.ensureInstalled())) return;
+            onChange({ encrypted_vaults });
+          })();
+        }}
+      />
+      <UnlockedFolderDriverNotice
+        kind={driver.kind}
+        missing={config.encrypted_vaults && driver.missing}
+        busy={driver.busy}
+        onInstall={driver.ensureInstalled}
+      />
+      <FolderList
+        label={t("modal.app_settings.section.unlocked_folders")}
+        policy={APP_UNLOCKED_LIST}
+        groups={config.devices}
+        saved={saved.devices}
+        here={here}
+        lockedHint={lockedHint}
+        selectionMissing={
+          encryptedFolderUnchosen(config, null, here)
+            ? t("modal.app_settings.field.unlocked_folders.unchosen")
+            : null
+        }
+        fixed={[
+          {
+            choice: "beside",
+            title: t("folder_list.choice.beside"),
+            description: t("modal.app_settings.field.unlocked_folders.beside_desc"),
+            folder: beside,
+          },
+        ]}
+        fixedFolders={here ? appUnlockedFixedFolders(here.system, vaultRootPath) : []}
+        renderStatus={renderStatus}
+        pickFolder={pickFolder}
+        onChange={(devices) => onChange({ devices })}
+      />
     </SettingsFormGrid>
   );
 }

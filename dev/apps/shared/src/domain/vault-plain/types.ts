@@ -1,18 +1,39 @@
+import type { DeviceRef } from "../device";
+import type { FolderSwitch } from "../folder-lists";
+
 /** Wire shapes for an open `upriv_plain` folder. Core is the source of these fields. */
 
 export type PlainFolderClass = "local" | "removable" | "network" | "cloud";
 
-export type PlainPlace = "data_folder" | "app" | "vault";
-
-export interface PendingPlainConfirm {
-  path: string;
-  class: PlainFolderClass;
-}
-
+/**
+ * `vault_plain_destination`: the folder an unlock would fill after walking
+ * the vault's chain, and the switches that walk would make. Nothing is saved.
+ */
 export interface PlainDestination {
   path: string;
-  place: PlainPlace;
   class: PlainFolderClass;
+  switches: FolderSwitch[];
+}
+
+/** What this device can tell about a recorded plain-text folder. */
+export type PlainRecordState =
+  /** The folder is there with this vault's marker: a leftover to remove. */
+  | "leftover"
+  /** Proven gone: the record goes. */
+  | "gone"
+  /** Nothing proves where the folder is: its drive is away, or another drive took its place. */
+  | "away"
+  /** Another device wrote it, and its folder is not reachable from here. */
+  | "elsewhere";
+
+/** A plain-text folder on record, as the vault row shows it. */
+export interface PlainRecord {
+  /** The device that wrote it. */
+  device: DeviceRef;
+  path: string;
+  /** Names the record for `plain_record_forget`. */
+  token: string;
+  state: PlainRecordState;
 }
 
 /** A leftover folder recovery can reach on this computer. */
@@ -55,6 +76,3 @@ export interface PlainRecoveryOffers {
 }
 
 export type PlainRecoveryAction = { kind: "resume_store" } | { kind: "remove_folder" };
-
-/** Unlock was dismissed while core waited for the folder confirm. Not a failure. */
-export const PLAIN_OPEN_CANCELLED = "plain_open_cancelled";

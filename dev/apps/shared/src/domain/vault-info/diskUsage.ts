@@ -4,6 +4,8 @@ export interface VaultDiskUsage {
   storeBytes: number;
   /** Set aside in `held/`: data no file of the vault names. */
   heldBytes: number;
+  /** About what the vault's files hold, as core last recorded it; `null` until it did. */
+  filesBytes: number | null;
 }
 
 function isByteCount(value: unknown): value is number {
@@ -13,7 +15,7 @@ function isByteCount(value: unknown): value is number {
 /** A `vault_disk_usage` answer; null when it is not one. */
 export function parseVaultDiskUsage(raw: unknown): VaultDiskUsage | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const { storeBytes, heldBytes } = raw as Record<string, unknown>;
+  const { storeBytes, heldBytes, filesBytes } = raw as Record<string, unknown>;
   if (!isByteCount(storeBytes) || !isByteCount(heldBytes)) return null;
-  return { storeBytes, heldBytes };
+  return { storeBytes, heldBytes, filesBytes: isByteCount(filesBytes) ? filesBytes : null };
 }

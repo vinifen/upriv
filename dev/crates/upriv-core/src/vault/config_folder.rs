@@ -3,11 +3,11 @@
 //! vault's own files and nothing else (`super::package`).
 //!
 //! An export writes it only when a toggle asks for what it carries: `config.toml`
-//! (the same bytes a store zip carries) and `workspace.json` (the file-manager
-//! layout), with a `README.md` that explains the folder. Importing works with
-//! any of these missing. The settings reach the new vault through the create
-//! wizard, the layout goes to `.upriv-workspace.json`, and the folder itself is
-//! never stored.
+//! (the same bytes a store zip carries) and `.upriv-workspace.json` (the file
+//! manager workspace, under the name it has in the vault), with a `README.md`
+//! that explains the folder. Importing works with any of these missing. The
+//! settings reach the new vault through the create wizard, the workspace goes
+//! back to `.upriv-workspace.json`, and the folder itself is never stored.
 
 use std::io::Read;
 use std::path::Path;
@@ -30,7 +30,6 @@ use super::seven_zip_pack::LogicalSource;
 use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 const SETTINGS_FILE: &str = "config.toml";
-const WORKSPACE_FILE: &str = "workspace.json";
 const README_FILE: &str = "README.md";
 const README_TEXT: &str = include_str!("CONFIG-FOLDER-README.md");
 
@@ -83,7 +82,7 @@ pub(crate) fn config_folder_files(
         );
         match read.map(Zeroizing::new) {
             Ok(layout) if !layout.is_empty() => files.push(ConfigFile {
-                name: WORKSPACE_FILE,
+                name: INTERNAL_WORKSPACE_FILE,
                 bytes: layout,
             }),
             // A layout that cannot be read stays out: it is not vault data.
@@ -113,7 +112,7 @@ pub(crate) enum ConfigMember {
 pub(crate) fn config_member(name: &str) -> ConfigMember {
     match name {
         SETTINGS_FILE => ConfigMember::Settings,
-        WORKSPACE_FILE => ConfigMember::Workspace,
+        INTERNAL_WORKSPACE_FILE => ConfigMember::Workspace,
         _ => ConfigMember::Other,
     }
 }
@@ -199,7 +198,11 @@ mod tests {
     #[test]
     fn only_the_two_files_at_its_top_are_read() {
         assert_eq!(config_member("config.toml"), ConfigMember::Settings);
-        assert_eq!(config_member("workspace.json"), ConfigMember::Workspace);
+        assert_eq!(
+            config_member(".upriv-workspace.json"),
+            ConfigMember::Workspace
+        );
+        assert_eq!(config_member("workspace.json"), ConfigMember::Other);
         assert_eq!(config_member("README.md"), ConfigMember::Other);
         assert_eq!(config_member("extra/config.toml"), ConfigMember::Other);
     }

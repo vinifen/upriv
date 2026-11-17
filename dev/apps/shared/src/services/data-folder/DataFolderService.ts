@@ -1,4 +1,4 @@
-import type { VaultPathWriteResult } from "../backup/createLiveBackupService";
+import type { VaultPathWriteResult } from "../backup/pathWriteResult";
 
 /** The whole data folder as one zip: `<name>.zip`, unzipping to `<name>/.upriv/`. */
 export interface DataFolderService {

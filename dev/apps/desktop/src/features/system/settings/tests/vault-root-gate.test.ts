@@ -3,128 +3,152 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  RpcError,
+  VAULT_ROOT_ERROR_CODES,
   createDefaultAppSettings,
-  type AppSettingsConfig,
+  type FolderSwitch,
   type VaultRootResolveResult,
 } from "@upriv/shared";
+import type { SetupScreen } from "../VaultRootSetupModal";
 import { VaultRootGate } from "../VaultRootGate";
 
-let snapshot: AppSettingsConfig = createDefaultAppSettings();
-const rendered = createDefaultAppSettings();
-const resolve = vi.fn<(options: { vaultRootMode: string }) => Promise<VaultRootResolveResult>>();
-const defaultRootStatus = vi.fn<() => Promise<{ status: string; defaultRootAnchor: string }>>();
+const resolve = vi.fn<() => Promise<VaultRootResolveResult>>();
 let vaultRootEpoch = 0;
 
-vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock("@/i18n", () => ({
+  useTranslation: () => ({
+    t: (key: string, params?: Record<string, string | number>) =>
+      params?.names ? `${key} ${params.names}` : key,
+  }),
+}));
 
 vi.mock("../AppSettingsContext", () => ({
   useAppSettingsContext: () => ({
-    settings: rendered,
+    settings: createDefaultAppSettings(),
     settingsReady: true,
     settingsLoadFailed: false,
     get vaultRootEpoch() {
       return vaultRootEpoch;
     },
     reloadSettings: async () => {},
-    getSettingsSnapshot: () => snapshot,
   }),
 }));
 
 vi.mock("@/platform/services", () => ({
-  useVaultRootService: () => ({
-    resolve,
-    defaultRootStatus,
-    readAlias: async () => null,
-    inspectAtPath: async (path: string) => ({ status: "missing", path }),
-  }),
+  useVaultRootService: () => ({ resolve }),
 }));
 
+/**
+ * Setup as a button that says which screen it shows; a click lands a data
+ * folder with `change`, naming the vaults the resolve said ended.
+ */
+let change: FolderSwitch | null = null;
 vi.mock("../VaultRootSetupModal", () => ({
-  VaultRootSetupModal: (props: { open: boolean; onConfigured: () => void }) =>
-    props.open ? createElement("button", { onClick: props.onConfigured }, "configured") : null,
+  VaultRootSetupModal: (props: {
+    open: boolean;
+    screen: SetupScreen | null;
+    ended: readonly string[];
+    onConfigured: (change: FolderSwitch | null, ended: readonly string[]) => void;
+  }) =>
+    props.open && props.screen
+      ? createElement(
+          "button",
+          { onClick: () => props.onConfigured(change, props.ended) },
+          props.screen.kind,
+        )
+      : null,
 }));
-vi.mock("../VaultRootRepairModal", () => ({ VaultRootRepairModal: () => null }));
-vi.mock("../VaultRootAliasRecoveryModal", () => ({ VaultRootAliasRecoveryModal: () => null }));
 
-const needsSetup: VaultRootResolveResult = {
+const firstRun: VaultRootResolveResult = {
   status: "needs_setup",
   defaultRootAnchor: "/app",
-  aliasPath: "/app/.upriv-data-folder",
   distribution: "dev",
+  ended: [],
 };
+
+const usbFailed: VaultRootResolveResult = {
+  status: "selected_failed",
+  choice: { kind: "row", number: 2, name: "USB" },
+  reason: "missing",
+  ended: [],
+};
+
+const found: VaultRootResolveResult = { status: "found", rootPath: "/home/Music", source: "row" };
 
 afterEach(() => {
   cleanup();
   resolve.mockReset();
-  defaultRootStatus.mockReset();
-  snapshot = createDefaultAppSettings();
   vaultRootEpoch = 0;
+  change = null;
 });
 
 describe("VaultRootGate", () => {
-  it("resolves a custom folder from Setup with the settings it just loaded", async () => {
-    resolve.mockResolvedValue(needsSetup);
-    defaultRootStatus.mockResolvedValue({ status: "missing", defaultRootAnchor: "/app" });
+  it("shows the first run, and resolves again once Setup applies", async () => {
+    resolve.mockResolvedValue(firstRun);
     render(createElement(VaultRootGate, null, createElement("main")));
-    const configured = await screen.findByText("configured");
-    expect(resolve).toHaveBeenLastCalledWith(
-      expect.objectContaining({ vaultRootMode: "default_root" }),
-    );
+    const setup = await screen.findByText("first_run");
 
-    // Setup reloaded the new folder's settings into the context; the Gate has
-    // not re-rendered with them yet when Setup calls back.
-    snapshot = {
-      ...snapshot,
-      app: { ...snapshot.app, vault_root_mode: "custom_root", upriv_root_path: "/home/Music" },
-    };
-    resolve.mockResolvedValue({ status: "found", rootPath: "/home/Music", source: "custom_root" });
+    resolve.mockResolvedValue(found);
     const before = resolve.mock.calls.length;
-    await act(async () => configured.click());
-
-    const after = resolve.mock.calls.slice(before).map(([options]) => options.vaultRootMode);
-    expect(after).not.toHaveLength(0);
-    expect(after.every((mode) => mode === "custom_root")).toBe(true);
-    expect(screen.queryByText("configured")).toBeNull();
+    await act(async () => setup.click());
+    expect(resolve.mock.calls.length).toBeGreaterThan(before);
+    expect(screen.queryByText("first_run")).toBeNull();
   });
 
-  it("re-resolves and presents Setup modal when vaultRootEpoch bumps after .upriv is deleted", async () => {
-    resolve.mockResolvedValue({ status: "found", rootPath: "/home/Music", source: "custom_root" });
-    snapshot = {
-      ...snapshot,
-      app: { ...snapshot.app, vault_root_mode: "custom_root", upriv_root_path: "/home/Music" },
-    };
+  it("shows the list with the search when the selected choice did not answer", async () => {
+    resolve.mockResolvedValue(usbFailed);
+    render(createElement(VaultRootGate, null, createElement("main")));
+    expect(await screen.findByText("selected_failed")).toBeDefined();
+  });
 
+  it("toasts the switch a search made", async () => {
+    resolve.mockResolvedValue(usbFailed);
+    render(createElement(VaultRootGate, null, createElement("main")));
+    const setup = await screen.findByText("selected_failed");
+    change = {
+      list: "data_folder",
+      level: "app",
+      from: { kind: "row", number: 2, name: "USB" },
+      to: { kind: "fixed", choice: "default" },
+      reason: "missing",
+      saved: true,
+    };
+    resolve.mockResolvedValue(found);
+    await act(async () => setup.click());
+    expect(screen.getByText("folder_list.switch.data_folder_app")).toBeDefined();
+  });
+
+  it("repairs a broken data folder and reads an unreadable list on their own screens", async () => {
+    resolve.mockRejectedValue(new RpcError(VAULT_ROOT_ERROR_CODES.INCOMPLETE, "broken"));
+    render(createElement(VaultRootGate, null, createElement("main")));
+    expect(await screen.findByText("repair")).toBeDefined();
+    cleanup();
+
+    resolve.mockRejectedValue(new RpcError(VAULT_ROOT_ERROR_CODES.LIST_INVALID, "unreadable"));
+    render(createElement(VaultRootGate, null, createElement("main")));
+    expect(await screen.findByText("list_invalid")).toBeDefined();
+  });
+
+  it("searches again when the data folder goes while Upriv runs, and names the vaults it closed", async () => {
+    resolve.mockResolvedValue(found);
     const { rerender } = render(
       createElement(VaultRootGate, null, createElement("main", null, "app-content")),
     );
     expect(await screen.findByText("app-content")).toBeDefined();
 
-    // Now .upriv was deleted; an operation or refresh reported integrity failure, bumping vaultRootEpoch.
-    resolve.mockResolvedValue(needsSetup);
-    defaultRootStatus.mockResolvedValue({ status: "missing", defaultRootAnchor: "/app" });
+    // The selection stays: the next resolve finds it failing, as at launch,
+    // and names the vault that ended with it.
+    resolve.mockResolvedValue({ ...usbFailed, ended: ["Notes"] });
     vaultRootEpoch = 1;
-
     await act(async () => {
       rerender(createElement(VaultRootGate, null, createElement("main", null, "app-content")));
     });
-
-    const configured = await screen.findByText("configured");
-    expect(configured).toBeDefined();
+    const setup = await screen.findByText("selected_failed");
     const main = screen.getByText("app-content");
     expect(main.parentElement?.getAttribute("aria-hidden")).toBe("true");
-  });
 
-  it("presents Setup modal in custom_root mode even when default root is valid", async () => {
-    resolve.mockResolvedValue(needsSetup);
-    defaultRootStatus.mockResolvedValue({ status: "valid", defaultRootAnchor: "/app" });
-    snapshot = {
-      ...snapshot,
-      app: { ...snapshot.app, vault_root_mode: "custom_root", upriv_root_path: "/home/Music" },
-    };
-
-    render(createElement(VaultRootGate, null, createElement("main")));
-    const configured = await screen.findByText("configured");
-    expect(configured).toBeDefined();
-    expect(screen.queryByText("error.service_unavailable")).toBeNull();
+    resolve.mockResolvedValue(found);
+    await act(async () => setup.click());
+    expect(screen.getByText("modal.vault_root_setup.sessions_ended Notes")).toBeDefined();
   });
 });

@@ -28,13 +28,13 @@ pub(super) const PART_SUFFIX: &str = ".upriv-part";
 /// Refuse a folder inside a `.upriv`, including a picked Android tree whose
 /// address is, and a path that is not a folder.
 pub(super) fn check_export_folder(root: &VaultRoot, dest_dir: &Path) -> Result<()> {
-    // A picked Android folder is the logical export root. Its tree address
+    // A picked Android folder is reached at its tree's root. Its tree address
     // says whether it sits inside a `.upriv`.
-    let picked_tree = crate::host_fs::export_tree_uri(dest_dir);
+    let picked_tree = crate::host_fs::tree_uri_of(dest_dir);
     if crate::paths::path_is_under_reserved_upriv_tree(dest_dir)
         || picked_tree
             .is_some_and(|uri| crate::paths::path_is_under_reserved_upriv_tree(Path::new(&uri)))
-        || crate::paths::is_reserved_upriv_workspace_path(dest_dir, root.root())
+        || crate::paths::is_inside_upriv_of(dest_dir, root.root())
     {
         return Err(UprivError::ExportDestinationReserved(
             dest_dir.to_path_buf(),

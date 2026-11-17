@@ -42,13 +42,13 @@ describe("FileTreeContextMenu", () => {
   it("hides the OS folder actions when the vault has no mount", async () => {
     renderMenu(false);
     expect(await screen.findByText("Copy path")).toBeTruthy();
-    expect(screen.queryByText("Open in file manager")).toBeNull();
+    expect(screen.queryByText("Show in unlocked folder")).toBeNull();
     expect(screen.queryByText("Open in terminal")).toBeNull();
   });
 
   it("shows the OS folder actions when the mount is live", async () => {
     renderMenu(true);
-    expect(await screen.findByText("Open in file manager")).toBeTruthy();
+    expect(await screen.findByText("Show in unlocked folder")).toBeTruthy();
     expect(screen.getByText("Open in terminal")).toBeTruthy();
   });
 
@@ -72,7 +72,7 @@ describe("FileTreeContextMenu", () => {
     renderMenu(true, "/note.md", { folderPresence: new Map([["/note.md", "none"]]) });
     await screen.findByText("Send to folder");
     expect(screen.queryByText("Remove from folder")).toBeNull();
-    expect(screen.queryByText("Open in file manager")).toBeNull();
+    expect(screen.queryByText("Show in unlocked folder")).toBeNull();
     expect(screen.queryByText("Open in terminal")).toBeNull();
   });
 
@@ -82,7 +82,7 @@ describe("FileTreeContextMenu", () => {
       folderPresence: new Map([["/note.md", "all"]]),
       removeFromFolder,
     });
-    expect(await screen.findByText("Open in file manager")).toBeTruthy();
+    expect(await screen.findByText("Show in unlocked folder")).toBeTruthy();
     expect(screen.queryByText("Send to folder")).toBeNull();
     fireEvent.click(screen.getByText("Remove from folder"));
     expect(removeFromFolder).toHaveBeenCalledWith("/note.md");
@@ -92,13 +92,13 @@ describe("FileTreeContextMenu", () => {
     renderMenu(true, "/note.md", { folderPresence: new Map([["/note.md", "some"]]) });
     expect(await screen.findByText("Send to folder")).toBeTruthy();
     expect(screen.getByText("Remove from folder")).toBeTruthy();
-    expect(screen.getByText("Open in file manager")).toBeTruthy();
+    expect(screen.getByText("Show in unlocked folder")).toBeTruthy();
   });
 
-  it("keeps Open in file manager on the root of an empty folder", async () => {
+  it("keeps Show in unlocked folder on the root of an empty folder", async () => {
     renderMenu(true, "/", { folderPresence: new Map([["/", "none"]]) });
     expect(await screen.findByText("Send to folder")).toBeTruthy();
-    expect(screen.getByText("Open in file manager")).toBeTruthy();
+    expect(screen.getByText("Show in unlocked folder")).toBeTruthy();
   });
 
   it("offers Hide explorer only on the explorer root menu", async () => {

@@ -9,6 +9,7 @@ import {
   type VaultPathWriteResult,
 } from "@upriv/shared";
 import { useBackupExportJob, type BackupExportJobEvents } from "@upriv/shared/react";
+import { backupServiceStub } from "./backupStubs";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -24,15 +25,7 @@ const KEYS = ["20260101000000-notes.zip"];
 const WRITTEN: VaultPathWriteResult = { path: "/media/usb/20260101000000-notes.zip", size: 4096 };
 
 function serviceExporting(exportTo: BackupService["exportTo"]): BackupService {
-  return {
-    listBackups: async () => ({ backups: [], chosen: null }),
-    deleteBackups: async () => undefined,
-    promoteToSave: async () => undefined,
-    saveNow: async () => ({ backup: { stamp: "", createdAt: "" }, fallback: null }),
-    exportTo,
-    checkFolder: async () => "ok",
-    reuseFolder: async () => undefined,
-  };
+  return backupServiceStub({ exportTo });
 }
 
 function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {

@@ -750,6 +750,8 @@ internal open class UniffiVTableCallbackInterfaceSafFsCallback(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -776,15 +778,17 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_invoke(`method`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_upriv_ffi_fn_func_mount_saf_export_fs(`treeUri`: RustBuffer.ByValue,`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
     fun uniffi_upriv_ffi_fn_func_mount_saf_fs(`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_upriv_ffi_fn_func_mount_saf_tree_fs(`treeUri`: RustBuffer.ByValue,`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_upriv_ffi_fn_func_mounted_saf_trees(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_probe_saf_fs(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_upriv_ffi_fn_func_unmount_saf_export_fs(uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
     fun uniffi_upriv_ffi_fn_func_unmount_saf_fs(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_upriv_ffi_fn_func_unmount_saf_tree_fs(`treeUri`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun ffi_upriv_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -906,15 +910,17 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_upriv_ffi_checksum_func_invoke(
     ): Short
-    fun uniffi_upriv_ffi_checksum_func_mount_saf_export_fs(
-    ): Short
     fun uniffi_upriv_ffi_checksum_func_mount_saf_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_func_mount_saf_tree_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_func_mounted_saf_trees(
     ): Short
     fun uniffi_upriv_ffi_checksum_func_probe_saf_fs(
     ): Short
-    fun uniffi_upriv_ffi_checksum_func_unmount_saf_export_fs(
-    ): Short
     fun uniffi_upriv_ffi_checksum_func_unmount_saf_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_func_unmount_saf_tree_fs(
     ): Short
     fun uniffi_upriv_ffi_checksum_method_saffscallback_dispatch(
     ): Short
@@ -947,19 +953,22 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_upriv_ffi_checksum_func_invoke() != 41611.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_export_fs() != 38999.toShort()) {
+    if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_fs() != 24976.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_fs() != 24976.toShort()) {
+    if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_tree_fs() != 65535.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_func_mounted_saf_trees() != 48656.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_probe_saf_fs() != 28953.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_export_fs() != 45379.toShort()) {
+    if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_fs() != 28751.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_fs() != 28751.toShort()) {
+    if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_tree_fs() != 16994.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_method_saffscallback_dispatch() != 56001.toShort()) {
@@ -1204,6 +1213,34 @@ internal object uniffiCallbackInterfaceSafFsCallback {
  * @suppress
  */
 public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFsCallback>()
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
         /**
          * Product version string (from repo-root `VERSION`).
          */ fun `appVersion`(): kotlin.String {
@@ -1263,20 +1300,6 @@ public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFs
     
 
         /**
-         * Mount `/upriv-saf-export` onto the folder picked for Export data folder.
-         *
-         * `tree_uri` is that folder's `content://` tree. The export refuses it when
-         * it lies inside a `.upriv`. The data folder mount is left as it is.
-         */ fun `mountSafExportFs`(`treeUri`: kotlin.String, `callback`: SafFsCallback)
-        = 
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_mount_saf_export_fs(
-        FfiConverterString.lower(`treeUri`),FfiConverterTypeSafFsCallback.lower(`callback`),_status)
-}
-    
-    
-
-        /**
          * Mount `/upriv-saf-root` onto the storage-access tree `callback` addresses.
          */ fun `mountSafFs`(`callback`: SafFsCallback)
         = 
@@ -1285,6 +1308,32 @@ public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFs
         FfiConverterTypeSafFsCallback.lower(`callback`),_status)
 }
     
+    
+
+        /**
+         * Mount another storage-access tree the person picked (a row of a folder
+         * list, an export's folder) at its own root, and return that root. Only
+         * registers the bridge: no I/O. The data folder mount is left as it is.
+         */ fun `mountSafTreeFs`(`treeUri`: kotlin.String, `callback`: SafFsCallback): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_mount_saf_tree_fs(
+        FfiConverterString.lower(`treeUri`),FfiConverterTypeSafFsCallback.lower(`callback`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The trees mounted now, so the platform module can drop those nothing names.
+         */ fun `mountedSafTrees`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_mounted_saf_trees(
+        _status)
+}
+    )
+    }
     
 
         /**
@@ -1300,23 +1349,23 @@ public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFs
     
 
         /**
-         * Drop the export folder mount.
-         */ fun `unmountSafExportFs`()
-        = 
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_unmount_saf_export_fs(
-        _status)
-}
-    
-    
-
-        /**
          * Drop the mounted storage-access data folder.
          */ fun `unmountSafFs`()
         = 
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_unmount_saf_fs(
         _status)
+}
+    
+    
+
+        /**
+         * Drop the tree `tree_uri`. Later I/O under its root fails.
+         */ fun `unmountSafTreeFs`(`treeUri`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_unmount_saf_tree_fs(
+        FfiConverterString.lower(`treeUri`),_status)
 }
     
     

@@ -1,6 +1,12 @@
 import type { VaultListSortDirection, VaultListSortMode, VaultListViewMode } from "../vault-list";
-import { workspaceTablesEqual, type WorkspaceTable } from "../workspace";
-import type { BackupFolderTable } from "../backups/folders";
+import {
+  APP_BACKUP_LIST,
+  APP_UNLOCKED_LIST,
+  isEmptyListChanges,
+  listChanges,
+  type AppBackupFolders,
+  type AppUnlockedFolders,
+} from "../folder-lists";
 
 export type LocaleId = "en" | "pt-BR" | "es";
 export type UiTheme = "dark" | "neutral" | "light";
@@ -8,13 +14,10 @@ export const DEFAULT_UI_THEME: UiTheme = "dark";
 /** Same four values as `LOG_LEVEL_PRESETS` / Rust `LogLevel` filter. */
 export type LogLevel = "error" | "warn" | "info" | "debug";
 
-/** How the app locates the vault-root: `default_root` (distribution default) or `custom_root` (absolute path via `.upriv-data-folder`). */
-export type VaultRootMode = "default_root" | "custom_root";
-
 export const APP_SETTINGS_SECTIONS = [
   "language",
   "general",
-  "workspace",
+  "unlocked_folders",
   "backups",
   "vault_list",
   "groups",
@@ -113,40 +116,26 @@ export interface AppSettingsConfig {
   };
   app: {
     /**
-     * Wire/UI only — derived from app-home `.upriv-data-folder` (`status=active` → `"custom_root"`).
-     * Not persisted in `settings.toml`.
-     */
-    vault_root_mode: VaultRootMode;
-    /**
-     * Wire/UI only — absolute path from `.upriv-data-folder` when `vault_root_mode` is
-     * `"custom_root"`; empty string in `"default_root"` mode.
-     * Not persisted in `settings.toml`.
-     */
-    upriv_root_path: string;
-    /**
      * `[app].last_opened_vault` in `settings.toml` — last vault id opened in the UI.
      * Empty string when unset; always written on serialize.
      */
     last_opened_vault: string;
   };
-  /**
-   * Per-system workspace place (`[workspace.<os>]` in `settings.toml`).
-   * `place` starts `unset`. `file_manager_folder` is one flag for every system and starts off.
-   */
-  workspace: WorkspaceTable;
-  /** Where backups go by default on each desktop system (`[backups.<os>]`). */
-  backups: BackupFolderTable;
+  /** `[unlocked_folders]`: the encrypted vaults switch and the app's list, per device. */
+  unlocked_folders: AppUnlockedFolders;
+  /** `[backups]`: the app's backup folder list, per device. */
+  backups: AppBackupFolders;
 }
 
 export type AppSettingsPatch = {
   ui?: Partial<AppSettingsConfig["ui"]>;
   logging?: Partial<AppSettingsConfig["logging"]>;
   app?: Partial<AppSettingsConfig["app"]>;
-  workspace?: Partial<AppSettingsConfig["workspace"]>;
+  unlocked_folders?: Partial<AppSettingsConfig["unlocked_folders"]>;
   backups?: Partial<AppSettingsConfig["backups"]>;
 };
 
-/** True when saveable System Settings prefs match (`ui` + `logging` + `workspace` + `backups`; ignores wire `app`). */
+/** True when saveable System Settings prefs match (`ui`, `logging`, and the lists; ignores `app`). */
 export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): boolean {
   return (
     a.ui.locale === b.ui.locale &&
@@ -178,7 +167,10 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&
     a.logging.keep_last_entries === b.logging.keep_last_entries &&
-    workspaceTablesEqual(a.workspace, b.workspace) &&
-    JSON.stringify(a.backups) === JSON.stringify(b.backups)
+    a.unlocked_folders.encrypted_vaults === b.unlocked_folders.encrypted_vaults &&
+    isEmptyListChanges(
+      listChanges(a.unlocked_folders.devices, b.unlocked_folders.devices, null, APP_UNLOCKED_LIST),
+    ) &&
+    isEmptyListChanges(listChanges(a.backups.devices, b.backups.devices, null, APP_BACKUP_LIST))
   );
 }

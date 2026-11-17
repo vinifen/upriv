@@ -3,11 +3,35 @@ import type { InfoTranslate } from "../../info";
 import { formatIsoDate } from "../../format/datetime";
 import { vaultListItemFixture } from "../../vault-list/tests/fixtures";
 import { vaultSettingsFixture } from "../../vault-settings/tests/fixtures";
-import { vaultWorkspace } from "../../workspace";
+import type { VaultBackupEntry, VaultBackupSection } from "../../backups";
 import { buildVaultInfoSections } from "../build";
 import type { VaultInfoSnapshot } from "../types";
 
 const t: InfoTranslate = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key);
+
+function entry(fileName: string, createdAt: string, sizeBytes: number): VaultBackupEntry {
+  return {
+    key: `data/${fileName}`,
+    stamp: fileName.slice(0, 14),
+    fileName,
+    name: "",
+    createdAt,
+    sizeBytes,
+    saved: false,
+    path: `/data/.upriv/vaults/notes/backups/${fileName}`,
+  };
+}
+
+function dataFolder(entries: VaultBackupEntry[]): VaultBackupSection {
+  return {
+    folder: "data",
+    kind: "data_folder",
+    path: "/data/.upriv/vaults/notes/backups",
+    device: null,
+    status: "ok",
+    entries,
+  };
+}
 
 function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot {
   return {
@@ -21,33 +45,27 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
     kdfPreset: "256mib",
     groupName: "Work",
     groupHidden: false,
-    backups: [
-      {
-        stamp: "20260528120000",
-        fileName: "20260528120000-notes.zip",
-        createdAt: "2026-05-28T12:00:00.000Z",
-        sizeBytes: 10,
-      },
-      {
-        stamp: "20260529120000",
-        fileName: "20260529120000-notes.zip",
-        createdAt: "2026-05-29T09:00:00.000Z",
-        sizeBytes: 20,
-      },
+    backupSections: [
+      dataFolder([
+        entry("20260528120000-notes.zip", "2026-05-28T12:00:00.000Z", 10),
+        entry("20260529120000-notes.zip", "2026-05-29T09:00:00.000Z", 20),
+      ]),
     ],
-    chosenBackups: null,
     runtime: {
       openCount: 2,
       lastOpenedAt: "2026-05-29T09:00:00.000Z",
       sessionRamBytes: 1024,
       storeBytes: 2048,
       heldBytes: 0,
+      filesBytes: 1024,
       logicalFileCount: 4,
     },
     passwordInSession: true,
-    workspacePath: "/data/workspace/Notes",
-    workspacePathIsActive: true,
-    workspaceSystem: "linux",
+    unlockedFolder: {
+      choice: { kind: "row", number: 1, name: "SSD" },
+      path: "/mnt/ssd/upriv-unlocked/Notes",
+      mounted: true,
+    },
     storePath: "/data/.upriv/vaults/notes/store/",
     backupsPath: "/data/.upriv/vaults/notes/backups/",
     storeOpenPath: "/data/.upriv/vaults/notes/store",
@@ -72,6 +90,7 @@ describe("buildVaultInfoSections", () => {
       "status",
       "runtime",
       "storage",
+      "unlocked_folder",
       "crypto",
       "config",
       "backups",
@@ -85,30 +104,13 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "backup_skip_unchanged")).toBe("modal.info.value.yes");
     expect(field(sections, "backup_count")).toBe("2");
     expect(field(sections, "backup_latest")).toBe("20260529120000-notes.zip");
-    const unnamed = buildVaultInfoSections(
-      snapshot({
-        backups: [
-          { stamp: "20260529120000", createdAt: "2026-05-29T09:00:00.000Z", sizeBytes: 20 },
-        ],
-      }),
-      t,
-    );
-    expect(field(unnamed, "backup_latest")).toBe("20260529120000-notes.zip");
     const tied = buildVaultInfoSections(
       snapshot({
-        backups: [
-          {
-            stamp: "20260528120000",
-            fileName: "20260528120000-other.zip",
-            createdAt: "2026-05-28T12:00:00.000Z",
-            sizeBytes: 10,
-          },
-          {
-            stamp: "20260528120000",
-            fileName: "20260528120000-notes.zip",
-            createdAt: "2026-05-28T12:00:00.000Z",
-            sizeBytes: 10,
-          },
+        backupSections: [
+          dataFolder([
+            entry("20260528120000-other.zip", "2026-05-28T12:00:00.000Z", 10),
+            entry("20260528120000-notes.zip", "2026-05-28T12:00:00.000Z", 10),
+          ]),
         ],
       }),
       t,
@@ -128,27 +130,21 @@ describe("buildVaultInfoSections", () => {
     expect(storage.find((entry) => entry.id === "backups_path")?.openPath).toBe(
       "/data/.upriv/vaults/notes/backups",
     );
-    expect(storage.find((entry) => entry.id === "workspace_path")?.openPath).toBe(
-      "/data/workspace/Notes",
+  });
+
+  it("shows the vault's unlocked folder on this device", () => {
+    const sections = buildVaultInfoSections(snapshot(), t);
+    expect(field(sections, "unlocked_folder_choice")).toBe("SSD");
+    expect(field(sections, "unlocked_folder_path")).toBe("/mnt/ssd/upriv-unlocked/Notes");
+    expect(field(sections, "unlocked_folder_mounted")).toBe("modal.info.value.yes");
+    expect(field(sections, "unlocked_folder_encrypted")).toBe(
+      "modal.info.value.encrypted_switch.inherit",
     );
-    expect(storage.find((entry) => entry.id === "mount_workspace_path")?.openPath).toBeUndefined();
-    const customMount = buildVaultInfoSections(
-      snapshot({
-        settings: {
-          ...vaultSettingsFixture(),
-          mount: {
-            ...vaultWorkspace(),
-            custom_file_manager_folder: true,
-            linux: { place: "unset", path: "/mnt/vaults" },
-          },
-        },
-      }),
+    const plain = buildVaultInfoSections(
+      snapshot({ vault: vaultListItemFixture({ storageMode: "upriv_plain" }) }),
       t,
     );
-    const mount = customMount
-      .flatMap((section) => section.fields)
-      .find((entry) => entry.id === "mount_workspace_path");
-    expect(mount?.openPath).toBe("/mnt/vaults");
+    expect(field(plain, "unlocked_folder_mounted")).toBeUndefined();
   });
 
   it("keeps session and display_status on Closing together", () => {
@@ -216,8 +212,7 @@ describe("buildVaultInfoSections", () => {
         settings: null,
         kdfPreset: null,
         groupName: null,
-        backups: [],
-        workspacePathIsActive: false,
+        backupSections: [],
         vault: vaultListItemFixture({ session: null }),
       }),
       t,
@@ -237,6 +232,7 @@ describe("buildVaultInfoSections", () => {
           sessionRamBytes: null,
           storeBytes: null,
           heldBytes: null,
+          filesBytes: null,
           logicalFileCount: null,
         },
       }),
@@ -252,10 +248,16 @@ describe("buildVaultInfoSections", () => {
   it("shows loading for the backups and store size it is still reading", () => {
     const base = snapshot();
     const sections = buildVaultInfoSections(
-      { ...base, backups: null, runtime: { ...base.runtime, storeBytes: "measuring" } },
+      {
+        ...base,
+        backupSections: null,
+        runtime: { ...base.runtime, storeBytes: "measuring", filesBytes: "measuring" },
+      },
       t,
     );
     expect(field(sections, "store_size")).toBe("modal.info.loading");
+    expect(field(sections, "files_size")).toBe("modal.info.loading");
+    expect(field(sections, "backup_folder_in_use")).toBe("modal.info.loading");
     expect(field(sections, "backup_count")).toBe("modal.info.loading");
     expect(field(sections, "backup_latest")).toBe("modal.info.loading");
     expect(field(sections, "backup_total_size")).toBe("modal.info.loading");
@@ -271,17 +273,27 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "held_size")).toBe("2.0 KB");
   });
 
-  it("shows the chosen backup folder and what it can do, only when there is one", () => {
-    expect(field(buildVaultInfoSections(snapshot(), t), "backups_chosen_path")).toBeUndefined();
-    const sections = buildVaultInfoSections(
-      snapshot({ chosenBackups: { path: "/mnt/usb/upriv-notes-backups", status: "no_room" } }),
-      t,
+  it("names the backup folder in use and each folder that holds zips", () => {
+    expect(field(buildVaultInfoSections(snapshot(), t), "backup_folder_in_use")).toBe(
+      "folder_list.choice.data_folder",
     );
-    expect(field(sections, "backups_chosen_path")).toBe("/mnt/usb/upriv-notes-backups");
-    expect(field(sections, "backups_chosen_status")).toBe("modal.backup.folder.status.no_room");
+    const usb: VaultBackupSection = {
+      folder: "f1",
+      kind: "in_use",
+      path: "/mnt/usb/upriv-notes-backups",
+      device: { id: "3f9c2a7d4e1b8c6f0a2d4e6f8a1b3c5d", system: "linux" },
+      status: "ok",
+      entries: [entry("20260530120000-notes.zip", "2026-05-30T12:00:00.000Z", 5)],
+    };
+    const sections = buildVaultInfoSections(snapshot({ backupSections: [dataFolder([]), usb] }), t);
+    const named =
+      '/mnt/usb/upriv-notes-backups · device.name:{"system":"device.system.linux","tag":"3f9c2"}';
+    expect(field(sections, "backup_folder_in_use")).toBe(named);
+    expect(field(sections, "backup_folder_f1")).toBe(named);
+    expect(field(sections, "backup_folder_data")).toBeUndefined();
     const row = sections
       .flatMap((section) => section.fields)
-      .find((entry) => entry.id === "backups_chosen_path");
+      .find((one) => one.id === "backup_folder_f1");
     expect(row?.openPath).toBe("/mnt/usb/upriv-notes-backups");
   });
 });

@@ -8,15 +8,16 @@ import {
   type VaultRewrapJob,
   type VaultRewrapOutcome,
 } from "@upriv/shared/react";
-import { useVaultRootService, useVaultService } from "@/platform/services";
+import { hereDevice, useDeviceInfo } from "@upriv/shared/react";
+import { useDeviceService, useVaultService } from "@/platform/services";
 import {
   VaultChangeKdfFields,
   VaultChangePasswordFields,
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
   VaultSettingsDangerZoneSection,
-  VaultSettingsMountSection,
   VaultSettingsStorageSection,
+  VaultSettingsUnlockedFolderSection,
   VaultSettingsVaultSection,
   VaultSettingsGroupSection,
   VaultSettingsSection,
@@ -35,18 +36,22 @@ import type {
   VaultSettingsConfig,
   VaultSettingsListPatch,
   VaultSettingsSectionId,
-  WorkspaceTable,
   VaultPipelineListStatus,
   KdfUnlockPreset,
   VaultRewrapKind,
-  BackupFolderTable,
-  VaultBackupFolders,
+  AppSettingsConfig,
+  HereDevice,
 } from "@upriv/shared";
 import {
-  backupFolderLeftBehind,
-  backupFolderSystem,
-  currentWorkspaceSystem,
+  VAULT_BACKUP_LIST,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
+  VAULT_UNLOCKED_LIST,
+  isEmptyVaultListChanges,
+  encryptedFolderUnchosen,
+  listDraftBlocks,
+  storageModeIsPlaintext,
+  requireVaultConfigEditLockedI18nKey,
+  vaultListChanges,
   changeKdfFormCanSubmit,
   DEFAULT_KDF_UNLOCK_PRESET,
   changeKdfFormIsDirty,
@@ -73,7 +78,6 @@ import {
   vaultSettingsPreferenceSections,
   vaultSettingsToListPatch,
   vaultSettingsIdentityListPatch,
-  vaultRootPathForWorkspaceValidation,
   vaultConfigEditAllowed,
   vaultConfigEditHold,
   vaultDeleteHold,
@@ -163,7 +167,9 @@ export function VaultSettingsModal({
   );
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultService = useVaultService();
-  const vaultRootService = useVaultRootService();
+  const here = hereDevice(useDeviceInfo(useDeviceService()));
+  const hereIdRef = useRef(here?.id ?? null);
+  hereIdRef.current = here?.id ?? null;
   const vaultId = vault?.id ?? null;
   const activeArea = open ? area : null;
   const { config, loading, loadError, replaceConfig, invalidateLoad, retryLoad } = useVaultSettings(
@@ -191,11 +197,7 @@ export function VaultSettingsModal({
   /** Outlives closing the window: a save keeps running and its result still applies. */
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [loadTimedOut, setLoadTimedOut] = useState(false);
-  const [mountPathIssue, setMountPathIssue] = useState(false);
-  const [mountDriverAttention, setMountDriverAttention] = useState(false);
-  const [backupFolderBlocking, setBackupFolderBlocking] = useState(false);
   const [removeOutsideBackups, setRemoveOutsideBackups] = useState(false);
-  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   /** Invalidates a submit that ran past `OPERATION_LIMIT_MS`. */
   const sectionBusyGenRef = useRef(0);
   /** Sync lock — React `sectionBusy` paints too late for double-click. */
@@ -251,34 +253,8 @@ export function VaultSettingsModal({
   }, [open, vaultId, vault?.unlockPreset]);
 
   useEffect(() => {
-    if (!open) {
-      setResolvedRootPath(null);
-      setMountPathIssue(false);
-      setMountDriverAttention(false);
-      setBackupFolderBlocking(false);
-      setRemoveOutsideBackups(false);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const resolved = await vaultRootService.resolve({
-          vaultRootMode: appSettings.app.vault_root_mode,
-        });
-        if (cancelled) return;
-        if (resolved.status === "found") {
-          setResolvedRootPath(resolved.rootPath);
-        } else {
-          setResolvedRootPath(resolved.defaultRootAnchor);
-        }
-      } catch {
-        if (!cancelled) setResolvedRootPath(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, appSettings.app.vault_root_mode, vaultRootService]);
+    if (!open) setRemoveOutsideBackups(false);
+  }, [open]);
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
   const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
@@ -293,7 +269,8 @@ export function VaultSettingsModal({
   const storageModeLocked = !editAllowed("storage.mode");
   const plainFilesLocked = !editAllowed("storage.plain_files");
   const displayNameLocked = !editAllowed("vault.display_name");
-  const mountLocked = !editAllowed("mount.workspace_path");
+  /** This device's unlocked folder group and the encrypted switch — `vault_quiet`. */
+  const unlockedLocked = !editAllowed("unlocked_folder");
   /** password / KDF — `vault_closed`. */
   const rewrapBlocked = Boolean(
     vault && !vaultConfigEditAllowed("action.change_password", vault, pipelineListStatus),
@@ -558,18 +535,20 @@ export function VaultSettingsModal({
           return;
         }
         if (otherDirty) {
-          await vaultService.registerSettings(toSave.vault.id, toSave);
+          // This device's unlocked folder group keeps its rows while the vault is not quiet.
+          const lists = vaultListChanges(baseline, toSave, hereIdRef.current, {
+            unlockedHere: unlockedLocked,
+          });
+          const saved = await vaultService.registerSettings(toSave.vault.id, toSave, lists);
+          for (const folder of saved.keptFolders) {
+            notice(t("folder_list.toast.folder_kept", { path: folder }));
+          }
+          if (!isEmptyVaultListChanges(lists)) {
+            // Core applied the change to the lists as the file held them: read them back.
+            toSave = (await vaultService.getSettings(toSave.vault.id)) ?? toSave;
+          }
         }
         onVaultSettingsSaved?.(fromId, vaultSettingsToListPatch(toSave));
-        const backupSystem = backupFolderSystem(currentWorkspaceSystem());
-        if (backupSystem) {
-          const app = appSettings.backups[backupSystem];
-          const leftBehind = backupFolderLeftBehind(
-            { app, vault: baseline.backup[backupSystem] },
-            { app, vault: toSave.backup[backupSystem] },
-          );
-          if (leftBehind) notice(t("toast.backup_folder_changed"));
-        }
         if (generation !== sectionBusyGenRef.current) return;
         if (!showing()) {
           notice(t("toast.settings_saved_for", { name: toSave.vault.display_name }));
@@ -621,7 +600,7 @@ export function VaultSettingsModal({
       t,
       vaultService,
       flashSaved,
-      appSettings.backups,
+      unlockedLocked,
     ],
   );
 
@@ -821,7 +800,9 @@ export function VaultSettingsModal({
         if (section === "vault" && "display_name" in patch && displayNameLocked) {
           return current;
         }
-        if (section === "mount" && mountLocked) return current;
+        if (section === "unlocked_folder" && "encrypted" in patch && unlockedLocked) {
+          return current;
+        }
 
         return {
           ...current,
@@ -829,7 +810,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [storageModeLocked, plainFilesLocked, displayNameLocked, mountLocked],
+    [storageModeLocked, plainFilesLocked, displayNameLocked, unlockedLocked],
   );
 
   const resetActiveAreaDraft = useCallback(() => {
@@ -885,18 +866,33 @@ export function VaultSettingsModal({
     handleCloseModal();
   };
 
+  const hereId = here?.id ?? null;
+  /** The vault should get an unlocked folder on this device, and none is chosen. */
+  const unlockedUnchosen = (config: VaultSettingsConfig) =>
+    !storageModeIsPlaintext(config.storage.mode) &&
+    encryptedFolderUnchosen(appSettings.unlocked_folders, config.unlocked_folder, here);
+  /**
+   * A row of a list misses its path, or names one it may not, or this draft
+   * leaves the vault with no unlocked folder here. The app's own switch and
+   * list never hold a vault's save.
+   */
+  const listsBlocked = Boolean(
+    activeArea === "preferences" &&
+    draft &&
+    baseline &&
+    ((unlockedUnchosen(draft) && !unlockedUnchosen(baseline)) ||
+      listDraftBlocks(
+        baseline.unlocked_folder.devices,
+        draft.unlocked_folder.devices,
+        VAULT_UNLOCKED_LIST,
+        hereId,
+      ) ||
+      listDraftBlocks(baseline.backup.devices, draft.backup.devices, VAULT_BACKUP_LIST, hereId)),
+  );
+
   const handleSaveClick = () => {
     if (settingsSaveBlocked) return;
-    if (
-      !activeArea ||
-      !areaDirty ||
-      sectionBusy ||
-      mountPathIssue ||
-      mountDriverAttention ||
-      backupFolderBlocking
-    ) {
-      return;
-    }
+    if (!activeArea || !areaDirty || sectionBusy || listsBlocked) return;
 
     if (activeArea === "preferences" && draft) {
       const validation = validateDisplayName(draft.vault.display_name);
@@ -914,15 +910,7 @@ export function VaultSettingsModal({
     if (settingsSaveBlocked) return;
     if (!activeArea || sectionBusy) return;
     if (activeArea === "preferences") {
-      if (
-        !draft ||
-        !preferencesDirty ||
-        mountPathIssue ||
-        mountDriverAttention ||
-        backupFolderBlocking
-      ) {
-        return;
-      }
+      if (!draft || !preferencesDirty || listsBlocked) return;
       void persistPreferences(draft);
       return;
     }
@@ -1010,9 +998,7 @@ export function VaultSettingsModal({
     settingsSaveBlocked ||
     sectionBusy ||
     !areaDirty ||
-    mountPathIssue ||
-    mountDriverAttention ||
-    backupFolderBlocking ||
+    listsBlocked ||
     (activeArea === "preferences" && !vaultService.canPersistSettings) ||
     (activeArea === "password" && !passwordCanSubmit) ||
     (activeArea === "kdf" && !kdfCanSubmit);
@@ -1183,23 +1169,17 @@ export function VaultSettingsModal({
                         storageModeLocked,
                         plainFilesLocked,
                         displayNameLocked,
-                        mountLocked,
                         hiddenLocked,
                         editHold,
+                        unlockedLockedHint: unlockedLocked
+                          ? t(requireVaultConfigEditLockedI18nKey("unlocked_folder", editHold))
+                          : null,
                       },
-                      vaultRootPathForWorkspaceValidation(
-                        appSettings.app.vault_root_mode,
-                        appSettings.app.upriv_root_path,
-                        resolvedRootPath,
-                      ),
-                      setMountPathIssue,
-                      setMountDriverAttention,
-                      appSettings.workspace,
                       {
-                        appBackups: appSettings.backups,
+                        app: appSettings,
+                        saved: baseline ?? formConfig,
+                        here,
                         vaultId: vault.id,
-                        saved: baseline?.backup ?? null,
-                        onBlockingChange: setBackupFolderBlocking,
                       },
                     )}
                   </VaultSettingsSection>
@@ -1316,19 +1296,17 @@ function renderPreferenceSection(
     storageModeLocked: boolean;
     plainFilesLocked: boolean;
     displayNameLocked: boolean;
-    mountLocked: boolean;
     hiddenLocked: boolean;
     editHold: VaultConfigEditHold;
+    /** Why this device's unlocked folder group cannot change now. */
+    unlockedLockedHint: string | null;
   },
-  vaultRootPath: string | null,
-  onMountPathIssue: (invalid: boolean) => void,
-  onDriverAttentionChange: (active: boolean) => void,
-  appWorkspace: WorkspaceTable,
-  backupFolder: {
-    appBackups: BackupFolderTable;
+  lists: {
+    app: AppSettingsConfig;
+    /** The settings as loaded: a save sends the lists' change from here. */
+    saved: VaultSettingsConfig;
+    here: HereDevice | null;
     vaultId: string;
-    saved: VaultBackupFolders | null;
-    onBlockingChange: (blocking: boolean) => void;
   },
 ) {
   switch (sectionId) {
@@ -1354,18 +1332,17 @@ function renderPreferenceSection(
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
-    case "mount":
+    case "unlocked_folder":
       return (
-        <VaultSettingsMountSection
-          config={draft.mount}
-          vaultRootPath={vaultRootPath}
-          controlsDisabled={locks.mountLocked}
-          editHold={locks.editHold}
+        <VaultSettingsUnlockedFolderSection
+          config={draft.unlocked_folder}
+          saved={lists.saved.unlocked_folder}
+          here={lists.here}
+          vaultId={lists.vaultId}
+          appUnlocked={lists.app.unlocked_folders}
           plaintext={draft.storage.mode === "upriv_plain"}
-          appWorkspace={appWorkspace}
-          onPathIssueChange={(issue) => onMountPathIssue(issue != null)}
-          onDriverAttentionChange={onDriverAttentionChange}
-          onChange={(patch) => patchDraft("mount", patch)}
+          lockedHint={locks.unlockedLockedHint}
+          onChange={(patch) => patchDraft("unlocked_folder", patch)}
         />
       );
     case "auto_close":
@@ -1379,12 +1356,11 @@ function renderPreferenceSection(
       return (
         <VaultSettingsBackupSection
           config={draft.backup}
+          saved={lists.saved.backup.devices}
+          here={lists.here}
+          vaultId={lists.vaultId}
+          appBackups={lists.app.backups}
           onChange={(patch) => patchDraft("backup", patch)}
-          appBackups={backupFolder.appBackups}
-          vaultId={backupFolder.vaultId}
-          vaultRootPath={vaultRootPath}
-          saved={backupFolder.saved}
-          onFolderBlockingChange={backupFolder.onBlockingChange}
         />
       );
     default:

@@ -5,6 +5,7 @@ import {
   useJobService,
   useVaultGroupService,
   useLogService,
+  useVaultLifecycleService,
   useVaultSecurityService,
   useVaultService,
 } from "@/platform/services";
@@ -18,7 +19,6 @@ import {
   VAULT_LIST_SEARCH_PERSIST_MS,
   createDraftForImportSource,
   createDraftForScratchSource,
-  backupFellBackToastKey,
   createDraftFromBackup,
   groupIdContainingVault,
   applyPendingCreateGroupEffect,
@@ -49,11 +49,11 @@ import {
   normalizeVaultListSearch,
   shouldBumpVaultRootEpoch,
   isVaultRootGoneError,
-  isVaultRootUnreachableError,
+  switchesMessage,
   shouldRecordVaultHidden,
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
-  type BackupLocation,
+  type VaultBackupEntry,
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
   type VaultExportRun,
@@ -480,9 +480,7 @@ export function useVaultListScreen() {
       applyGroupListResult(result);
     },
     onError: (error) => {
-      if (!settingsOnDisk && (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))) {
-        return;
-      }
+      if (!settingsOnDisk && isVaultRootGoneError(error)) return;
       if (shouldBumpVaultRootEpoch(error)) {
         void reportVaultRootIntegrityFailure(error);
         return;
@@ -512,12 +510,7 @@ export function useVaultListScreen() {
         if (cancelled) return;
         // Children stay mounted under Gate. First-run has no `.upriv` yet — do not
         // treat that as mid-session integrity (epoch bump / Setup "lost").
-        if (
-          !settingsOnDisk &&
-          (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))
-        ) {
-          return;
-        }
+        if (!settingsOnDisk && isVaultRootGoneError(error)) return;
         if (shouldBumpVaultRootEpoch(error)) {
           void reportVaultRootIntegrityFailure(error);
           return;
@@ -545,21 +538,21 @@ export function useVaultListScreen() {
   }, [syncWithVaultList, vaults]);
 
   const modals = useVaultListModals(vaults, groups);
+  const vaultName = (vaultId: string) =>
+    vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
   groupSettingsOpenRef.current = modals.settingsGroupId !== null;
   const { lifecycleRequest, setLifecycleRequest } = modals;
   const exportFolders = useVaultExportFolders();
   const backupService = useBackupService();
   const securityService = useVaultSecurityService();
+  const lifecycleService = useVaultLifecycleService();
   const jobs = useJobService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId, saved) => {
-      const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
-      showToast(
-        saved.fallback
-          ? t(backupFellBackToastKey(saved.fallback), { name })
-          : t("toast.backup_now_saved", { name }),
-      );
+      const done = t("toast.backup_now_saved", { name: vaultName(vaultId) });
+      const switched = switchesMessage(saved.switches, t, vaultName);
+      showToast(switched ? `${done} ${switched}` : done);
       setBackupListRefresh((token) => token + 1);
     },
     onFailed: (_vaultId, error) => {
@@ -592,8 +585,6 @@ export function useVaultListScreen() {
     onCancelled: () => showToast(t("error.job_cancelled")),
     onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
-  const vaultName = (vaultId: string) =>
-    vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
   /** The lifecycle's open with a password, set once it exists below. */
   const openWithPasswordRef = useRef<(vaultId: string, password: string) => boolean>(() => false);
   const rebuild = useVaultRebuildJob(securityService, jobs, {
@@ -1062,20 +1053,17 @@ export function useVaultListScreen() {
   }, [dataFolderExport.job, showToast, t]);
 
   const handleCreateVaultFromBackup = useCallback(
-    (stamp: string, fileName: string, saved = false, location?: BackupLocation) => {
+    (backup: VaultBackupEntry) => {
       if (!modals.backupVault) return;
       if (refuseCreateWhileDataFolderExports()) return;
       modals.setCreateVaultInitialDraft(
         createDraftFromBackup(
-          stamp,
+          backup,
           modals.backupVault.id,
           modals.backupVault.displayName,
           existingOrders,
           existingDisplayNames,
           groupIdContainingVault(groups, modals.backupVault.id),
-          fileName,
-          saved,
-          location,
         ),
       );
       modals.setCreateVaultInitialStep("source");
@@ -1508,6 +1496,13 @@ export function useVaultListScreen() {
       onUnlockVault: lifecycle.handleUnlockVault,
       onCloseNow: lifecycle.handleCloseNow,
       onStopWork: (vault: VaultListItem) => stopRowWork(vault.id),
+      onPlainRecordRetry: () => void refresh(),
+      onPlainRecordForget: (vault: VaultListItem, token: string) => {
+        void lifecycleService
+          .forgetPlainRecord(vault.id, token)
+          .then(() => refresh())
+          .catch((error: unknown) => showError(error, "toast.plain_record_forget_failed"));
+      },
     },
     importDrop,
     lifecycle: {
@@ -1549,7 +1544,9 @@ export function useVaultListScreen() {
       recoveryLeftover: lifecycle.recoveryLeftover,
       placeOpen: lifecycle.placeOpen,
       placeVaultName: lifecycle.placeVaultName,
-      placeWorkspaceChoices: lifecycle.placeWorkspaceChoices,
+      placeAppChoices: lifecycle.placeAppChoices,
+      placeAppUnlocked: lifecycle.placeAppUnlocked,
+      placeVaultUnlocked: lifecycle.placeVaultUnlocked,
       placeSubmitting: lifecycle.placeSubmitting,
       placeWarningClass: lifecycle.placeWarningClass,
       onPlaceClose: lifecycle.onPlaceClose,
@@ -1561,6 +1558,11 @@ export function useVaultListScreen() {
       heldSubmitting: lifecycle.heldSubmitting,
       onHeldApply: lifecycle.onHeldApply,
       onHeldRestore: lifecycle.onHeldRestore,
+      driverPromptVaultName: lifecycle.driverPromptVaultName,
+      driverKind: lifecycle.driverKind,
+      driverInstalling: lifecycle.driverInstalling,
+      onDriverInstall: lifecycle.onDriverInstall,
+      onDriverDismiss: lifecycle.onDriverDismiss,
       closePrompt: lifecycle.closePrompt,
       closePromptVaultName: lifecycle.closePromptVaultName,
       closePromptSaving: lifecycle.closePromptSaving,

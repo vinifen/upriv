@@ -1,72 +1,61 @@
-import { backupEntryKey } from "./format";
-import type { BackupLocation, VaultBackupEntry } from "./types";
+import type { BackupSectionKind, VaultBackupEntry, VaultBackupListing } from "./types";
+import type { DeviceRef } from "../device";
+import type { FolderState } from "../folder-lists";
 
 /** The Saves or the Standard backups of one folder. */
 export interface BackupTierGroup {
   /** Saves (pins) or Standard. */
   saved: boolean;
   entries: VaultBackupEntry[];
-  /** `backupEntryKey` of each entry, in the same order. */
+  /** The key of each entry, in the same order. */
   keys: string[];
 }
 
 /** One collapsible section of the Backups window: every backup in one folder. */
 export interface BackupListSection {
-  /** The folder's place, stable across reloads. */
-  id: BackupLocation;
-  location: BackupLocation;
+  /** The folder's reference, stable across reloads. */
+  id: string;
+  kind: BackupSectionKind;
+  /** The folder, as this device reaches it. */
+  folder: string;
+  /** The device that wrote there; `null` for the data folder. */
+  device: DeviceRef | null;
+  status: FolderState;
   /** Saves, then Standard; a tier with nothing in it is left out. */
   groups: BackupTierGroup[];
   /** Every key of the section, Saves first. */
   keys: string[];
-  /** The folder these zips are in, when the list gave their paths. */
-  folder: string | null;
 }
 
 /** How much of a section is selected, for its select-all box. */
 export type BackupSectionSelection = "none" | "some" | "all";
 
-function parentOf(path: string | undefined): string | null {
-  if (!path) return null;
-  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return cut > 0 ? path.slice(0, cut) : null;
-}
-
-/** The folder a backup is in, above `saves/` for a pin. */
-function backupFolderOf(entry: VaultBackupEntry): string | null {
-  const parent = parentOf(entry.path);
-  return entry.saved ? parentOf(parent ?? undefined) : parent;
-}
-
 /**
- * The data folder, then the chosen folder, each with its Saves before its
- * Standard backups. Only a folder that holds a backup is listed.
+ * The sections the window shows, in core's order: the data folder, the
+ * folder in use, then the others. A folder shows while it holds a backup, or
+ * while it cannot be reached, so it can be retried or forgotten.
  */
-export function backupListSections(
-  backups: readonly VaultBackupEntry[],
-  vaultId: string,
-): BackupListSection[] {
-  const sections: BackupListSection[] = [];
-  for (const location of ["data_folder", "chosen"] as const) {
-    const inPlace = backups.filter(
-      (entry) => (entry.location === "chosen" ? "chosen" : "data_folder") === location,
-    );
-    if (inPlace.length === 0) continue;
-    const groups: BackupTierGroup[] = [];
-    for (const saved of [true, false]) {
-      const entries = inPlace.filter((entry) => Boolean(entry.saved) === saved);
-      if (entries.length === 0) continue;
-      groups.push({ saved, entries, keys: entries.map((entry) => backupEntryKey(entry, vaultId)) });
-    }
-    sections.push({
-      id: location,
-      location,
-      groups,
-      keys: groups.flatMap((group) => group.keys),
-      folder: inPlace.map(backupFolderOf).find((folder) => folder !== null) ?? null,
+export function backupListSections(listing: VaultBackupListing): BackupListSection[] {
+  return listing.sections
+    .filter((section) => section.entries.length > 0 || section.status !== "ok")
+    .map((section) => {
+      const groups: BackupTierGroup[] = [];
+      for (const saved of [true, false]) {
+        const entries = section.entries.filter((entry) => entry.saved === saved);
+        if (entries.length > 0) {
+          groups.push({ saved, entries, keys: entries.map((entry) => entry.key) });
+        }
+      }
+      return {
+        id: section.folder,
+        kind: section.kind,
+        folder: section.path,
+        device: section.device,
+        status: section.status,
+        groups,
+        keys: groups.flatMap((group) => group.keys),
+      };
     });
-  }
-  return sections;
 }
 
 export function backupSectionSelection(

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { vaultRowFixture } from "../../vault/tests/fixtures.shared";
 import { rebaseQuietLockedVaultSettings } from "../rebaseQuiet";
-import { vaultWorkspace } from "../../workspace";
 import { vaultSettingsFixture } from "./fixtures";
 
 const baseline = vaultSettingsFixture({
@@ -24,18 +23,12 @@ describe("rebaseQuietLockedVaultSettings", () => {
       ...baseline,
       vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
       storage: { mode: "upriv_plain" as const, plain_files: "whole" as const },
-      mount: {
-        ...vaultWorkspace(),
-        custom_file_manager_folder: true,
-        linux: { place: "unset" as const, path: "/tmp/custom" },
-      },
     };
     const rebased = rebaseQuietLockedVaultSettings(draft, baseline, open);
     expect(rebased.vault.display_name).toBe("Notes");
     expect(rebased.vault.note).toBe("keep");
     expect(rebased.storage.mode).toBe("encrypted_dir");
     expect(rebased.storage.plain_files).toBe("chosen");
-    expect(rebased.mount.linux.path).toBe("");
   });
 
   it("rebases display_name when creating, keeps vault_quiet dirty", () => {

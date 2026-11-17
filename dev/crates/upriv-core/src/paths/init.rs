@@ -120,8 +120,8 @@ pub fn validate_existing_vault_root(dir: impl AsRef<Path>) -> Result<()> {
 }
 
 fn ensure_standard_dirs(dir: &Path) -> Result<()> {
-    // Do not create `workspace/` here — mount parent is user-configured
-    // (`[workspace].path`) and must not appear as an unexplained folder.
+    // `upriv-unlocked/` is made only when a vault opens into it: it must not
+    // appear as an unexplained folder.
     for relative in [
         ".upriv/vaults",
         ".upriv/logs",
@@ -300,7 +300,7 @@ fn open_or_initialize_vault_root_impl(
                 IncompleteReplacePolicy::Delete if upriv.host_exists() => {
                     // Refuse to recursively delete if `.upriv` or any entry under it
                     // is a symlink (could escape the vault-root). Prefer Rename.
-                    // `workspace/` is intentionally left in place — only the broken
+                    // `upriv-unlocked/` is left in place — only the broken
                     // `.upriv/` tree is removed when safe. A file named `.upriv`
                     // is not a tree; remove that file so Repair can recreate it.
                     let meta =
@@ -465,12 +465,12 @@ mod tests {
         let root = initialize_vault_root(dir.path()).unwrap();
         assert!(is_vault_root_marker(root.root()));
         assert!(root.vaults_dir().host_is_dir());
-        assert!(!root.root().join("workspace").host_is_dir());
+        assert!(!root.root().join("upriv-unlocked").host_exists());
         assert!(root.logs_dir().host_is_dir());
         let settings = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(
-            settings.contains("[workspace.linux]"),
-            "initial settings.toml must include per-system workspace rows, got:\n{settings}"
+            settings.contains("[unlocked_folders]\nencrypted_vaults = false"),
+            "initial settings.toml must show the encrypted vaults switch, got:\n{settings}"
         );
     }
 

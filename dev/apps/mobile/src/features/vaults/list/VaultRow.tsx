@@ -29,6 +29,7 @@ import { DropOverRing } from "./DropOverRing";
 import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
+import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
@@ -69,6 +70,10 @@ interface VaultRowProps {
   onOpenBackups: (vault: VaultListItem) => void;
   onOpenNote: (vault: VaultListItem) => void;
   onOpenVaultInfo: (vault: VaultListItem) => void;
+  /** Check a plain-text folder on record again. */
+  onPlainRecordRetry: () => void;
+  /** Forget a plain-text folder on record. */
+  onPlainRecordForget: (vault: VaultListItem, token: string) => void;
 }
 
 export function VaultRow({
@@ -97,6 +102,8 @@ export function VaultRow({
   onOpenBackups,
   onOpenNote,
   onOpenVaultInfo,
+  onPlainRecordRetry,
+  onPlainRecordForget,
 }: VaultRowProps) {
   const { t, locale } = useTranslation();
   const { colors, typography, theme } = useTheme();
@@ -243,6 +250,11 @@ export function VaultRow({
           {lastAccessedOrElapsed}
         </View>
       </View>
+      <VaultPlainRecordLine
+        vault={vault}
+        onRetry={onPlainRecordRetry}
+        onForget={onPlainRecordForget}
+      />
     </View>
   );
 
@@ -269,6 +281,11 @@ export function VaultRow({
           {lastAccessedOrElapsed}
         </View>
       </View>
+      <VaultPlainRecordLine
+        vault={vault}
+        onRetry={onPlainRecordRetry}
+        onForget={onPlainRecordForget}
+      />
     </View>
   );
 

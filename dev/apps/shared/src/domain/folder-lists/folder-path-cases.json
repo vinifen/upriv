@@ -1,0 +1,137 @@
+{
+  "valid": [
+    { "system": "linux", "list": "unlocked", "path": "/mnt/ssd", "issue": null },
+    { "system": "linux", "list": "unlocked", "path": "  /mnt/ssd/  ", "issue": null },
+    { "system": "linux", "list": "unlocked", "path": "", "issue": "empty" },
+    { "system": "linux", "list": "unlocked", "path": "   ", "issue": "empty" },
+    { "system": "linux", "list": "unlocked", "path": "relative/folder", "issue": "not_absolute" },
+    { "system": "linux", "list": "unlocked", "path": "D:\\Backups", "issue": "not_absolute" },
+    { "system": "linux", "list": "unlocked", "path": "/data/.upriv/vaults", "issue": "reserved" },
+    { "system": "linux", "list": "unlocked", "path": "/data/.Upriv", "issue": "reserved" },
+    { "system": "linux", "list": "unlocked", "path": "/mnt/ssd/upriv-unlocked", "issue": null },
+    {
+      "system": "linux",
+      "list": "unlocked",
+      "path": "/mnt/ssd/upriv-unlocked/Notes",
+      "issue": "overlap"
+    },
+    {
+      "system": "linux",
+      "list": "unlocked",
+      "path": "/mnt/ssd/upriv-backups/notes",
+      "issue": "overlap"
+    },
+    {
+      "system": "linux",
+      "list": "unlocked",
+      "path": "/mnt/ssd/upriv-notes-backups",
+      "issue": "overlap"
+    },
+    { "system": "linux", "list": "unlocked", "path": "/mnt/ssd/upriv--backups", "issue": null },
+    { "system": "linux", "list": "backup", "path": "/mnt/ssd", "issue": null },
+    { "system": "linux", "list": "backup", "path": "/mnt/ssd/upriv-backups", "issue": null },
+    { "system": "linux", "list": "backup", "path": "/mnt/ssd/upriv-notes-backups", "issue": null },
+    { "system": "linux", "list": "backup", "path": "/mnt/ssd/upriv-unlocked", "issue": "overlap" },
+    {
+      "system": "linux",
+      "list": "backup",
+      "path": "/mnt/ssd/upriv-unlocked/Notes",
+      "issue": "overlap"
+    },
+    { "system": "linux", "list": "data_folder", "path": "/media/usb", "issue": null },
+    {
+      "system": "linux",
+      "list": "data_folder",
+      "path": "/media/usb/upriv-unlocked",
+      "issue": "overlap"
+    },
+    {
+      "system": "linux",
+      "list": "data_folder",
+      "path": "/media/usb/upriv-backups",
+      "issue": "overlap"
+    },
+    { "system": "macos", "list": "unlocked", "path": "/Volumes/SSD", "issue": null },
+    {
+      "system": "macos",
+      "list": "backup",
+      "path": "/Volumes/SSD/Upriv-Unlocked",
+      "issue": "overlap"
+    },
+    { "system": "windows", "list": "unlocked", "path": "D:\\Backups", "issue": null },
+    { "system": "windows", "list": "unlocked", "path": "D:/Backups", "issue": null },
+    { "system": "windows", "list": "unlocked", "path": "\\\\server\\share\\Upriv", "issue": null },
+    { "system": "windows", "list": "unlocked", "path": "\\\\server", "issue": "not_absolute" },
+    { "system": "windows", "list": "unlocked", "path": "D:", "issue": "not_absolute" },
+    { "system": "windows", "list": "unlocked", "path": "/mnt/ssd", "issue": "not_absolute" },
+    { "system": "windows", "list": "backup", "path": "D:\\UPRIV-UNLOCKED\\x", "issue": "overlap" },
+    { "system": "windows", "list": "unlocked", "path": "D:\\Data\\.UPRIV", "issue": "reserved" },
+    {
+      "system": "android",
+      "list": "unlocked",
+      "path": "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
+      "issue": null
+    },
+    {
+      "system": "android",
+      "list": "backup",
+      "path": "content://com.android.externalstorage.documents/tree/1A2B-3C4D%3ABackups",
+      "issue": null
+    },
+    {
+      "system": "android",
+      "list": "unlocked",
+      "path": "/storage/emulated/0/Documents",
+      "issue": "not_absolute"
+    },
+    {
+      "system": "android",
+      "list": "backup",
+      "path": "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv%2F.upriv",
+      "issue": "reserved"
+    },
+    {
+      "system": "android",
+      "list": "backup",
+      "path": "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2Fupriv-unlocked",
+      "issue": "overlap"
+    }
+  ],
+  "same": [
+    { "system": "linux", "a": "/mnt/a", "b": "/mnt/a/", "same": true },
+    { "system": "linux", "a": " /mnt/a ", "b": "/mnt/a", "same": true },
+    { "system": "linux", "a": "/mnt//a", "b": "/mnt/a", "same": true },
+    { "system": "linux", "a": "/mnt/A", "b": "/mnt/a", "same": false },
+    { "system": "linux", "a": "/mnt/a", "b": "D:\\a", "same": false },
+    { "system": "macos", "a": "/Volumes/A", "b": "/volumes/a/", "same": true },
+    { "system": "windows", "a": "D:\\Backups", "b": "d:/backups\\", "same": true },
+    { "system": "windows", "a": "\\\\Server\\Share\\x", "b": "//server/share/X", "same": true },
+    { "system": "windows", "a": "D:\\a", "b": "E:\\a", "same": false },
+    {
+      "system": "android",
+      "a": "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
+      "b": "content://com.android.externalstorage.documents/tree/primary:Documents",
+      "same": true
+    },
+    {
+      "system": "android",
+      "a": "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
+      "b": "content://com.android.externalstorage.documents/tree/1A2B-3C4D%3ADocuments",
+      "same": false
+    }
+  ],
+  "inside": [
+    { "system": "linux", "inner": "/mnt/a/b", "outer": "/mnt/a", "inside": true },
+    { "system": "linux", "inner": "/mnt/a", "outer": "/mnt/a/", "inside": true },
+    { "system": "linux", "inner": "/mnt/ab", "outer": "/mnt/a", "inside": false },
+    { "system": "linux", "inner": "/mnt", "outer": "/mnt/a", "inside": false },
+    { "system": "windows", "inner": "D:\\A\\b", "outer": "d:\\a", "inside": true },
+    { "system": "windows", "inner": "E:\\a\\b", "outer": "D:\\a", "inside": false },
+    {
+      "system": "android",
+      "inner": "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv",
+      "outer": "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
+      "inside": true
+    }
+  ]
+}

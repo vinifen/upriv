@@ -56,7 +56,7 @@ export function ExportFolderField({
       </div>
       {notAbsolute ? (
         <p className="text-xs leading-relaxed text-on-error-container" role="alert">
-          {t("modal.workspace.error.not_absolute")}
+          {t("modal.export_folder.not_absolute")}
         </p>
       ) : null}
       {folder.pickFailed ? (

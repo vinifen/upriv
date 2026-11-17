@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
-import { Platform, View } from "react-native";
-import { useToast } from "@upriv/shared/react";
+import { useCallback } from "react";
+import { View } from "react-native";
+import { useOsFolderReady, useToast } from "@upriv/shared/react";
 import {
-  currentWorkspaceSystem,
-  osFileManagerFolderEnabled,
-  peekVaultSettings,
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
   storageModeIsPlaintext,
@@ -16,7 +13,6 @@ import {
   vaultSettingsMenuAreas,
   type VaultListItem,
   type VaultSettingsAreaId,
-  type WorkspaceTable,
 } from "@upriv/shared";
 import { DropdownPanel, FloatingToast, IconButton, MenuActionItem } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -84,56 +80,33 @@ export function VaultRowActions({
   const vaultService = useVaultService();
   const fs = useVaultFileSystemService();
   const { toast, show, dismiss } = useToast();
-  const openOsMount = useCallback(() => {
-    void fs
-      .osPath(vault.id, "/")
-      .then((osPath) => {
-        if (!osPath) {
-          show(t("error.vault_mount_failed"));
-          return;
-        }
-        return revealInOsFileManager(osPath);
-      })
-      .catch((error: unknown) => {
-        show(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
-      });
-  }, [fs, show, t, vault.id]);
   const showVaultMore = settings.ui.vault_list_show_vault_more_button !== false;
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
   const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = listStatus === "open";
   const canUnlock = isVaultListRowUnlockTarget(listStatus);
   const canUseOpenWorkspace = listStatus === "open";
-  const plaintext = storageModeIsPlaintext(vault.storageMode);
-  const rememberedMount = peekVaultSettings(vault.id)?.mount;
-  const [fetchedMount, setFetchedMount] = useState<WorkspaceTable | undefined>(rememberedMount);
-  useEffect(() => {
-    if (!canUseOpenWorkspace || plaintext) return;
-    if (rememberedMount) {
-      setFetchedMount(rememberedMount);
-      return;
-    }
-    let cancelled = false;
-    void vaultService.getSettings(vault.id).then(
-      (next) => {
-        if (!cancelled) setFetchedMount(next?.mount);
-      },
-      () => {
-        if (!cancelled) setFetchedMount(undefined);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseOpenWorkspace, plaintext, rememberedMount, vault.id, vaultService]);
-  const showOsFileManager =
-    canUseOpenWorkspace &&
-    osFileManagerFolderEnabled(
-      plaintext,
-      settings.workspace,
-      rememberedMount ?? fetchedMount,
-      currentWorkspaceSystem(Platform.OS),
-    );
+  // A phone mounts no encrypted vault's folder: only a plain-text vault has
+  // one, and Open unlocked folder shows only while core says it is there.
+  const osFolder = useOsFolderReady(
+    (vaultId, path) => fs.osPath(vaultId, path),
+    vault.id,
+    canUseOpenWorkspace && storageModeIsPlaintext(vault.storageMode),
+  );
+  const showOsFileManager = canUseOpenWorkspace && osFolder.ready;
+  const { recheck: recheckOsFolder } = osFolder;
+  /** Reveal the vault's folder in the Files app. A folder gone meanwhile only hides the item. */
+  const openOsMount = useCallback(() => {
+    void fs
+      .osPath(vault.id, "/")
+      .then((answer) => {
+        if (answer.state === "ready") return revealInOsFileManager(answer.osPath);
+        recheckOsFolder();
+      })
+      .catch((error: unknown) => {
+        show(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
+      });
+  }, [fs, recheckOsFolder, show, t, vault.id]);
   const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
   const closeNowOffered = vaultCloseNowOffered(listStatus, vault.id, pipelineListStatus);
@@ -190,7 +163,7 @@ export function VaultRowActions({
               {showOsFileManager ? (
                 <MenuActionItem
                   icon="folder"
-                  label={t("action.open_file_manager")}
+                  label={t("action.open_unlocked_folder")}
                   disabled={controls.moreMenuBlocked}
                   onPress={openOsMount}
                 />

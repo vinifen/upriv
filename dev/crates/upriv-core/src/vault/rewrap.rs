@@ -301,7 +301,7 @@ fn record_rewrap_metadata(vault_dir: &Path, vault_id: &str, store: &Path, passwo
     // that opens with the new password.
     match content_hash_hex(store) {
         Ok(hash) => {
-            if record_store_rewritten(vault_dir, vault_id, &config.vault.display_name, &hash)
+            if record_store_rewritten(vault_dir, vault_id, &config.vault.display_name, &hash, None)
                 .is_err()
             {
                 log_rewrap_tail(vault_id, "content_hash");
@@ -789,7 +789,13 @@ mode = "encrypted_dir"
         let vault_dir = root.vault_dir("notes").unwrap();
         let mut saved = load_vault_config(&vault_dir).unwrap();
         saved.vault.note = "kept".into();
-        crate::config::save_vault_config_checked(&root, "notes", &saved).unwrap();
+        crate::config::save_vault_config_checked(
+            &root,
+            "notes",
+            &saved,
+            &crate::config::VaultListChanges::default(),
+        )
+        .unwrap();
         change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         let after = load_vault_config(&vault_dir).unwrap();
         assert_eq!(after.vault.note, "kept");
@@ -807,14 +813,14 @@ mode = "encrypted_dir"
         let vault_dir = root.vault_dir("notes").unwrap();
         let before = load_vault_persistence(&vault_dir).unwrap().unwrap();
         let previous_stamp = before
-            .this_host_record()
+            .this_device_record()
             .and_then(|record| record.stamp.clone())
             .expect("close stamp");
         let backups_before = list_backups(&root, "notes").unwrap().len();
 
         change_vault_password(&root, "notes", OLD, NEW, &test_job_id()).unwrap();
         let cleared = load_vault_persistence(&vault_dir).unwrap().unwrap();
-        let record = cleared.this_host_record().expect("this machine");
+        let record = cleared.this_device_record().expect("this device");
         assert!(record.stamp.is_none());
         assert!(record.index_hash.is_none());
         assert!(cleared.content_hash.is_some());
@@ -823,7 +829,7 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
         let closed = load_vault_persistence(&vault_dir).unwrap().unwrap();
         let next_stamp = closed
-            .this_host_record()
+            .this_device_record()
             .and_then(|record| record.stamp.clone())
             .expect("close after rewrap");
         assert_ne!(next_stamp, previous_stamp);
@@ -877,18 +883,12 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn the_safety_zip_stays_in_the_data_folder_with_a_chosen_folder_set() {
+    fn the_safety_zip_stays_in_the_data_folder_with_a_backup_row_selected() {
         let (tmp, root) = vault_root_with(&[]);
         let drive = tmp.path().join("drive");
         crate::host_fs::create_dir_all(&drive).unwrap();
         let mut config = sample_config("notes", "Notes");
-        let row = crate::paths::VaultBackupFolderRow {
-            place: crate::paths::VaultBackupPlace::Custom,
-            path: drive.to_string_lossy().into_owned(),
-        };
-        config.backup.linux = row.clone();
-        config.backup.windows = row.clone();
-        config.backup.macos = row;
+        crate::test_support::backup_rows(&mut config, &[&drive]);
         create_vault(&root, config, OLD, KdfUnlockPreset::M32).unwrap();
 
         let zip = backup_before_rewrap(&root, "notes", &Job::untracked()).unwrap();

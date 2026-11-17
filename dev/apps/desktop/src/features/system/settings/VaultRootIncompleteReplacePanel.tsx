@@ -1,65 +1,35 @@
 import { useId } from "react";
 import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import {
-  VAULT_ROOT_ALIAS_FILE,
-  type IncompleteReplacePolicy,
-  type VaultRootConfirmAction,
-} from "@upriv/shared";
-
-type IncompleteContext = { kind: "default_root" } | { kind: "custom_root"; path: string };
+import type { IncompleteReplacePolicy } from "@upriv/shared";
 
 interface VaultRootIncompleteReplacePanelProps {
-  context: IncompleteContext;
+  /** The folder whose `.upriv/` is broken. */
+  folder: string;
   replacePolicy: IncompleteReplacePolicy | null;
   onReplacePolicyChange: (policy: IncompleteReplacePolicy) => void;
-  /** Optional shared radiogroup name (defaults to a unique id). */
-  groupName?: string;
-  /**
-   * Required: Setup / Repair / Recovery use `"continue"`; Data folder uses `"apply"`.
-   * No default — callers must choose so Apply/Continue copy cannot drift by accident.
-   */
-  primaryAction: VaultRootConfirmAction;
-  /** Disable the policy radios while parent commit is busy or blocked. */
+  /** Disable the policy radios while the window's work runs. */
   disabled?: boolean;
 }
 
 /**
- * Shared “incomplete `.upriv/`” panel (Data folder, Setup, Repair).
- * Reset settings / rename / delete radios under the active vault-root option — not a separate modal step.
+ * The choice for a broken `.upriv/` in the folder the data folder list
+ * selects (Setup, Repair, the Data folder window): reset its settings,
+ * rename it aside, or delete it. The primary action waits until one is chosen.
  */
 export function VaultRootIncompleteReplacePanel({
-  context,
+  folder,
   replacePolicy,
   onReplacePolicyChange,
-  groupName,
-  primaryAction,
   disabled = false,
 }: VaultRootIncompleteReplacePanelProps) {
   const { t } = useTranslation();
-  const fallbackGroup = useId();
-  const repairPolicyGroup = groupName ?? fallbackGroup;
-  const isApply = primaryAction === "apply";
-
-  const notice =
-    context.kind === "default_root"
-      ? t(
-          isApply
-            ? "modal.app_settings.upriv_root.switch_default_root_replace_notice_apply"
-            : "modal.app_settings.upriv_root.switch_default_root_replace_notice_continue",
-          { file: VAULT_ROOT_ALIAS_FILE },
-        )
-      : t(
-          isApply
-            ? "modal.app_settings.apply_confirm_custom_incomplete"
-            : "modal.app_settings.continue_confirm_custom_incomplete",
-          { path: context.path.trim() || "…" },
-        );
+  const groupName = useId();
 
   return (
     <div className="space-y-2">
       <p className="text-xs leading-relaxed text-on-surface" role="status">
-        {notice}
+        {t("modal.data_folder.incomplete_notice", { path: folder })}
       </p>
       <div
         role="radiogroup"
@@ -67,7 +37,7 @@ export function VaultRootIncompleteReplacePanel({
         className="grid gap-2"
       >
         <PolicyRadioOption
-          groupName={repairPolicyGroup}
+          groupName={groupName}
           value="reset_settings"
           checked={replacePolicy === "reset_settings"}
           title={t("modal.vault_root_repair.option_reset_settings")}
@@ -77,7 +47,7 @@ export function VaultRootIncompleteReplacePanel({
           onSelect={() => onReplacePolicyChange("reset_settings")}
         />
         <PolicyRadioOption
-          groupName={repairPolicyGroup}
+          groupName={groupName}
           value="rename"
           checked={replacePolicy === "rename"}
           title={t("modal.vault_root_repair.option_rename")}
@@ -86,7 +56,7 @@ export function VaultRootIncompleteReplacePanel({
           onSelect={() => onReplacePolicyChange("rename")}
         />
         <PolicyRadioOption
-          groupName={repairPolicyGroup}
+          groupName={groupName}
           value="delete"
           checked={replacePolicy === "delete"}
           title={t("modal.vault_root_repair.option_delete")}

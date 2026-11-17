@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultAppSettings,
   RpcError,
+  type DataFolderListView,
+  type DeviceService,
   type VaultListItem,
+  type VaultRootResolveResult,
   type VaultRootService,
 } from "@upriv/shared";
 import { useSystemInfoData } from "@upriv/shared/react";
@@ -29,12 +32,26 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function foundRoot(rootPath = "/data"): {
-  status: "found";
-  rootPath: string;
-  source: "default_root";
-} {
-  return { status: "found", rootPath, source: "default_root" };
+function foundRoot(rootPath = "/data"): VaultRootResolveResult {
+  return { status: "found", rootPath, source: "default" };
+}
+
+const DATA_FOLDERS: DataFolderListView = { groups: {}, defaultFolder: "/home", explicit: null };
+
+/** A data folder service that answers `resolve` and the list; Info calls nothing else. */
+function rootService(resolve: VaultRootService["resolve"]): VaultRootService {
+  const unused = async (): Promise<never> => {
+    throw new Error("Info does not call this");
+  };
+  return {
+    resolve,
+    list: async () => DATA_FOLDERS,
+    status: unused,
+    apply: unused,
+    search: unused,
+    suggestedCustomRootPath: unused,
+    pickFolder: unused,
+  };
 }
 
 describe("useSystemInfoData", () => {
@@ -44,16 +61,16 @@ describe("useSystemInfoData", () => {
     distribution: "dev" as const,
     versionOffline: true,
   });
+  const deviceService: DeviceService = {
+    info: async () => ({ id: "a".repeat(32), system: "linux" }),
+  };
 
   it("does not refetch when vaults is a new array with the same inventory counts", async () => {
     let resolveCount = 0;
-    const vaultRootService = {
-      resolve: async () => {
-        resolveCount += 1;
-        return foundRoot();
-      },
-      defaultRootStatus: async () => ({ status: "valid" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+    const vaultRootService = rootService(async () => {
+      resolveCount += 1;
+      return foundRoot();
+    });
 
     const { result, rerender } = renderHook(
       ({ vaults }: { vaults: VaultListItem[] }) =>
@@ -63,6 +80,7 @@ describe("useSystemInfoData", () => {
           groups: [],
           settings,
           vaultRootService,
+          deviceService,
           getVersion,
         }),
       { initialProps: { vaults: [vaultItem("a")] } },
@@ -85,18 +103,15 @@ describe("useSystemInfoData", () => {
   });
 
   it("keeps the previous snapshot while a later load is in flight", async () => {
-    const second = deferred<ReturnType<typeof foundRoot>>();
+    const second = deferred<VaultRootResolveResult>();
     let resolveCount = 0;
-    const vaultRootService = {
-      resolve: () => {
-        resolveCount += 1;
-        if (resolveCount === 1) {
-          return Promise.resolve(foundRoot());
-        }
-        return second.promise;
-      },
-      defaultRootStatus: async () => ({ status: "valid" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+    const vaultRootService = rootService(() => {
+      resolveCount += 1;
+      if (resolveCount === 1) {
+        return Promise.resolve(foundRoot());
+      }
+      return second.promise;
+    });
 
     const { result, rerender } = renderHook(
       ({ vaults }: { vaults: VaultListItem[] }) =>
@@ -106,6 +121,7 @@ describe("useSystemInfoData", () => {
           groups: [],
           settings,
           vaultRootService,
+          deviceService,
           getVersion,
         }),
       { initialProps: { vaults: [vaultItem("a")] } },
@@ -131,10 +147,7 @@ describe("useSystemInfoData", () => {
   });
 
   it("excludes hidden vaults from vaultsOpen and lastOpenedVault when show-hidden is off", async () => {
-    const vaultRootService = {
-      resolve: async () => foundRoot(),
-      defaultRootStatus: async () => ({ status: "valid" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+    const vaultRootService = rootService(async () => foundRoot());
 
     const hiddenOpen: VaultListItem = { ...vaultItem("secret", "open"), hidden: true };
     const visibleOpen = vaultItem("notes", "open");
@@ -151,6 +164,7 @@ describe("useSystemInfoData", () => {
           groups: [],
           settings: settingsWithLast,
           vaultRootService,
+          deviceService,
           getVersion,
           showHiddenVaults,
         }),
@@ -173,16 +187,13 @@ describe("useSystemInfoData", () => {
 
   it("clears the snapshot on vault-root A/B so Info does not keep stale found paths", async () => {
     let resolveCount = 0;
-    const vaultRootService = {
-      resolve: () => {
-        resolveCount += 1;
-        if (resolveCount === 1) {
-          return Promise.resolve(foundRoot());
-        }
-        return Promise.reject(new RpcError("vault_root_not_found", "gone"));
-      },
-      defaultRootStatus: async () => ({ status: "valid" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+    const vaultRootService = rootService(() => {
+      resolveCount += 1;
+      if (resolveCount === 1) {
+        return Promise.resolve(foundRoot());
+      }
+      return Promise.reject(new RpcError("vault_root_not_found", "gone"));
+    });
 
     const { result, rerender } = renderHook(
       ({ vaults }: { vaults: VaultListItem[] }) =>
@@ -192,6 +203,7 @@ describe("useSystemInfoData", () => {
           groups: [],
           settings,
           vaultRootService,
+          deviceService,
           getVersion,
         }),
       { initialProps: { vaults: [vaultItem("a")] } },
@@ -210,10 +222,9 @@ describe("useSystemInfoData", () => {
   });
 
   it("clears the snapshot on SAF epoch codes the same way as vault-root A/B", async () => {
-    const vaultRootService = {
-      resolve: async () => Promise.reject(new RpcError("saf_unauthorized", "grant gone")),
-      defaultRootStatus: async () => ({ status: "valid" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+    const vaultRootService = rootService(async () =>
+      Promise.reject(new RpcError("saf_unauthorized", "grant gone")),
+    );
 
     const { result } = renderHook(() =>
       useSystemInfoData({
@@ -222,6 +233,7 @@ describe("useSystemInfoData", () => {
         groups: [],
         settings,
         vaultRootService,
+        deviceService,
         getVersion,
       }),
     );
@@ -233,16 +245,13 @@ describe("useSystemInfoData", () => {
     expect(result.current.loadFailure).toMatchObject({ code: "saf_unauthorized" });
   });
 
-  it("treats a soft needs_setup resolve as gone (not a stale Info snapshot)", async () => {
-    const vaultRootService = {
-      resolve: async () => ({
-        status: "needs_setup" as const,
-        aliasPath: "/home/.upriv-data-folder",
-        defaultRootAnchor: "/home",
-        distribution: "dev" as const,
-      }),
-      defaultRootStatus: async () => ({ status: "absent" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+  it("treats a selected data folder that does not answer as gone (not a stale Info snapshot)", async () => {
+    const vaultRootService = rootService(async () => ({
+      status: "selected_failed",
+      choice: { kind: "row", number: 1, name: "USB" },
+      reason: "missing",
+      ended: [],
+    }));
 
     const { result } = renderHook(() =>
       useSystemInfoData({
@@ -251,6 +260,7 @@ describe("useSystemInfoData", () => {
         groups: [],
         settings,
         vaultRootService,
+        deviceService,
         getVersion,
       }),
     );
@@ -264,13 +274,10 @@ describe("useSystemInfoData", () => {
 
   it("does not refetch when settings is a new object with the same Info fields", async () => {
     let resolveCount = 0;
-    const vaultRootService = {
-      resolve: async () => {
-        resolveCount += 1;
-        return foundRoot();
-      },
-      defaultRootStatus: async () => ({ status: "valid" as const, defaultRootAnchor: "/home" }),
-    } as VaultRootService;
+    const vaultRootService = rootService(async () => {
+      resolveCount += 1;
+      return foundRoot();
+    });
 
     const { result, rerender } = renderHook(
       ({ nextSettings }: { nextSettings: typeof settings }) =>
@@ -280,6 +287,7 @@ describe("useSystemInfoData", () => {
           groups: [],
           settings: nextSettings,
           vaultRootService,
+          deviceService,
           getVersion,
         }),
       { initialProps: { nextSettings: settings } },

@@ -1,33 +1,39 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
+  BACKUP_NAME_MAX_CHARS,
   backupDeleteConfirmPhrase,
-  backupEntryFileName,
-  backupEntryKey,
   backupExportFilename,
   backupExportRowKey,
   backupListSections,
+  deviceName,
   backupSectionSelection,
   formatBackupDate,
   fileNameOfPath,
   formatBytes,
   matchesBackupDeleteConfirmation,
+  normalizeBackupName,
   toggleBackupSection,
   type BackupListSection,
+  type BackupSectionKind,
   type BackupSectionSelection,
   type VaultBackupEntry,
   type VaultListItem,
 } from "@upriv/shared";
 import { useBackupService } from "@/platform/services";
 import type { ExportFolder } from "@/hooks/useExportFolder";
-import { useTranslation } from "@/i18n";
+import { useTranslation, type I18nKey } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
+import { RevealPathButton, useRevealFolder } from "@/components/RevealPathButton";
+import { shownPath } from "@/components/folder-list";
 import {
   Button,
   Checkbox,
+  DropdownPanel,
   ElapsedTime,
   IconButton,
   JobStopButton,
+  MenuActionItem,
   Modal,
   ModalFooterActions,
   TextWidthProbe,
@@ -60,7 +66,7 @@ interface VaultBackupsModalProps {
   /** Bumped when that job finishes so the open list reloads. */
   listRefreshToken: number;
   onClose: () => void;
-  onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
+  onCreateVaultFromBackup?: (backup: VaultBackupEntry) => void;
   /** The folder a backup export writes into, kept by the vault list for the next one. */
   exportFolder: ExportFolder;
   /** The backup export in flight, of any vault. Survives closing the modal. */
@@ -94,23 +100,28 @@ export function VaultBackupsModal({
   const { toast, show: showToast, dismiss: dismissToast } = useToast();
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
-  const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
-    backupService,
-    vaultId,
-    open,
-    listRefreshToken,
-  );
-  const sections = useMemo(() => backupListSections(backups, vaultId ?? ""), [backups, vaultId]);
+  const {
+    sections: folders,
+    deleteBackups,
+    promoteToSave,
+    renameBackup,
+    forgetFolder,
+    resetBackups,
+    isLoading,
+    isBusy,
+    error,
+  } = useVaultBackups(backupService, vaultId, open, listRefreshToken);
+  const backups = useMemo(() => folders.flatMap((folder) => folder.entries), [folders]);
+  const sections = useMemo(() => backupListSections({ sections: folders }), [folders]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
+  /** The backup whose name is being edited. */
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
-  const rowKeys = useMemo(
-    () => backups.map((entry) => backupEntryKey(entry, vaultId ?? "")),
-    [backups, vaultId],
-  );
+  const rowKeys = useMemo(() => backups.map((entry) => entry.key), [backups]);
   const exportStep = useBackupExportStep({
     folder: exportFolder,
     open,
@@ -125,7 +136,7 @@ export function VaultBackupsModal({
   /** A single backup has nothing to multi-select: row actions cover it. */
   const selectable = backups.length > 1;
   const selectedStandardKeys = standardBackups
-    .map((entry) => backupEntryKey(entry, vaultId ?? ""))
+    .map((entry) => entry.key)
     .filter((key) => selected.has(key));
   const deleteCount = deleteTargets?.length ?? 0;
   const canConfirmDelete =
@@ -139,6 +150,7 @@ export function VaultBackupsModal({
       setSelected(new Set());
       setDeleteTargets(null);
       setConfirmText("");
+      setRenaming(null);
     }
   }, [open, vaultId]);
 
@@ -163,11 +175,11 @@ export function VaultBackupsModal({
     onClose();
   };
 
-  const toggleSelected = (stamp: string) => {
+  const toggleSelected = (key: string) => {
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(stamp)) next.delete(stamp);
-      else next.add(stamp);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -176,9 +188,9 @@ export function VaultBackupsModal({
     setSelected((current) => toggleBackupSection(current, keys));
   };
 
-  const beginDelete = (stamps: string[]) => {
-    if (stamps.length === 0) return;
-    setDeleteTargets(stamps);
+  const beginDelete = (keys: string[]) => {
+    if (keys.length === 0) return;
+    setDeleteTargets(keys);
     setConfirmText("");
   };
 
@@ -194,20 +206,34 @@ export function VaultBackupsModal({
       .then(() => {
         setSelected((current) => {
           const next = new Set(current);
-          for (const stamp of targets) next.delete(stamp);
+          for (const key of targets) next.delete(key);
           return next;
         });
         setDeleteTargets(null);
         setConfirmText("");
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         showToast(t(mobileErrorI18nKey(err, "toast.backup_delete_failed")));
       });
   };
 
-  const handlePromoteToSave = (stamp: string) => {
-    void promoteToSave([stamp]).catch((err) => {
+  const handlePromoteToSave = (key: string) => {
+    void promoteToSave([key]).catch((err: unknown) => {
       showToast(t(mobileErrorI18nKey(err, "toast.backup_promote_failed")));
+    });
+  };
+
+  const handleRename = (key: string, name: string) => {
+    void renameBackup(key, normalizeBackupName(name))
+      .then(() => setRenaming(null))
+      .catch((err: unknown) => {
+        showToast(t(mobileErrorI18nKey(err, "toast.backup_rename_failed")));
+      });
+  };
+
+  const handleForget = (folder: string) => {
+    void forgetFolder(folder).catch((err: unknown) => {
+      showToast(t(mobileErrorI18nKey(err, "toast.backup_forget_failed")));
     });
   };
 
@@ -262,7 +288,7 @@ export function VaultBackupsModal({
         promoteCount={selectedStandardKeys.length}
         promoteDisabled={isBusy || selectedStandardKeys.some((key) => exportingKeys.has(key))}
         onPromoteSelected={() => {
-          void promoteToSave(selectedStandardKeys).catch((err) => {
+          void promoteToSave(selectedStandardKeys).catch((err: unknown) => {
             showToast(t(mobileErrorI18nKey(err, "toast.backup_promote_failed")));
           });
         }}
@@ -341,7 +367,7 @@ export function VaultBackupsModal({
             )}
           </View>
 
-          {backups.length === 0 ? (
+          {sections.length === 0 ? (
             <Text style={[typography.caption, styles.empty]}>{t("modal.backup.empty")}</Text>
           ) : null}
           {sections.map((section) => (
@@ -351,16 +377,22 @@ export function VaultBackupsModal({
               selection={backupSectionSelection(section.keys, selected)}
               onToggleSection={selectable ? () => toggleSection(section.keys) : undefined}
               locale={locale}
-              vaultId={vault.id}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
               exportingKeys={exportingKeys}
               rowExportPanel={rowExportPanel}
               onToggleSelected={selectable ? toggleSelected : undefined}
               onExport={(key) => exportStep.begin([key])}
-              onDelete={(stamp) => beginDelete([stamp])}
+              onDelete={(key) => beginDelete([key])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
               onPromoteToSave={handlePromoteToSave}
+              renaming={renaming}
+              busy={isBusy}
+              onRenameStart={(key) => setRenaming(key)}
+              onRenameCancel={() => setRenaming(null)}
+              onRename={handleRename}
+              onRetry={() => void resetBackups().catch(() => undefined)}
+              onForget={handleForget}
             />
           ))}
         </View>
@@ -422,30 +454,46 @@ interface BackupSectionProps {
   /** Absent while there is a single backup: row actions cover it. */
   onToggleSection?: () => void;
   locale: string;
-  vaultId: string;
   selected: Set<string>;
   selectionDisabled: boolean;
   /** The backups a running export reads: they cannot be moved or deleted until it ends. */
   exportingKeys: ReadonlySet<string>;
   /** Grows the row: its folder step or its running export. */
   rowExportPanel: (key: string) => ReactNode;
-  onToggleSelected?: (stamp: string) => void;
-  onExport: (stamp: string) => void;
-  onDelete: (stamp: string) => void;
-  onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
-  onPromoteToSave?: (stamp: string) => void;
+  onToggleSelected?: (key: string) => void;
+  onExport: (key: string) => void;
+  onDelete: (key: string) => void;
+  onCreateVaultFromBackup?: (backup: VaultBackupEntry) => void;
+  onPromoteToSave?: (key: string) => void;
+  /** The backup whose name is being edited. */
+  renaming: string | null;
+  busy: boolean;
+  onRenameStart: (key: string) => void;
+  onRenameCancel: () => void;
+  onRename: (key: string, name: string) => void;
+  /** Check every folder again. */
+  onRetry: () => void;
+  /** Stop listing a folder that cannot be reached. */
+  onForget: (folder: string) => void;
 }
 
+const SECTION_TITLE_KEYS: Record<BackupSectionKind, I18nKey> = {
+  data_folder: "modal.backup.group.data_folder",
+  in_use: "modal.backup.group.in_use",
+  other: "modal.backup.group.other",
+};
+
 /**
- * Every backup in the folder as a collapsible card like the settings sections:
- * its Saves, then its Standard backups, with one select-all.
+ * Every backup in one folder as a collapsible card like the settings
+ * sections: its Saves, then its Standard backups, with one select-all. A
+ * folder Upriv no longer writes to is dimmed; one that cannot be reached
+ * shows why, with Retry and Forget.
  */
 function BackupSection({
   section,
   selection,
   onToggleSection,
   locale,
-  vaultId,
   selected,
   selectionDisabled,
   exportingKeys,
@@ -455,12 +503,18 @@ function BackupSection({
   onDelete,
   onCreateVaultFromBackup,
   onPromoteToSave,
+  renaming,
+  busy,
+  onRenameStart,
+  onRenameCancel,
+  onRename,
+  onRetry,
+  onForget,
 }: BackupSectionProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const title = t(
-    section.location === "chosen" ? "modal.backup.group.chosen" : "modal.backup.group.data_folder",
-  );
+  const title = t(SECTION_TITLE_KEYS[section.kind]);
+  const reachable = section.status === "ok";
   return (
     <SettingsAccordionSection
       title={title}
@@ -482,51 +536,104 @@ function BackupSection({
         </>
       }
     >
-      {section.groups.map((group) => (
-        <View key={group.saved ? "saves" : "standard"} style={styles.tier}>
-          <View>
-            <Text style={[typography.body, { fontWeight: "500" }]}>
-              {t(group.saved ? "modal.backup.section.saves" : "modal.backup.section.standard")}
-            </Text>
-            <Text style={[typography.caption, styles.sectionHelp]}>
-              {t(
-                group.saved
-                  ? "modal.backup.section.saves_help"
-                  : "modal.backup.section.standard_help",
-              )}
-            </Text>
-          </View>
-          <View style={styles.sectionList}>
-            {group.entries.map((entry, index) => {
-              const key = group.keys[index];
-              const fileName = backupEntryFileName(entry, vaultId);
-              return (
-                <BackupRow
-                  key={key}
-                  entry={entry}
-                  locale={locale}
-                  fileName={fileName}
-                  checked={Boolean(onToggleSelected) && selected.has(key)}
-                  selectionDisabled={selectionDisabled}
-                  exporting={exportingKeys.has(key)}
-                  exportPanel={rowExportPanel(key)}
-                  onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
-                  onExport={() => onExport(key)}
-                  onDelete={() => onDelete(key)}
-                  onCreateVaultFromBackup={
-                    onCreateVaultFromBackup
-                      ? () => onCreateVaultFromBackup(entry.stamp, fileName, Boolean(entry.saved))
-                      : undefined
-                  }
-                  onPromoteToSave={
-                    onPromoteToSave && !group.saved ? () => onPromoteToSave(key) : undefined
-                  }
-                />
-              );
-            })}
-          </View>
+      {section.folder ? (
+        <View style={styles.folderRow}>
+          <Text
+            style={[typography.mono, styles.folderPath, { color: colors.onSurfaceVariant }]}
+            numberOfLines={1}
+            ellipsizeMode="middle"
+          >
+            {shownPath(section.folder)}
+          </Text>
+          {reachable ? <RevealPathButton path={section.folder} /> : null}
         </View>
-      ))}
+      ) : null}
+      {section.device ? (
+        <Text style={typography.caption}>
+          {t("modal.backup.folder.written_by", {
+            device: deviceName(section.device.id, section.device.system, t),
+          })}
+        </Text>
+      ) : null}
+      {section.kind === "other" ? (
+        <Text style={typography.caption}>{t("modal.backup.folder.not_in_use")}</Text>
+      ) : null}
+      {reachable ? null : (
+        <View style={[styles.folderProblem, { borderColor: colors.outlineVariant }]}>
+          <Text
+            accessibilityRole="alert"
+            style={[typography.body, { color: colors.onErrorContainer }]}
+          >
+            {t(`folder_list.status.${section.status}`)}
+          </Text>
+          <Text style={typography.caption}>{t("modal.backup.folder.forget_hint")}</Text>
+          <ModalFooterActions layout="dialog">
+            <Button
+              label={t("modal.backup.folder.forget")}
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onPress={() => onForget(section.id)}
+            />
+            <Button
+              label={t("action.retry")}
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onPress={onRetry}
+            />
+          </ModalFooterActions>
+        </View>
+      )}
+      <View style={section.kind === "other" ? styles.notInUse : undefined}>
+        {section.groups.map((group) => (
+          <View key={group.saved ? "saves" : "standard"} style={styles.tier}>
+            <View>
+              <Text style={[typography.body, { fontWeight: "500" }]}>
+                {t(group.saved ? "modal.backup.section.saves" : "modal.backup.section.standard")}
+              </Text>
+              <Text style={[typography.caption, styles.sectionHelp]}>
+                {t(
+                  group.saved
+                    ? "modal.backup.section.saves_help"
+                    : "modal.backup.section.standard_help",
+                )}
+              </Text>
+            </View>
+            <View style={styles.sectionList}>
+              {group.entries.map((entry) => {
+                const key = entry.key;
+                return (
+                  <BackupRow
+                    key={key}
+                    entry={entry}
+                    locale={locale}
+                    checked={Boolean(onToggleSelected) && selected.has(key)}
+                    selectionDisabled={selectionDisabled}
+                    exporting={exportingKeys.has(key)}
+                    folderReachable={reachable}
+                    exportPanel={rowExportPanel(key)}
+                    onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
+                    onExport={() => onExport(key)}
+                    onDelete={() => onDelete(key)}
+                    onCreateVaultFromBackup={
+                      onCreateVaultFromBackup ? () => onCreateVaultFromBackup(entry) : undefined
+                    }
+                    onPromoteToSave={
+                      onPromoteToSave && !group.saved ? () => onPromoteToSave(key) : undefined
+                    }
+                    renameOpen={renaming === key}
+                    busy={busy}
+                    onRenameStart={() => onRenameStart(key)}
+                    onRenameCancel={onRenameCancel}
+                    onRename={(name) => onRename(key, name)}
+                  />
+                );
+              })}
+            </View>
+          </View>
+        ))}
+      </View>
     </SettingsAccordionSection>
   );
 }
@@ -593,11 +700,12 @@ function BackupSelectionBar({
 interface BackupRowProps {
   entry: VaultBackupEntry;
   locale: string;
-  fileName: string;
   checked: boolean;
   selectionDisabled: boolean;
   /** A running export reads this backup: it cannot be moved or deleted until it ends. */
   exporting: boolean;
+  /** Its folder answers, so Open folder can show it. */
+  folderReachable: boolean;
   /** Under the row: this backup's folder step or running export. */
   exportPanel: ReactNode;
   /** Omitted when the list has a single entry: no checkbox. */
@@ -606,25 +714,51 @@ interface BackupRowProps {
   onDelete: () => void;
   onCreateVaultFromBackup?: () => void;
   onPromoteToSave?: () => void;
+  /** The name editor is open under the row. */
+  renameOpen: boolean;
+  busy: boolean;
+  onRenameStart: () => void;
+  onRenameCancel: () => void;
+  onRename: (name: string) => void;
 }
 
+/**
+ * One backup (desktop `BackupRow` parity): Save on the row, its other
+ * actions in one ⋯ menu (Create vault, Rename, Export, Open folder, Delete).
+ * Open folder opens the folder the zip is in: the Files app would open the
+ * zip itself in a viewer.
+ */
 function BackupRow({
   entry,
   locale,
-  fileName,
   checked,
   selectionDisabled,
   exporting,
+  folderReachable,
   exportPanel,
   onToggleSelected,
   onExport,
   onDelete,
   onCreateVaultFromBackup,
   onPromoteToSave,
+  renameOpen,
+  busy,
+  onRenameStart,
+  onRenameCancel,
+  onRename,
 }: BackupRowProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const { stacked, measure } = useRowButtonStack();
+  const reveal = useRevealFolder();
+  const title = entry.name || entry.fileName;
+  const folder = folderReachable
+    ? reveal.locate(entry.path.slice(0, entry.path.lastIndexOf("/")))
+    : null;
+  const held = selectionDisabled || exporting;
+  const titleStyle = entry.name
+    ? [typography.body, { fontWeight: "500" as const }]
+    : typography.mono;
 
   return (
     <View
@@ -651,7 +785,7 @@ function BackupRow({
               checked={checked}
               disabled={selectionDisabled}
               onChange={onToggleSelected}
-              label={fileName}
+              label={title}
             />
           ) : null}
           <View style={[styles.rowIcon, { backgroundColor: colors.surfaceContainerHighest }]}>
@@ -665,16 +799,16 @@ function BackupRow({
           >
             <View style={styles.rowTitleRow}>
               <TextWidthProbe
-                text={fileName}
-                style={[typography.mono, styles.rowTitle]}
+                text={title}
+                style={[titleStyle, styles.rowTitle]}
                 onWidth={(width) => measure("textWidth", width)}
               />
               <Text
-                style={[typography.mono, styles.rowTitle, { color: colors.onSurface }]}
+                style={[titleStyle, styles.rowTitle, { color: colors.onSurface }]}
                 numberOfLines={1}
                 ellipsizeMode="middle"
               >
-                {fileName}
+                {title}
               </Text>
               {entry.saved ? (
                 <View
@@ -704,35 +838,120 @@ function BackupRow({
               onPress={onPromoteToSave}
             />
           ) : null}
-          {onCreateVaultFromBackup ? (
-            <IconButton
-              label={t("action.create_vault_from_backup")}
-              icon="add"
-              size={18}
-              tone="muted"
-              disabled={selectionDisabled}
-              onPress={onCreateVaultFromBackup}
+          <DropdownPanel
+            label={title}
+            heading={title}
+            align="right"
+            minWidth={220}
+            trigger={
+              <IconButton
+                label={t("action.row_options", { name: title })}
+                icon="more-horizontal"
+                size={18}
+                tone="muted"
+              />
+            }
+          >
+            {onCreateVaultFromBackup ? (
+              <MenuActionItem
+                icon="add"
+                label={t("action.create_vault_from_backup")}
+                disabled={selectionDisabled}
+                onPress={onCreateVaultFromBackup}
+              />
+            ) : null}
+            <MenuActionItem
+              icon="pencil"
+              label={t("modal.backup.rename")}
+              selected={renameOpen}
+              disabled={held}
+              onPress={renameOpen ? onRenameCancel : onRenameStart}
             />
-          ) : null}
-          <IconButton
-            label={t("modal.backup.export")}
-            icon="download"
-            size={18}
-            tone="muted"
-            disabled={selectionDisabled || exporting}
-            onPress={onExport}
-          />
-          <IconButton
-            label={t("action.delete")}
-            icon="trash"
-            size={18}
-            tone="muted"
-            disabled={selectionDisabled || exporting}
-            onPress={onDelete}
-          />
+            <MenuActionItem
+              icon="download"
+              label={t("modal.backup.export")}
+              disabled={held}
+              onPress={onExport}
+            />
+            {folder ? (
+              <MenuActionItem
+                icon="file-manager"
+                label={t("action.open_folder")}
+                onPress={() => reveal.open(folder)}
+              />
+            ) : null}
+            <MenuActionItem
+              icon="trash"
+              label={t("action.delete")}
+              danger
+              disabled={held}
+              onPress={onDelete}
+            />
+          </DropdownPanel>
         </View>
       </View>
+      {reveal.toast}
+      {renameOpen ? (
+        <View style={styles.rowExport}>
+          <BackupRenameEditor
+            initial={entry.name}
+            busy={busy}
+            onSave={onRename}
+            onCancel={onRenameCancel}
+          />
+        </View>
+      ) : null}
       {exportPanel ? <View style={styles.rowExport}>{exportPanel}</View> : null}
+    </View>
+  );
+}
+
+/** A backup's name: naming it pins it, an empty name takes the name away. */
+function BackupRenameEditor({
+  initial,
+  busy,
+  onSave,
+  onCancel,
+}: {
+  initial: string;
+  busy: boolean;
+  onSave: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const { colors, typography } = useTheme();
+  const [name, setName] = useState(initial);
+  const unchanged = normalizeBackupName(name) === initial;
+  const tooLong = Array.from(name.trim()).length > BACKUP_NAME_MAX_CHARS;
+  const canSave = !unchanged && !tooLong && !busy;
+  return (
+    <View style={styles.renameEditor}>
+      <ThemedInput
+        value={name}
+        autoFocus
+        accessibilityLabel={t("modal.backup.rename_label")}
+        placeholder={t("modal.backup.rename_label")}
+        onChangeText={setName}
+        onSubmitEditing={() => {
+          if (canSave) onSave(name);
+        }}
+      />
+      <Text
+        accessibilityRole={tooLong ? "alert" : "text"}
+        style={[typography.caption, tooLong ? { color: colors.onErrorContainer } : null]}
+      >
+        {t("modal.backup.rename_hint", { max: String(BACKUP_NAME_MAX_CHARS) })}
+      </Text>
+      <ModalFooterActions layout="dialog">
+        <Button label={t("action.cancel")} variant="ghost" size="sm" onPress={onCancel} />
+        <Button
+          label={t("modal.backup.rename_save")}
+          variant="secondary"
+          size="sm"
+          disabled={!canSave}
+          onPress={() => onSave(name)}
+        />
+      </ModalFooterActions>
     </View>
   );
 }
@@ -767,6 +986,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
+  folderRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  folderPath: { flex: 1, minWidth: 0, fontSize: 11 },
+  folderProblem: {
+    borderWidth: 1,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  notInUse: { opacity: 0.75 },
+  renameEditor: { gap: spacing.sm },
   tier: { gap: spacing.sm },
   sectionHelp: { marginTop: 2, lineHeight: 18 },
   sectionList: { gap: spacing.sm },

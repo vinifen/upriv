@@ -8,7 +8,7 @@
 import {
   isVaultDisplayStatusQuiet,
   listHasVaultBlockingDataFolderChange,
-  listHasVaultBlockingWorkspaceClear,
+  listHasLiveVaultSession,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   type VaultDisplayStatus,
@@ -108,7 +108,7 @@ export function configEditGateAllows(gate: ConfigEditGate, ctx: ConfigEditContex
       if (ctx.pipeline?.dataFolderExporting) return false;
       return !listHasVaultBlockingDataFolderChange(ctx.vaults ?? [], ctx.pipeline);
     case "no_open_session":
-      return !listHasVaultBlockingWorkspaceClear(ctx.vaults ?? [], ctx.pipeline);
+      return !listHasLiveVaultSession(ctx.vaults ?? [], ctx.pipeline);
   }
 }
 

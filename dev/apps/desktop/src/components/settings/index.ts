@@ -2,6 +2,7 @@ export { VaultSettingsSection } from "./VaultSettingsSection";
 export { IntegerInput } from "./IntegerInput";
 export { VaultChangePasswordFields } from "./VaultChangePasswordFields";
 export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
+export { UnlockedFolderDriverNotice, useUnlockedFolderDriver } from "./unlockedFolderDriver";
 export {
   PolicyRadioOption,
   settingsControlClass,
@@ -9,12 +10,13 @@ export {
   SettingsField,
   SettingsFormGrid,
   DisplayNameFieldError,
-  BackupFolderChoices,
+  usePickFolder,
+  useRowStatuses,
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
   VaultSettingsDangerZoneSection,
   VaultSettingsKdfSection,
-  VaultSettingsMountSection,
+  VaultSettingsUnlockedFolderSection,
   VaultSettingsSevenZipSection,
   VaultSettingsStorageSection,
   VaultSettingsVaultSection,
