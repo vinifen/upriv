@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react
 import {
   vaultRowControls,
   resolveVaultListStatus,
+  isVaultDeleteUnfinished,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
@@ -32,6 +33,7 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
+import { VaultPasswordChangeLine } from "./VaultPasswordChangeLine";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
 import { VaultFileManagerIndicator } from "@/features/vaults/file-manager";
@@ -61,11 +63,15 @@ interface VaultRowProps {
   onDragCancel: () => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onOpenSettings: (vault: VaultListItem, area: VaultSettingsAreaId) => void;
+  /** The Delete vault window, the last entry of the Settings menu. */
+  onOpenDelete: (vault: VaultListItem) => void;
   onUnlock: (vault: VaultListItem) => void;
   onLock: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
   /** Stop the work the row shows (`pipelineListStatus.rowWork`). */
   onStopWork: (vault: VaultListItem) => void;
+  /** Continue (`now` false) or Delete now (`now` true) for a vault being deleted. */
+  onDeleteWork: (vault: VaultListItem, now: boolean) => void;
   onExport: (vault: VaultListItem) => void;
   onOpenBackups: (vault: VaultListItem) => void;
   onOpenNote: (vault: VaultListItem) => void;
@@ -94,10 +100,12 @@ export function VaultRow({
   onDragCancel,
   onOpenFileManager,
   onOpenSettings,
+  onOpenDelete,
   onUnlock,
   onLock,
   onCloseNow,
   onStopWork,
+  onDeleteWork,
   onExport,
   onOpenBackups,
   onOpenNote,
@@ -109,12 +117,7 @@ export function VaultRow({
   const { colors, typography, theme } = useTheme();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
-  const statusLabelKey = vaultStatusLabelKey(
-    status,
-    vault.id,
-    pipelineListStatus,
-    vault.autoClosed === true,
-  );
+  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus, vault);
   const isOpen = status === "open";
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
   const density = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
@@ -128,7 +131,7 @@ export function VaultRow({
   const lastAccessedText =
     variant === "block" || comfortable ? lastAccessedLabel : lastAccessedWhen;
   const work = pipelineListStatus.rowWork?.[vault.id] ?? null;
-  const role = vaultRowButtonRole(status, work);
+  const role = vaultRowButtonRole(status, work, isVaultDeleteUnfinished(vault, pipelineListStatus));
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
   const claimTouch = () => claimRowArmTouch(vault.id);
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
@@ -206,11 +209,13 @@ export function VaultRow({
       onOpenNote={onOpenNote}
       onOpenVaultInfo={onOpenVaultInfo}
       onOpenSettings={onOpenSettings}
+      onOpenDelete={onOpenDelete}
       onExportVault={onExport}
       onOpenFileManager={onOpenFileManager}
       onLockVault={onLock}
       onUnlockVault={onUnlock}
       onCloseNow={onCloseNow}
+      onDeleteWork={onDeleteWork}
       // Another control in the row puts an armed button back to normal.
       onTouchStart={claimRowTouch ? disarmRowButton : undefined}
     />
@@ -250,6 +255,7 @@ export function VaultRow({
           {lastAccessedOrElapsed}
         </View>
       </View>
+      <VaultPasswordChangeLine vault={vault} />
       <VaultPlainRecordLine
         vault={vault}
         onRetry={onPlainRecordRetry}
@@ -281,6 +287,7 @@ export function VaultRow({
           {lastAccessedOrElapsed}
         </View>
       </View>
+      <VaultPasswordChangeLine vault={vault} />
       <VaultPlainRecordLine
         vault={vault}
         onRetry={onPlainRecordRetry}
@@ -302,6 +309,7 @@ export function VaultRow({
         onLock={() => onLock(vault)}
         onUnlock={() => onUnlock(vault)}
         onStop={() => onStopWork(vault)}
+        onContinueDelete={() => onDeleteWork(vault, false)}
       />
     </View>
   );

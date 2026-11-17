@@ -14,7 +14,7 @@ import { FieldHint, FieldLabel, PasswordInput, RadioGroup, Warning } from "./set
 
 export function VaultChangeKdfFields({
   currentPreset,
-  rewrapBlocked,
+  blocked,
   fields,
   onChange,
   passwordFieldError,
@@ -23,7 +23,8 @@ export function VaultChangeKdfFields({
 }: {
   /** Current unlock cost from `store/header/vault.header`. */
   currentPreset: KdfUnlockPreset;
-  rewrapBlocked: boolean;
+  /** Blocked when the vault is not strictly closed (`vault_closed` gate). */
+  blocked: boolean;
   fields: ChangeKdfFieldsState;
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
   passwordFieldError?: string | null;
@@ -33,15 +34,15 @@ export function VaultChangeKdfFields({
   const { t } = useTranslation();
   const presetChanged = fields.nextPreset !== currentPreset;
   const downgrade = changeKdfFormIsDowngrade(currentPreset, fields.nextPreset);
-  const locked = rewrapBlocked || busy;
+  const locked = blocked || busy;
 
   return (
     <View style={{ gap: spacing.md }}>
-      {rewrapBlocked ? (
+      {blocked ? (
         <FieldHint>{t(requireVaultConfigEditLockedI18nKey("action.change_kdf"))}</FieldHint>
       ) : null}
       <FieldHint>{t("modal.settings.change_kdf_intro")}</FieldHint>
-      <FieldHint>{t("warning.kdf_change_backups")}</FieldHint>
+      <FieldHint>{t("vault.change_kdf.backups_note")}</FieldHint>
       <FieldLabel disabled={locked}>{t("vault.change_kdf.current")}</FieldLabel>
       <PasswordInput
         value={fields.password}

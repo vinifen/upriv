@@ -100,6 +100,9 @@ impl KdfUnlockPreset {
 pub const KEK_LEN: usize = 32;
 pub const SALT_LEN: usize = 16;
 
+/// The key a password derives to lock and open one header block's keyring.
+pub type Kek = Zeroizing<[u8; KEK_LEN]>;
+
 /// Shipping min `m` (32 MiB preset). Smaller header values are refuse-closed (not a cheaper wrap).
 pub const MIN_KDF_MEMORY_KIB: u32 = 32 * 1024;
 /// Shipping max `m` (2 GiB preset). Larger header values are treated as DoS, not a cheaper wrap.
@@ -121,7 +124,7 @@ pub fn derive_kek(
     memory_kib: u32,
     time_cost: u32,
     p: u32,
-) -> Result<Zeroizing<[u8; KEK_LEN]>> {
+) -> Result<Kek> {
     if !kdf_params_in_bounds(memory_kib, time_cost, p) {
         return Err(UprivError::VaultStoreInvalid {
             path: std::path::PathBuf::from("header/vault.header"),

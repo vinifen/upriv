@@ -15,7 +15,7 @@ interface VaultNoteModalProps {
   open: boolean;
   onClose: () => void;
   onNoteChange: (vaultId: string, note: string) => Promise<boolean>;
-  /** Export or rewrap holds the vault, so a note write would only fail in the console. */
+  /** Export or a key change holds the vault, so a note write would only fail in the console. */
   saveHeld?: boolean;
 }
 

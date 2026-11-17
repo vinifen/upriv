@@ -30,6 +30,8 @@ interface VaultLockButtonProps {
   onLock?: () => void;
   onUnlock?: () => void;
   onStop?: () => void;
+  /** Go on with a delete that did not finish. */
+  onContinueDelete?: () => void;
 }
 
 function roleCopy(
@@ -52,6 +54,8 @@ function roleCopy(
         : { icon: "lock", label: "action.lock", hint: null };
     case "unlock":
       return { icon: "lock-open", label: "action.unlock", hint: null };
+    case "continue_delete":
+      return { icon: "trash", label: "action.continue_delete", hint: null };
     case "busy":
       return { icon: "lock-open", label: vaultStatusI18nKey[status] as I18nKey, hint: null };
   }
@@ -59,8 +63,9 @@ function roleCopy(
 
 /**
  * The row's open/close button. While the row's work can stop it is Stop, in
- * the same place. A tap goes through the row's arming, so it may wait for a
- * second tap (System settings); armed, it turns red and pulses.
+ * the same place, and Continue on a delete that did not finish. A tap goes
+ * through the row's arming, so it may wait for a second tap (System
+ * settings); armed, it turns red and pulses.
  */
 export function VaultLockButton({
   status,
@@ -73,6 +78,7 @@ export function VaultLockButton({
   onLock,
   onUnlock,
   onStop,
+  onContinueDelete,
 }: VaultLockButtonProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -96,6 +102,7 @@ export function VaultLockButton({
     if (role === "stop") press(() => onStop?.());
     else if (role === "lock") press(() => onLock?.());
     else if (role === "unlock") press(() => onUnlock?.());
+    else if (role === "continue_delete") press(() => onContinueDelete?.());
     else if (resumeOpenCredential) onUnlock?.();
   };
 

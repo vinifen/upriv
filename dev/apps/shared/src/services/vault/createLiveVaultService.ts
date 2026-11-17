@@ -2,7 +2,12 @@ import { RpcError } from "../../domain/core-rpc/errors";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { ListsSaved, VaultListChanges } from "../../domain/folder-lists";
 import { forgetVaultSettings, rememberVaultSettings } from "./vaultSettingsMemory";
-import type { CreateVaultInput, VaultRenameResult, VaultService } from "./VaultService";
+import type {
+  CreateVaultInput,
+  VaultDeleteInput,
+  VaultRenameResult,
+  VaultService,
+} from "./VaultService";
 import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../../domain/vault-list";
 import type { VaultDeleteOutcome, VaultRow } from "../../domain/vault";
 import type { VaultDiskUsage } from "../../domain/vault-info";
@@ -25,7 +30,8 @@ export interface LiveVaultRpc {
   ) => Promise<ListsSaved>;
   /** Deep rename via `vault_rename` (display name + optional folder migration). */
   rename?: (vaultId: string, displayName: string) => Promise<VaultRenameResult>;
-  deleteVault?: (vaultId: string, outsideBackups: boolean) => Promise<VaultDeleteOutcome>;
+  deleteVault?: (vaultId: string, input: VaultDeleteInput) => Promise<VaultDeleteOutcome>;
+  hurryDelete?: (vaultId: string) => Promise<boolean>;
   exportVaultToFolder?: (
     vaultId: string,
     request: VaultExportRequest,
@@ -97,14 +103,16 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       return result;
     },
 
-    async unregisterSettings(vaultId, outsideBackups = false) {
+    async deleteVault(vaultId, input) {
       if (!rpc.deleteVault) {
         notImplemented("Vault delete");
       }
-      const outcome = await rpc.deleteVault(vaultId, outsideBackups);
+      const outcome = await rpc.deleteVault(vaultId, input);
       forgetVaultSettings(vaultId);
       return outcome;
     },
+
+    hurryDelete: (vaultId) => (rpc.hurryDelete ? rpc.hurryDelete(vaultId) : Promise.resolve(false)),
 
     async exportToFolder(
       vault: VaultRow,

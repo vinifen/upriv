@@ -1,7 +1,12 @@
 import { RpcError } from "../core-rpc/errors";
 import { normalizeStoredName } from "../format/storedName";
 import { parseKdfUnlockPreset, type KdfUnlockPreset } from "../vault-settings/kdf";
-import { STORAGE_MODES, type StorageMode, type VaultSession } from "../vault/types";
+import {
+  STORAGE_MODES,
+  type PasswordChangeState,
+  type StorageMode,
+  type VaultSession,
+} from "../vault/types";
 import { parsePlainRecords } from "../vault-plain/parse";
 import type { VaultListItem } from "./types";
 
@@ -23,8 +28,14 @@ function parseStorageMode(raw: unknown): StorageMode {
 }
 
 function parseSession(raw: unknown): VaultSession | null {
-  if (raw === "open" || raw === "closing" || raw === "recovery") return raw;
+  if (raw === "open" || raw === "closing" || raw === "recovery" || raw === "deleting") {
+    return raw;
+  }
   return null;
+}
+
+function parsePasswordChange(raw: unknown): PasswordChangeState {
+  return raw === "pending" || raw === "unfinished" ? raw : "none";
 }
 
 function parseUnlockPreset(raw: unknown): KdfUnlockPreset | undefined {
@@ -67,6 +78,9 @@ export function parseVaultListItemWire(raw: unknown): VaultListItem {
     plainLeftover: r.plainLeftover === true,
     outsideBackups: r.outsideBackups === true,
     plainRecords: parsePlainRecords(r.plainRecords),
+    keyCount: typeof r.keyCount === "number" ? r.keyCount : undefined,
+    passwordChange: parsePasswordChange(r.passwordChange),
+    deleteUnfinished: r.deleteUnfinished === true,
   };
 }
 

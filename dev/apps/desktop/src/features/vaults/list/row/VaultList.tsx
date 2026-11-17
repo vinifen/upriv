@@ -96,6 +96,7 @@ interface VaultListProps {
   onOpenNote: (vaultId: string) => void;
   onOpenVaultInfo: (vaultId: string) => void;
   onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => void;
+  onOpenDelete: (vaultId: string) => void;
   onOpenGroupSettings: (groupId: string) => void;
   onToggleGroupCollapsed: (groupId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
@@ -105,6 +106,8 @@ interface VaultListProps {
   onCloseNow: (vault: VaultListItem) => void;
   /** Stop the work the row shows (`pipelineListStatus.rowWork`). */
   onStopWork: (vault: VaultListItem) => void;
+  /** Continue (`now` false) or Delete now (`now` true) for a vault being deleted. */
+  onDeleteWork: (vault: VaultListItem, now: boolean) => void;
   /** Check a plain-text folder on record again. */
   onPlainRecordRetry: () => void;
   /** Forget a plain-text folder on record. */
@@ -130,6 +133,7 @@ export function VaultList({
   onOpenNote,
   onOpenVaultInfo,
   onOpenSettings,
+  onOpenDelete,
   onOpenGroupSettings,
   onToggleGroupCollapsed,
   onExportVault,
@@ -138,6 +142,7 @@ export function VaultList({
   onUnlockVault,
   onCloseNow,
   onStopWork,
+  onDeleteWork,
   onPlainRecordRetry,
   onPlainRecordForget,
 }: VaultListProps) {
@@ -281,12 +286,14 @@ export function VaultList({
         onOpenNote={onOpenNote}
         onOpenVaultInfo={onOpenVaultInfo}
         onOpenSettings={onOpenSettings}
+        onOpenDelete={onOpenDelete}
         onExportVault={onExportVault}
         onOpenFileManager={onOpenFileManager}
         onLockVault={onLockVault}
         onUnlockVault={onUnlockVault}
         onCloseNow={onCloseNow}
         onStopWork={onStopWork}
+        onDeleteWork={onDeleteWork}
         onPlainRecordRetry={onPlainRecordRetry}
         onPlainRecordForget={onPlainRecordForget}
       />
@@ -401,12 +408,14 @@ export function VaultList({
               onOpenNote={onOpenNote}
               onOpenVaultInfo={onOpenVaultInfo}
               onOpenSettings={onOpenSettings}
+              onOpenDelete={onOpenDelete}
               onExportVault={onExportVault}
               onOpenFileManager={onOpenFileManager}
               onLockVault={onLockVault}
               onUnlockVault={onUnlockVault}
               onCloseNow={onCloseNow}
               onStopWork={onStopWork}
+              onDeleteWork={onDeleteWork}
               onPlainRecordRetry={onPlainRecordRetry}
               onPlainRecordForget={onPlainRecordForget}
             />
@@ -468,12 +477,14 @@ export function VaultList({
                       onOpenNote={onOpenNote}
                       onOpenVaultInfo={onOpenVaultInfo}
                       onOpenSettings={onOpenSettings}
+                      onOpenDelete={onOpenDelete}
                       onExportVault={onExportVault}
                       onOpenFileManager={onOpenFileManager}
                       onLockVault={onLockVault}
                       onUnlockVault={onUnlockVault}
                       onCloseNow={onCloseNow}
                       onStopWork={onStopWork}
+                      onDeleteWork={onDeleteWork}
                       onPlainRecordRetry={onPlainRecordRetry}
                       onPlainRecordForget={onPlainRecordForget}
                     />

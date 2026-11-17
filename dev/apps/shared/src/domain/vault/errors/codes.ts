@@ -9,6 +9,18 @@ export const VAULT_ERROR_CODES = {
   /** Mapped in Rust `UprivError::VaultNotFound`. */
   NOT_FOUND: "vault_not_found",
   WRONG_PASSWORD: "wrong_password",
+  /** The password opens a header of this vault, but the files are newer: an earlier password. */
+  PASSWORD_OUTDATED: "password_outdated",
+  /**
+   * A password change on this vault did not finish, and this password cannot
+   * settle it: the unlock window asks for the new password.
+   */
+  PASSWORD_CHANGE_INTERRUPTED: "password_change_interrupted",
+  /**
+   * No header file reads, or every one is older than the files. The unlock
+   * window offers the rebuild, which reads the header back from the files.
+   */
+  HEADER_UNREADABLE: "vault_header_unreadable",
   VAULT_ALREADY_OPEN: "vault_already_open",
   VAULT_NOT_OPEN: "vault_not_open",
   VAULT_ALREADY_EXISTS: "vault_already_exists",
@@ -49,10 +61,15 @@ export const VAULT_ERROR_CODES = {
    * is lost and the files are not. The unlock window offers the rebuild.
    */
   INDEX_UNREADABLE: "vault_index_unreadable",
-  /** A rebuild was asked for a vault whose index opens. */
+  /** A rebuild was asked for a vault whose header and index open. */
   INDEX_READABLE: "vault_index_readable",
-  /** The copy a rebuild pins first does not fit (`details.needed`, `details.available`). */
-  REBUILD_SPACE_SHORT: "vault_rebuild_space_short",
+  /**
+   * A password change needs room for its largest file, twice the index, and a
+   * margin (`details.needed`, `details.available`).
+   */
+  PASSWORD_CHANGE_SPACE_SHORT: "password_change_space_short",
+  /** The vault is being deleted, or a delete of it did not finish. */
+  VAULT_DELETING: "vault_deleting",
   VAULT_LOCKED: "vault_locked",
   MOUNT_FAILED: "vault_mount_failed",
   /** Windows directory mount needs NTFS or ReFS. exFAT and FAT cannot hold it. */
@@ -61,16 +78,14 @@ export const VAULT_ERROR_CODES = {
   IMPORT_ARCHIVE_NOT_FOUND: "import_archive_not_found",
   /** File-manager OS path is relative, missing, a symlink, or inside `store/`. */
   IMPORT_SOURCE_UNREADABLE: "import_source_unreadable",
-  /** Export or rewrap of this vault refused while it is open or closing. */
+  /** Export, a password or unlock-RAM change, or Finish refused while the vault is open or closing. */
   VAULT_MUST_BE_CLOSED: "vault_must_be_closed",
-  /** Open refused while export, password change, or unlock-RAM change holds the vault. */
+  /** Open refused while export, a password change, or an unlock-RAM change holds the vault. */
   VAULT_BUSY: "vault_busy",
-  /** Safety zip failed, so the password change, unlock-RAM change, or rebuild changed nothing. */
-  VAULT_BACKUP_FAILED: "vault_backup_failed",
   /** New password matches the current one. Not a broken vault header. */
-  REWRAP_PASSWORD_UNCHANGED: "rewrap_password_unchanged",
+  PASSWORD_UNCHANGED: "password_unchanged",
   /** Unlock RAM preset matches the header. Not a broken vault header. */
-  REWRAP_KDF_UNCHANGED: "rewrap_kdf_unchanged",
+  UNLOCK_RAM_UNCHANGED: "unlock_ram_unchanged",
   /** A vault export or the data-folder export chose a folder inside a `.upriv`. */
   EXPORT_DESTINATION_RESERVED: "export_destination_reserved",
   /** Delete or pin of a backup a backup export is reading. */

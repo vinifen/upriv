@@ -56,12 +56,14 @@ import {
   useJobService,
   useVaultFileSystemService,
   useVaultLifecycleService,
+  useVaultSecurityService,
 } from "@/platform/services";
 import {
   TOAST_DEFAULT_MS,
   hereDevice,
   useClosingDisplayHold,
   useDeviceInfo,
+  useKeyCopiesAfterOpen,
   usePlainRemoveJob,
   useVaultPipelineRun,
 } from "@upriv/shared/react";
@@ -118,6 +120,7 @@ export function useVaultLifecycle({
   const lifecycleService = useVaultLifecycleService();
   const fs = useVaultFileSystemService();
   const jobs = useJobService();
+  const updateKeyCopies = useKeyCopiesAfterOpen(useVaultSecurityService());
   const {
     getEntry,
     subscribe: subscribeFileManager,
@@ -459,6 +462,7 @@ export function useVaultLifecycle({
           );
           openSwitchesRef.current.delete(vaultId);
           if (switched) showToast(switched);
+          updateKeyCopies(vaultId);
         },
         onError: (errorI18nKey) => {
           openSwitchesRef.current.delete(vaultId);
@@ -529,6 +533,7 @@ export function useVaultLifecycle({
       settingsPersistVaultIdsRef,
       showToast,
       t,
+      updateKeyCopies,
       vaultName,
     ],
   );

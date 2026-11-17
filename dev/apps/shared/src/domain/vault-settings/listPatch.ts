@@ -29,7 +29,7 @@ export function vaultSettingsIdentityListPatch(
   });
 }
 
-/** List row after an unlock-RAM rewrap. Other fields stay as they are on the row. */
+/** List row after an unlock-RAM change. Other fields stay as they are on the row. */
 export function applyVaultUnlockPreset(
   vault: VaultListItem,
   unlockPreset: KdfUnlockPreset,

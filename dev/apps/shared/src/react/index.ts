@@ -50,12 +50,26 @@ export {
   type VaultRebuildTarget,
 } from "./useVaultRebuildJob";
 export {
-  useVaultRewrapJob,
-  type VaultRewrapJob,
-  type VaultRewrapJobEvents,
-  type VaultRewrapOutcome,
-  type VaultRewrapTarget,
-} from "./useVaultRewrapJob";
+  usePasswordChangeJob,
+  type PasswordChangeJob,
+  type PasswordChangeJobEvents,
+  type PasswordChangeOutcome,
+  type PasswordChangeTarget,
+} from "./usePasswordChangeJob";
+export {
+  useUnlockRamChangeJob,
+  type UnlockRamChangeJob,
+  type UnlockRamChangeJobEvents,
+  type UnlockRamChangeOutcome,
+  type UnlockRamChangeTarget,
+} from "./useUnlockRamChangeJob";
+export { useKeyCopiesAfterOpen } from "./useKeyCopiesAfterOpen";
+export {
+  useVaultDeleteJob,
+  type VaultDeleteJob,
+  type VaultDeleteJobEvents,
+  type VaultDeleteTarget,
+} from "./useVaultDeleteJob";
 export {
   useVaultExportJob,
   type VaultExportJobEvents,

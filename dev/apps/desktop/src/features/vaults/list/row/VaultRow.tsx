@@ -5,6 +5,7 @@ import { useTranslation } from "@/i18n";
 import {
   vaultRowControls,
   resolveVaultListStatus,
+  isVaultDeleteUnfinished,
   isVaultOpenResumeTarget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
@@ -34,6 +35,7 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
+import { VaultPasswordChangeLine } from "./VaultPasswordChangeLine";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
 import { vaultRowDensityClass } from "../lib/vaultListView";
@@ -56,12 +58,15 @@ interface VaultRowProps {
   onOpenNote: (vaultId: string) => void;
   onOpenVaultInfo: (vaultId: string) => void;
   onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => void;
+  onOpenDelete: (vaultId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
   onStopWork: (vault: VaultListItem) => void;
+  /** Continue (`now` false) or Delete now (`now` true) for a vault being deleted. */
+  onDeleteWork: (vault: VaultListItem, now: boolean) => void;
   /** Check a plain-text folder on record again. */
   onPlainRecordRetry: () => void;
   /** Forget a plain-text folder on record. */
@@ -89,24 +94,21 @@ export function VaultRow({
   onOpenNote,
   onOpenVaultInfo,
   onOpenSettings,
+  onOpenDelete,
   onExportVault,
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
   onCloseNow,
   onStopWork,
+  onDeleteWork,
   onPlainRecordRetry,
   onPlainRecordForget,
 }: VaultRowProps) {
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
-  const statusLabelKey = vaultStatusLabelKey(
-    status,
-    vault.id,
-    pipelineListStatus,
-    vault.autoClosed === true,
-  );
+  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus, vault);
   const isOpen = status === "open";
   const dragHeld = vaultRowControls(vault, pipelineListStatus).dragBlocked;
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
@@ -128,7 +130,7 @@ export function VaultRow({
   const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
   const work = pipelineListStatus.rowWork?.[vault.id] ?? null;
-  const role = vaultRowButtonRole(status, work);
+  const role = vaultRowButtonRole(status, work, isVaultDeleteUnfinished(vault, pipelineListStatus));
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
@@ -241,6 +243,7 @@ export function VaultRow({
                 }
               />
             </div>
+            <VaultPasswordChangeLine vault={vault} />
             <VaultPlainRecordLine
               vault={vault}
               onRetry={onPlainRecordRetry}
@@ -265,11 +268,13 @@ export function VaultRow({
             onOpenNote={onOpenNote}
             onOpenVaultInfo={onOpenVaultInfo}
             onOpenSettings={onOpenSettings}
+            onOpenDelete={onOpenDelete}
             onExportVault={onExportVault}
             onOpenFileManager={onOpenFileManager}
             onLockVault={onLockVault}
             onUnlockVault={onUnlockVault}
             onCloseNow={onCloseNow}
+            onDeleteWork={onDeleteWork}
           />
         </span>
         <VaultLockButton
@@ -283,6 +288,7 @@ export function VaultRow({
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}
           onStop={() => onStopWork(vault)}
+          onContinueDelete={() => onDeleteWork(vault, false)}
         />
       </div>
     </article>

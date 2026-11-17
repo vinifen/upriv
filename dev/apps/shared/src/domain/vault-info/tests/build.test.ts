@@ -19,6 +19,7 @@ function entry(fileName: string, createdAt: string, sizeBytes: number): VaultBac
     sizeBytes,
     saved: false,
     path: `/data/.upriv/vaults/notes/backups/${fileName}`,
+    lowerUnlockRam: false,
   };
 }
 
@@ -66,6 +67,7 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
       path: "/mnt/ssd/upriv-unlocked/Notes",
       mounted: true,
     },
+    keyStatus: { filesWaiting: 0, keyCopiesDue: false, keyCopiesUpdating: false },
     storePath: "/data/.upriv/vaults/notes/store/",
     backupsPath: "/data/.upriv/vaults/notes/backups/",
     storeOpenPath: "/data/.upriv/vaults/notes/store",
@@ -190,7 +192,53 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "display_status")).toBe("vault.status.queued");
   });
 
-  it("labels export and rewrap on the closed vault", () => {
+  it("shows the keys and, while open, the files that wait and the key copies", () => {
+    const open = buildVaultInfoSections(
+      snapshot({
+        vault: vaultListItemFixture({
+          id: "notes",
+          session: "open",
+          keyCount: 3,
+          passwordChange: "unfinished",
+        }),
+        keyStatus: { filesWaiting: 7, keyCopiesDue: true, keyCopiesUpdating: false },
+      }),
+      t,
+    );
+    expect(field(open, "key_count")).toBe("3");
+    expect(field(open, "password_change")).toBe("modal.info.value.password_change.unfinished");
+    expect(field(open, "files_waiting")).toBe("7");
+    expect(field(open, "key_copies")).toBe("modal.info.value.key_copies.due");
+    const updating = buildVaultInfoSections(
+      snapshot({ keyStatus: { filesWaiting: 0, keyCopiesDue: true, keyCopiesUpdating: true } }),
+      t,
+    );
+    expect(field(updating, "key_copies")).toBe("modal.info.value.key_copies.updating");
+
+    const closed = buildVaultInfoSections(
+      snapshot({
+        vault: vaultListItemFixture({ id: "notes", session: null, passwordChange: "pending" }),
+        keyStatus: null,
+      }),
+      t,
+    );
+    expect(field(closed, "password_change")).toBe("modal.info.value.password_change.pending");
+    expect(field(closed, "key_count")).toBe("—");
+    expect(field(closed, "files_waiting")).toBeUndefined();
+    expect(field(closed, "key_copies")).toBeUndefined();
+  });
+
+  it("labels a delete and the closed-vault work", () => {
+    const deleting = snapshot({
+      vault: vaultListItemFixture({ id: "notes", session: "deleting", deleteUnfinished: true }),
+      keyStatus: null,
+    });
+    const sections = buildVaultInfoSections(deleting, t);
+    expect(field(sections, "session")).toBe("modal.info.value.session.deleting");
+    expect(field(sections, "display_status")).toBe("vault.status.delete_unfinished");
+  });
+
+  it("labels export and the password and unlock-RAM changes on the closed vault", () => {
     const vault = snapshot({ vault: vaultListItemFixture({ id: "notes", session: null }) });
     expect(
       field(buildVaultInfoSections(vault, t, { exportingVaultIds: ["notes"] }), "display_status"),

@@ -8,7 +8,6 @@ interface VaultSettingsSectionProps {
   /** When set, expansion is controlled by the parent (e.g. help search). */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  tone?: "default" | "danger";
   /** End of the header, outside the expand button, so its controls never toggle the section. */
   aside?: ReactNode;
   children: ReactNode;
@@ -19,7 +18,6 @@ export function VaultSettingsSection({
   defaultOpen = false,
   open: openProp,
   onOpenChange,
-  tone = "default",
   aside,
   children,
 }: VaultSettingsSectionProps) {
@@ -52,12 +50,7 @@ export function VaultSettingsSection({
           className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-3 text-left sm:gap-3 sm:px-4 sm:py-4"
         >
           <DisclosureChevron open={open} className="text-on-surface-variant" />
-          <span
-            className={[
-              "font-mono text-xs font-medium uppercase tracking-wide",
-              tone === "danger" ? "text-on-error-container" : "text-on-surface",
-            ].join(" ")}
-          >
+          <span className="font-mono text-xs font-medium uppercase tracking-wide text-on-surface">
             {title}
           </span>
         </button>

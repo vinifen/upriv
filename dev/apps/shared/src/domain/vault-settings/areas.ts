@@ -10,47 +10,59 @@ import {
 } from "../vault/types";
 import { vaultSettingsSectionsForStorage, type VaultSettingsSectionId } from "./types";
 
-/** Top-level vault settings screens (each has its own footer Save). */
-export const VAULT_SETTINGS_AREAS = ["preferences", "password", "kdf", "group"] as const;
+/**
+ * Screens of the vault settings window. Each has its own footer action: Save,
+ * Change password (or Finish), or Change unlock RAM.
+ */
+const VAULT_SETTINGS_AREAS = ["preferences", "password", "kdf", "group"] as const;
 
 export type VaultSettingsAreaId = (typeof VAULT_SETTINGS_AREAS)[number];
 
-export const VAULT_SETTINGS_AREA_I18N = {
+/**
+ * Entries of a vault row's Settings menu: the settings screens, then Delete
+ * vault, which opens a window of its own outside vault settings.
+ */
+export type VaultSettingsMenuEntry = VaultSettingsAreaId | "delete";
+
+export const VAULT_SETTINGS_MENU_I18N = {
   preferences: "modal.settings.area.preferences",
   password: "modal.settings.area.password",
   kdf: "modal.settings.area.kdf",
   group: "modal.settings.area.group",
-} as const satisfies Record<VaultSettingsAreaId, I18nKey>;
+  delete: "modal.delete_vault.title",
+} as const satisfies Record<VaultSettingsMenuEntry, I18nKey>;
 
 export function vaultSettingsAreaTitleKey(area: VaultSettingsAreaId): I18nKey {
-  return VAULT_SETTINGS_AREA_I18N[area];
+  return VAULT_SETTINGS_MENU_I18N[area];
 }
 
 /**
- * Gear-menu screens. Password and unlock RAM need a closed vault
- * (`action.change_password` / `action.change_kdf`). Open, recovery, and a
- * pipeline omit those two entries. The mode does not: both storage modes
+ * The Settings menu of a vault row. Password and unlock RAM need a closed
+ * vault (`action.change_password` / `action.change_kdf`). Open, recovery, and
+ * a pipeline omit those two entries. The mode does not: both storage modes
  * unlock `store/` with the same password and unlock RAM.
- * The one rewrap already running stays in the menu so that screen can reopen
- * and show the same countdown.
+ * The change already running stays in the menu so that screen can reopen
+ * and show its progress. Delete vault is always last; its window says when a
+ * delete must wait. A vault being deleted offers that window alone, so it can
+ * reopen with its progress or Continue.
  */
-export function vaultSettingsMenuAreas(
+export function vaultSettingsMenuEntries(
   vault: VaultRow,
   pipeline: VaultPipelineListStatus = {},
-): readonly VaultSettingsAreaId[] {
-  const rewrapAllowed =
+): readonly VaultSettingsMenuEntry[] {
+  if (resolveVaultListStatus(vault, pipeline) === "deleting") return ["delete"];
+  const changesAllowed =
     vaultConfigEditAllowed("action.change_password", vault, pipeline) &&
     vaultConfigEditAllowed("action.change_kdf", vault, pipeline);
-  if (rewrapAllowed) return VAULT_SETTINGS_AREAS;
   const inFlight = pipeline.passwordChangeVaultIds?.includes(vault.id)
     ? "password"
     : pipeline.kdfChangeVaultIds?.includes(vault.id)
       ? "kdf"
       : null;
-  return VAULT_SETTINGS_AREAS.filter((area) => {
-    if (area !== "password" && area !== "kdf") return true;
-    return area === inFlight;
-  });
+  const areas = VAULT_SETTINGS_AREAS.filter(
+    (area) => changesAllowed || (area !== "password" && area !== "kdf") || area === inFlight,
+  );
+  return [...areas, "delete"];
 }
 
 /** Which row controls are closed for this vault's list status. */
@@ -65,7 +77,10 @@ export type VaultRowControls = {
    * the whole menu is closed it stays, greyed with the rest.
    */
   noteHidden: boolean;
-  /** Settings gear. Open during a password or unlock-RAM change so that countdown can reopen. */
+  /**
+   * Settings gear. Open during a password or unlock-RAM change, and a delete,
+   * so that window can reopen with its progress.
+   */
   settingsGearBlocked: boolean;
   /** Settings Save, including a screen that was already open. */
   settingsSaveBlocked: boolean;
@@ -86,9 +101,10 @@ const SETTINGS_GEAR_BLOCKED = new Set<VaultDisplayStatus>([
 ]);
 
 /**
- * `vault_config_save` returns `vault_busy` while export, a backup, or rewrap
- * holds the vault. Removing a leftover folder ends with the folder gone, so
- * its folder and mode wait too.
+ * `vault_config_save` returns `vault_busy` while export, a backup, or a
+ * password or unlock-RAM change holds the vault, and `vault_deleting` once a
+ * delete began. Removing a leftover folder ends with the folder gone, so its
+ * folder and mode wait too.
  */
 const CONFIG_WRITE_BLOCKED = new Set<VaultDisplayStatus>([
   "exporting",
@@ -96,6 +112,7 @@ const CONFIG_WRITE_BLOCKED = new Set<VaultDisplayStatus>([
   "recovering",
   "changing_password",
   "changing_kdf",
+  "deleting",
 ]);
 
 export function vaultRowControls(
@@ -118,12 +135,13 @@ export function vaultRowControls(
 }
 
 /** Glyph names shared by desktop and mobile `Icon` catalogs. */
-export const VAULT_SETTINGS_AREA_ICON = {
+export const VAULT_SETTINGS_MENU_ICON = {
   preferences: "settings",
   password: "lock",
   kdf: "cpu",
   group: "layers",
-} as const satisfies Record<VaultSettingsAreaId, IconName>;
+  delete: "trash",
+} as const satisfies Record<VaultSettingsMenuEntry, IconName>;
 
 /** Config-only sections grouped under Preferences. */
 export function vaultSettingsPreferenceSections(

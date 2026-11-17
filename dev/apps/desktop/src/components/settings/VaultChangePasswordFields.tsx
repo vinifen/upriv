@@ -6,7 +6,7 @@ import {
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { createVaultErrorI18nKey } from "@/lib/errorMessages";
-import { PasswordInput, PasswordWeaknessNotice } from "@/components/ui";
+import { PasswordInput, PasswordWeaknessNotice, SwitchRow } from "@/components/ui";
 import {
   settingsControlClass,
   settingsInvalidControlClass,
@@ -16,14 +16,17 @@ import {
 interface VaultChangePasswordFieldsProps {
   fields: ChangePasswordFieldsState;
   onChange: (patch: Partial<ChangePasswordFieldsState>) => void;
+  /** **Back up first**: on each time the window opens. */
+  backUpFirst: boolean;
+  onBackUpFirstChange: (on: boolean) => void;
   /** What is wrong with the new password; `null` when nothing is. */
   weakness: PasswordWeakness | null;
-  /** Wrong current password — ring and message on that field. */
+  /** A refused current password — ring and message on that field. */
   passwordFieldError?: string | null;
-  /** Form-level failure (backup, closed vault, mismatch). */
+  /** Form-level failure (no room, closed vault, mismatch). */
   error?: string | null;
-  /** Blocked when vault is not strictly closed (`vault_closed` gate). */
-  rewrapBlocked?: boolean;
+  /** Blocked when the vault is not strictly closed (`vault_closed` gate). */
+  blocked?: boolean;
   /** This change is already running. */
   busy?: boolean;
 }
@@ -31,10 +34,12 @@ interface VaultChangePasswordFieldsProps {
 export function VaultChangePasswordFields({
   fields,
   onChange,
+  backUpFirst,
+  onBackUpFirstChange,
   weakness,
   passwordFieldError,
   error,
-  rewrapBlocked = false,
+  blocked = false,
   busy = false,
 }: VaultChangePasswordFieldsProps) {
   const { t } = useTranslation();
@@ -45,11 +50,11 @@ export function VaultChangePasswordFields({
 
   const passwordsMatch =
     fields.newPassword.length > 0 && fields.newPassword === fields.confirmPassword;
-  const locked = rewrapBlocked || busy;
+  const locked = blocked || busy;
 
   return (
     <div className="space-y-3">
-      {rewrapBlocked ? (
+      {blocked ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
           {t(requireVaultConfigEditLockedI18nKey("action.change_password"))}
         </p>
@@ -112,6 +117,19 @@ export function VaultChangePasswordFields({
       {fields.newPassword.length > 0 && fields.newPassword === fields.currentPassword ? (
         <p className="text-xs text-on-error-container">
           {t("vault.change_password.same_as_current")}
+        </p>
+      ) : null}
+
+      <SwitchRow
+        checked={backUpFirst}
+        disabled={locked}
+        onChange={onBackUpFirstChange}
+        label={t("vault.change_password.backup_switch")}
+        hint={t("vault.change_password.backup_note")}
+      />
+      {!backUpFirst ? (
+        <p className="text-xs leading-relaxed text-on-error-container">
+          {t("vault.change_password.backup_off_warn")}
         </p>
       ) : null}
       {error ? <p className="text-xs text-on-error-container">{error}</p> : null}

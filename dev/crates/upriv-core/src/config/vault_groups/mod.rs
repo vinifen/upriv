@@ -535,7 +535,7 @@ pub fn known_vault_ids(root: &VaultRoot) -> Result<HashSet<String>> {
                 ids.insert(config.vault.id);
             }
             Err(UprivError::VaultConfigInvalid { .. }) => {
-                if !dir_name.is_empty() {
+                if !dir_name.is_empty() && !crate::vault::vault_folder_is_free(&dir) {
                     ids.insert(dir_name);
                 }
             }

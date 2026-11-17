@@ -119,7 +119,7 @@ const KDF_PRESET_STRENGTH: Record<KdfUnlockPreset, number> = {
   "2gib": 5,
 };
 
-/** True when `next` is weaker offline guessing than `current` (still allowed via rewrap). */
+/** True when `next` is weaker offline guessing than `current` (an unlock-RAM change still allows it). */
 export function kdfPresetIsDowngrade(current: KdfUnlockPreset, next: KdfUnlockPreset): boolean {
   return KDF_PRESET_STRENGTH[next] < KDF_PRESET_STRENGTH[current];
 }

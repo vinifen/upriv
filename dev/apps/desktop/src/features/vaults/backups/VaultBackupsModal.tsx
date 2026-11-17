@@ -904,6 +904,11 @@ function BackupRow({
               </span>
               <span className="font-mono">{formatBytes(entry.sizeBytes)}</span>
             </p>
+            {entry.lowerUnlockRam ? (
+              <p className="mt-0.5 text-xs text-on-surface-variant">
+                {t("modal.backup.lower_unlock_ram")}
+              </p>
+            ) : null}
           </label>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-0.5">

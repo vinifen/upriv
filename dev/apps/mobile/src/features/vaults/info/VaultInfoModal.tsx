@@ -19,6 +19,7 @@ import {
   useFolderListService,
   useVaultLifecycleService,
   useVaultRootService,
+  useVaultSecurityService,
   useVaultService,
 } from "@/platform/services";
 
@@ -45,6 +46,7 @@ export function VaultInfoModal({
   const lifecycleService = useVaultLifecycleService();
   const vaultRootService = useVaultRootService();
   const folderListService = useFolderListService();
+  const securityService = useVaultSecurityService();
   const { snapshot, loadError, loadFailure, retryLoad } = useVaultInfoData({
     vault,
     open,
@@ -55,6 +57,7 @@ export function VaultInfoModal({
     lifecycleService,
     vaultRootService,
     folderListService,
+    securityService,
     fallbackVaultRootBase: "",
   });
 

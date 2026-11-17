@@ -10,7 +10,7 @@ use upriv_core::{
     fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_held_delete, fs_held_list,
     fs_held_restore, fs_import_from_os_path, fs_list_tree, fs_move, fs_os_path, fs_preview_fits,
     fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
-    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
+    hurry_delete, import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
     import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
     import_store_zip, ingest_import_directory, parse_backup_import_path, probe_import_zip_bytes,
     probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path,
@@ -722,8 +722,14 @@ struct VaultDeleteParams {
     /// Also remove what this vault wrote to its folder outside the data folder.
     #[serde(default)]
     outside_backups: bool,
+    /// Delete now: the blobs are removed with no overwrite.
+    #[serde(default)]
+    now: bool,
+    job: String,
 }
 
+/// Delete a closed vault, as a job: each key copy overwritten, then the
+/// folder. A delete that did not finish goes on from what is left.
 pub(super) fn vault_delete(params: Value) -> RpcResponse {
     let parsed: VaultDeleteParams = match serde_json::from_value(params) {
         Ok(v) => v,
@@ -733,7 +739,14 @@ pub(super) fn vault_delete(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match delete_vault(&root, parsed.id.trim(), parsed.outside_backups) {
+    let deleted = delete_vault(
+        &root,
+        parsed.id.trim(),
+        parsed.outside_backups,
+        parsed.now,
+        &parsed.job,
+    );
+    match deleted {
         Ok(outcome) => ok(json!({
             "outside": outcome.outside.as_str(),
             "folders": outcome
@@ -742,6 +755,23 @@ pub(super) fn vault_delete(params: Value) -> RpcResponse {
                 .map(|folder| folder.to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
         })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Delete now for the delete running on a vault: the blobs it has not reached
+/// are removed with no overwrite. `{ running: false }` when none runs.
+pub(super) fn vault_delete_hurry(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match hurry_delete(&root, parsed.id.trim()) {
+        Ok(running) => ok(json!({ "running": running })),
         Err(error) => map_core_err(error),
     }
 }

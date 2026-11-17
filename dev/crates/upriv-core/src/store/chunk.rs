@@ -1,13 +1,18 @@
 //! Logical files as XChaCha20-Poly1305 chunks under `store/data/`.
 //!
 //! One operating-system file per logical file:
-//! `store/data/<hh>/<file_id>.blob`.
-//! Chunks are concatenated inside it. The sealed index stores each chunk's
-//! byte offset. A rewrite writes the new ciphertext into a free span when one
-//! fits, otherwise it appends. The previous generation stays until the index
-//! that names the new offset is sealed. Dead spans are packed after that seal
-//! when they are large, and again on close when the waste is worth a copy.
-//! Logical paths live only in the sealed index.
+//! `store/data/<hh>/<file_id>.blob`. It starts with the key copy
+//! ([`super::key_copy`]), then holds the file's chunks, each
+//! `nonce(24) || ciphertext || tag(16)`, then its recovery records
+//! ([`super::record`]). The sealed index stores each chunk's byte offset,
+//! version, and key. A rewrite writes the new ciphertext into a free span when
+//! one fits, otherwise it appends. The previous generation stays until the
+//! index that names the new offset is sealed. Dead spans are packed after that
+//! seal when they are large, and again on close when the waste is worth a
+//! copy. Logical paths live only in the sealed index.
+//!
+//! A read opens each chunk with the key its index entry names; a write seals
+//! with the keyring's write key.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -20,18 +25,17 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::aead::{
-    decrypt_xchacha, encrypt_xchacha, random_bytes, CONTENT_KEY_LEN, XCHACHA_NONCE_LEN,
+    decrypt_xchacha, encrypt_xchacha_with_nonce, random_bytes, XCHACHA_NONCE_LEN, XCHACHA_TAG_LEN,
 };
-use super::header::{chunk_aad, VaultHeader};
+use super::header::{chunk_aad, CHUNK_SIZE};
 use super::index::{
-    sha256_hex, ChunkVersion, DeadBlobSpan, FileProblem, SessionWrites, VaultIndex, VaultNode,
-    CHUNK_VERSION_LEN, DATA_DIR_NAME,
+    sha256_hex, ChunkList, ChunkVersion, DeadBlobSpan, FileProblem, SessionWrites, VaultIndex,
+    VaultNode, DATA_DIR_NAME,
 };
+use super::key_copy::{write_key_copy, KEY_COPY_LEN};
+use super::keys::{KeyId, Keyring};
 use super::record::Records;
 use crate::error::{Result, UprivError};
-
-/// Poly1305 tag appended by XChaCha20-Poly1305. Blob length is nonce + plaintext + tag.
-const XCHACHA_TAG_LEN: usize = 16;
 
 pub const BLOB_FILE_SUFFIX: &str = ".blob";
 
@@ -49,12 +53,6 @@ fn hash_zeros(hasher: &mut Sha256, mut len: u64) {
         hasher.update(&ZEROS[..n]);
         len -= n as u64;
     }
-}
-
-/// Fresh identifier for one chunk write. Recorded in the index and bound into
-/// that chunk's AAD, so rewriting a chunk invalidates the blob it replaced.
-fn new_chunk_version() -> ChunkVersion {
-    ChunkVersion::from_bytes(random_bytes::<CHUNK_VERSION_LEN>())
 }
 
 pub fn seed_plaintext(content_identity: Uuid) -> Vec<u8> {
@@ -109,13 +107,10 @@ fn unreadable(logical_path: &str, problem: FileProblem) -> UprivError {
 
 /// A chunk list that does not match the recorded size cannot be read: the
 /// sealed index is the authority on length.
-fn require_chunk_lists(
-    logical_path: &str,
-    count: u32,
-    versions: &[ChunkVersion],
-    offsets: &[u64],
-) -> Result<()> {
-    if versions.len() == count as usize && offsets.len() == count as usize {
+fn require_chunk_lists(logical_path: &str, count: u32, chunks: &ChunkList) -> Result<()> {
+    let count = count as usize;
+    if chunks.versions.len() == count && chunks.keys.len() == count && chunks.offsets.len() == count
+    {
         return Ok(());
     }
     Err(unreadable(logical_path, FileProblem::Damaged))
@@ -146,16 +141,6 @@ pub(crate) fn validate_logical_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete the blob of `file_id`. A blob that is already gone is not an error.
-pub(crate) fn remove_file_chunks(store_dir: &Path, file_id: &str) -> Result<()> {
-    let path = blob_path(store_dir, file_id)?;
-    match crate::host_fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
 /// One logical file, held open so every chunk is written once and the caller
 /// flushes it once.
 struct OpenBlob {
@@ -183,15 +168,29 @@ fn blob_open_error(logical_path: &str, error: std::io::Error) -> UprivError {
 }
 
 impl OpenBlob {
-    fn create(path: PathBuf) -> Result<Self> {
+    /// Make the blob of `file_id`, its key copy written first from the block
+    /// `keys` came from. Its first chunk goes right after it.
+    fn create(store_dir: &Path, file_id: &str, keys: &Keyring) -> Result<Self> {
+        Self::create_at(blob_path(store_dir, file_id)?, file_id, keys)
+    }
+
+    /// [`Self::create`] at `path`, which need not be in `data/`: a held blob
+    /// a password change copies stays in `held/`.
+    fn create_at(path: PathBuf, file_id: &str, keys: &Keyring) -> Result<Self> {
         if let Some(shard) = path.parent() {
             crate::host_fs::create_dir_all(shard)?;
         }
-        let file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::CreateNew)?;
+        let mut file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::CreateNew)?;
+        let written = write_key_copy(&mut file, keys, parse_file_id(file_id)?);
+        if let Err(error) = written {
+            drop(file);
+            let _ = crate::host_fs::remove_file(&path);
+            return Err(error);
+        }
         Ok(Self {
             file,
             path,
-            position: 0,
+            position: KEY_COPY_LEN,
             created: true,
             rollback_len: 0,
             record: None,
@@ -290,6 +289,7 @@ fn open_blob(
     allow_create: bool,
     logical_path: &str,
     writes: &mut SessionWrites,
+    keys: &Keyring,
 ) -> Result<OpenBlob> {
     let path = blob_path(store_dir, file_id)?;
     match crate::host_fs::entry_kind(&path) {
@@ -305,12 +305,14 @@ fn open_blob(
         }
         Ok(_) => Err(unreadable(logical_path, FileProblem::Damaged)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && allow_create => {
-            OpenBlob::create(path)
+            OpenBlob::create(store_dir, file_id, keys)
         }
         Err(error) => Err(blob_open_error(logical_path, error)),
     }
 }
 
+/// The first offset at or after the key copy where `need` bytes fit between
+/// the `occupied` spans, or the end of the file.
 fn first_fit(file_len: u64, need: u64, occupied: &[(u64, u64)]) -> u64 {
     let mut spans: Vec<(u64, u64)> = occupied
         .iter()
@@ -318,7 +320,7 @@ fn first_fit(file_len: u64, need: u64, occupied: &[(u64, u64)]) -> u64 {
         .filter(|(_, len)| *len > 0)
         .collect();
     spans.sort_unstable_by_key(|(off, _)| *off);
-    let mut cursor = 0u64;
+    let mut cursor = KEY_COPY_LEN;
     for (off, len) in spans {
         if off > cursor && off - cursor >= need {
             return cursor;
@@ -393,8 +395,7 @@ pub struct RetiredFileChunks {
 struct PackNodeRollback {
     logical_path: String,
     file_id: String,
-    chunk_offsets: Vec<u64>,
-    chunk_versions: Vec<ChunkVersion>,
+    chunks: ChunkList,
     content_digest: Option<super::index::ContentDigest>,
 }
 
@@ -418,6 +419,16 @@ pub struct ChunkBlobMutation {
     pack_rollback: Vec<PackNodeRollback>,
 }
 
+/// Flush the blob at `path`, made whole with its record, and the folders that
+/// name it, before an index names it: a held blob a password change rewrote.
+pub(crate) fn flush_made_blob(path: &Path) -> Result<()> {
+    ChunkBlobMutation {
+        created: vec![path.to_path_buf()],
+        ..ChunkBlobMutation::default()
+    }
+    .flush_unnamed()
+}
+
 impl ChunkBlobMutation {
     pub fn merge(&mut self, other: Self) {
         self.created.extend(other.created);
@@ -434,18 +445,8 @@ impl ChunkBlobMutation {
             let Some(node) = index.find_mut(&item.logical_path) else {
                 continue;
             };
-            let mut packed_id = None;
-            if let crate::store::index::VaultNodeKind::File {
-                file_id,
-                chunk_offsets,
-                chunk_versions,
-                ..
-            } = &mut node.kind
-            {
-                packed_id = Some(std::mem::replace(file_id, item.file_id.clone()));
-                *chunk_offsets = item.chunk_offsets.clone();
-                *chunk_versions = item.chunk_versions.clone();
-            }
+            let packed_id = node.as_file().map(|(file_id, _, _)| file_id.to_string());
+            node.set_storage(item.file_id.clone(), item.chunks.clone());
             node.content_digest = item.content_digest.clone();
             if let Some(packed_id) = packed_id {
                 index.writes.moved_blob(&packed_id, &item.file_id);
@@ -552,7 +553,10 @@ pub(crate) enum RecordsDue {
 /// Before that flush it appends the recovery records the seal owes
 /// ([`super::record`]): one to each blob made since the last seal that its
 /// import did not record already, and, at a close, one to each blob written
-/// or trimmed since its last record.
+/// or trimmed since its last record. While a pass is due
+/// ([`VaultIndex::key_copies_due`]), it also writes the header's key copy
+/// into each existing blob it flushes, with that flush; a blob made since
+/// the last seal has it already. It reads none.
 ///
 /// A blob whose flush failed is never flushed again, since a second `fsync`
 /// can report success for bytes the first one lost. Its files are copied to a
@@ -564,6 +568,9 @@ pub(crate) enum RecordsDue {
 pub(crate) struct StagedBlobs {
     /// Every blob written, made or grown, still to flush.
     written: HashSet<PathBuf>,
+    /// Blobs made since the last seal: their key copy is the one they were
+    /// made with.
+    created: HashSet<PathBuf>,
     /// Blobs made since the last seal, which records them.
     made: HashSet<PathBuf>,
     /// Blobs written or trimmed after their last record. Kept from seal to
@@ -582,6 +589,7 @@ impl StagedBlobs {
         for path in &mutation.created {
             self.add_holder_of(path);
             self.written.insert(path.clone());
+            self.created.insert(path.clone());
             if !mutation.recorded.contains(path) {
                 self.made.insert(path.clone());
             }
@@ -651,13 +659,36 @@ impl StagedBlobs {
         let failed = std::mem::take(&mut self.failed);
         self.behind.retain(|path| !failed.contains(path));
         self.written.clear();
+        self.created.clear();
         self.made.clear();
         self.holders.clear();
         self.copy_failed = false;
     }
 
+    /// The pass wrote the key copy of the blob at `path`
+    /// ([`super::pass`]): flush it now, through this set, so a failed flush
+    /// marks it like any other ([`Self::failed_ids`]). The flush also covers
+    /// any chunk a write staged in that blob.
+    pub(crate) fn flush_key_copy(&mut self, path: &Path) -> Result<()> {
+        if self.failed.contains(path) {
+            return Ok(());
+        }
+        match flush_present(crate::paths::sync_file_durable(path)) {
+            Ok(()) => {
+                self.written.remove(path);
+                Ok(())
+            }
+            Err(error) => {
+                self.written.remove(path);
+                self.failed.insert(path.to_path_buf());
+                Err(error)
+            }
+        }
+    }
+
     /// Append the records `due` ([`super::record::append_records`]), from the
-    /// tree in `records`, which the caller seals next; then [`Self::flush`].
+    /// tree in `records`, which the caller seals next, and the key copies a
+    /// due pass owes; then [`Self::flush`].
     pub(crate) fn sync(&mut self, records: &Records<'_>, due: RecordsDue) -> Result<()> {
         let mut owed: Vec<PathBuf> = self
             .made
@@ -676,7 +707,36 @@ impl StagedBlobs {
                 self.written.insert(path);
             }
         }
+        if records.index.key_copies_due {
+            self.write_key_copies(records.keys);
+        }
         self.flush()
+    }
+
+    /// Write the header's key copy into each grown blob this sync flushes. A
+    /// blob it cannot be written to counts as failed: its files are copied.
+    fn write_key_copies(&mut self, keys: &Keyring) {
+        let grown: Vec<PathBuf> = self
+            .written
+            .iter()
+            .filter(|path| !self.created.contains(*path))
+            .cloned()
+            .collect();
+        for path in grown {
+            let written = blob_file_id(&path)
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or(())
+                .and_then(|file_id| {
+                    let mut file =
+                        crate::paths::open_nofollow(&path, crate::paths::NofollowMode::ReadWrite)
+                            .map_err(|_| ())?;
+                    write_key_copy(&mut file, keys, file_id).map_err(|_| ())
+                });
+            if written.is_err() {
+                self.written.remove(&path);
+                self.failed.insert(path);
+            }
+        }
     }
 
     /// Flush the folders of blobs moved in whole ([`Self::add_moved`]). Such
@@ -776,21 +836,13 @@ fn flush_present(flushed: Result<()>) -> Result<()> {
 /// a successful index flush so a crash still decrypts the old generation.
 pub fn write_logical_file(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
     logical_path: &str,
     plaintext: &[u8],
 ) -> Result<(Option<RetiredFileChunks>, ChunkBlobMutation)> {
     validate_logical_path(logical_path)?;
     let store_dir = store_dir.as_ref();
-    let chunk_size = header.chunk_size;
-    if chunk_size == 0 {
-        return Err(UprivError::VaultStoreInvalid {
-            path: PathBuf::from(DATA_DIR_NAME),
-            detail: "chunk_size is zero".into(),
-        });
-    }
     if let Some(node) = index.find(logical_path) {
         if node.as_file().is_none() {
             return Err(UprivError::VaultStoreInvalid {
@@ -813,26 +865,17 @@ pub fn write_logical_file(
 
     let file_id = Uuid::new_v4().to_string();
     let file_size = plaintext.len() as u64;
-    let count = chunk_count(file_size, chunk_size);
-    let chunk_size_usize = chunk_size as usize;
-    let mut chunk_versions = Vec::with_capacity(count as usize);
-    let mut chunk_offsets = Vec::with_capacity(count as usize);
+    let count = chunk_count(file_size, CHUNK_SIZE);
+    let mut chunks = ChunkList::with_capacity(count as usize);
     let mutation = if count == 0 {
         ChunkBlobMutation::default()
     } else {
-        let mut blob = OpenBlob::create(blob_path(store_dir, &file_id)?)?;
+        let mut blob = OpenBlob::create(store_dir, &file_id, keys)?;
         let written = (|| {
-            for (chunk_index, slice) in plaintext.chunks(chunk_size_usize).enumerate() {
-                let (version, offset) = append_chunk(
-                    &mut blob,
-                    header,
-                    content_key,
-                    &file_id,
-                    chunk_index as u32,
-                    slice,
-                )?;
-                chunk_versions.push(version);
-                chunk_offsets.push(offset);
+            for (chunk_index, slice) in plaintext.chunks(CHUNK_SIZE as usize).enumerate() {
+                let (version, key, offset) =
+                    append_chunk(&mut blob, keys, &file_id, chunk_index as u32, slice)?;
+                chunks.push(version, key, offset);
             }
             Ok(())
         })();
@@ -847,13 +890,7 @@ pub fn write_logical_file(
     if let Some((retired, _)) = &previous {
         index.writes.forget_stream(&retired.file_id);
     }
-    let mut node = VaultNode::file(
-        logical_path,
-        file_id.clone(),
-        file_size,
-        chunk_versions,
-        chunk_offsets,
-    );
+    let mut node = VaultNode::file(logical_path, file_id.clone(), file_size, chunks);
     if let Some(created_at) = created_at {
         node.created_at = created_at;
     }
@@ -886,13 +923,11 @@ enum Unreadable {
 /// is unread on its own: [`Self::chunk`] hands on zeros of its length,
 /// [`Self::try_chunk`] hands on nothing.
 struct ChunkReader<'a> {
-    header: &'a VaultHeader,
-    content_key: &'a [u8; CONTENT_KEY_LEN],
+    keys: &'a Keyring,
     logical_path: &'a str,
     file_id: &'a str,
     size: u64,
-    versions: &'a [ChunkVersion],
-    offsets: &'a [u64],
+    chunks: ChunkList,
     /// `None` once the blob could not be opened, or its chunk lists do not
     /// match the size (keep mode only).
     blob: Option<BlobRead>,
@@ -902,11 +937,24 @@ struct ChunkReader<'a> {
 }
 
 impl<'a> ChunkReader<'a> {
-    /// `None` for a file with no chunks.
+    /// The chunks of `node` from its blob in `data/`. `None` for a file with
+    /// no chunks.
     fn open(
         store_dir: &Path,
-        header: &'a VaultHeader,
-        content_key: &'a [u8; CONTENT_KEY_LEN],
+        keys: &'a Keyring,
+        node: &'a VaultNode,
+        mode: Unreadable,
+    ) -> Result<Option<Self>> {
+        let file_id = node.as_file().map_or("", |(file_id, _, _)| file_id);
+        let path = blob_path(store_dir, file_id);
+        Self::open_at(path, keys, node, mode)
+    }
+
+    /// [`Self::open`] from the blob at `path`, which a held blob's file names
+    /// in `held/`.
+    fn open_at(
+        path: Result<PathBuf>,
+        keys: &'a Keyring,
         node: &'a VaultNode,
         mode: Unreadable,
     ) -> Result<Option<Self>> {
@@ -914,28 +962,27 @@ impl<'a> ChunkReader<'a> {
             path: PathBuf::from(&node.path),
             detail: "logical path is a directory".into(),
         };
-        let (file_id, size, versions) = node.as_file().ok_or_else(directory)?;
-        let offsets = node.chunk_offsets().ok_or_else(directory)?;
+        let (file_id, size, _) = node.as_file().ok_or_else(directory)?;
+        let chunks = node.chunks().ok_or_else(directory)?;
         parse_file_id(file_id)?;
-        if chunk_count(size, header.chunk_size) == 0 {
+        let path = path?;
+        if chunk_count(size, CHUNK_SIZE) == 0 {
             return Ok(None);
         }
         let mut reader = Self {
-            header,
-            content_key,
+            keys,
             logical_path: &node.path,
             file_id,
             size,
-            versions,
-            offsets,
+            chunks,
             blob: None,
             mode,
             problem: None,
         };
         // The sealed index is the authority on length. A list that disagrees
         // with the recorded size fails before any blob is opened.
-        let opened = require_chunk_lists(&node.path, reader.count(), versions, offsets)
-            .and_then(|()| open_blob_read(store_dir, file_id, &node.path));
+        let opened = require_chunk_lists(&node.path, reader.count(), &reader.chunks)
+            .and_then(|()| open_blob_read(path, &node.path));
         match opened {
             Ok(blob) => reader.blob = Some(blob),
             Err(error) => reader.absorb(error)?,
@@ -944,7 +991,7 @@ impl<'a> ChunkReader<'a> {
     }
 
     fn count(&self) -> u32 {
-        chunk_count(self.size, self.header.chunk_size)
+        chunk_count(self.size, CHUNK_SIZE)
     }
 
     /// Keep a missing or damaged part in keep mode; fail with anything else.
@@ -959,33 +1006,55 @@ impl<'a> ChunkReader<'a> {
     }
 
     fn plain_len(&self, index: u32) -> u32 {
-        chunk_plain_len(self.size, index, self.header.chunk_size)
+        chunk_plain_len(self.size, index, CHUNK_SIZE)
+    }
+
+    fn sealed(&self, index: u32) -> SealedChunk<'a> {
+        let at = index as usize;
+        SealedChunk {
+            logical_path: self.logical_path,
+            file_id: self.file_id,
+            index,
+            plain_len: self.plain_len(index),
+            version: self.chunks.versions[at],
+            key: self.chunks.keys[at],
+            offset: self.chunks.offsets[at],
+        }
     }
 
     /// Plaintext of chunk `index`, or `None` in keep mode when its data is
     /// missing or damaged.
     fn try_chunk(&mut self, index: u32) -> Result<Option<Zeroizing<Vec<u8>>>> {
-        let plain_len = self.plain_len(index);
+        let chunk = self.sealed(index);
         let Some(blob) = self.blob.as_mut() else {
             return Ok(None);
         };
-        let read = decrypt_one_chunk(
-            blob,
-            self.header,
-            self.content_key,
-            SealedChunk {
-                logical_path: self.logical_path,
-                file_id: self.file_id,
-                index,
-                plain_len,
-                version: self.versions[index as usize],
-                offset: self.offsets[index as usize],
-            },
-        );
-        match read {
+        match decrypt_one_chunk(blob, self.keys, chunk) {
             Ok(plain) => Ok(Some(Zeroizing::new(plain))),
             Err(error) => self.absorb(error).map(|()| None),
         }
+    }
+
+    /// The sealed bytes of chunk `index` as its blob holds them, with zeros
+    /// where the blob holds none: what a copy carries for a chunk it cannot
+    /// read ([`carry_unreadable`]).
+    fn raw_chunk(&mut self, index: u32) -> Result<Vec<u8>> {
+        let chunk = self.sealed(index);
+        let mut bytes = vec![0u8; cipher_len(chunk.plain_len)];
+        let Some(blob) = self.blob.as_mut() else {
+            return Ok(bytes);
+        };
+        blob.file.seek(SeekFrom::Start(chunk.offset))?;
+        let mut filled = 0;
+        while filled < bytes.len() {
+            match blob.file.read(&mut bytes[filled..]) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(bytes)
     }
 
     /// Plaintext of chunk `index`, or zeros of its length in keep mode when
@@ -1007,25 +1076,23 @@ impl<'a> ChunkReader<'a> {
 /// read in full. Any other failure ends the read.
 pub(crate) fn read_file_chunks_keeping(
     store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     node: &VaultNode,
     sink: impl FnMut(Zeroizing<Vec<u8>>) -> Result<()>,
 ) -> Result<Option<FileProblem>> {
-    read_chunks(store_dir, header, content_key, node, Unreadable::Keep, sink)
+    read_chunks(store_dir, keys, node, Unreadable::Keep, sink)
 }
 
 /// Each chunk of `node` in order, as its length in the index says, so the
 /// chunks add up to the file size.
 fn read_chunks(
     store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     node: &VaultNode,
     mode: Unreadable,
     mut sink: impl FnMut(Zeroizing<Vec<u8>>) -> Result<()>,
 ) -> Result<Option<FileProblem>> {
-    let Some(mut reader) = ChunkReader::open(store_dir, header, content_key, node, mode)? else {
+    let Some(mut reader) = ChunkReader::open(store_dir, keys, node, mode)? else {
         return Ok(None);
     };
     for index in 0..reader.count() {
@@ -1038,8 +1105,7 @@ fn read_chunks(
 /// missing or damaged data fails with [`UprivError::VaultFileUnreadable`].
 pub fn read_logical_file(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &VaultIndex,
     logical_path: &str,
 ) -> Result<Vec<u8>> {
@@ -1052,14 +1118,7 @@ pub fn read_logical_file(
         out.extend_from_slice(&chunk);
         Ok(())
     };
-    read_chunks(
-        store_dir.as_ref(),
-        header,
-        content_key,
-        node,
-        Unreadable::Fail,
-        sink,
-    )?;
+    read_chunks(store_dir.as_ref(), keys, node, Unreadable::Fail, sink)?;
     Ok(out)
 }
 
@@ -1068,8 +1127,7 @@ struct BlobRead {
     path: PathBuf,
 }
 
-fn open_blob_read(store_dir: &Path, file_id: &str, logical_path: &str) -> Result<BlobRead> {
-    let path = blob_path(store_dir, file_id)?;
+fn open_blob_read(path: PathBuf, logical_path: &str) -> Result<BlobRead> {
     let file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::Read)
         .map_err(|error| blob_open_error(logical_path, error))?;
     Ok(BlobRead { file, path })
@@ -1082,18 +1140,24 @@ struct SealedChunk<'a> {
     index: u32,
     plain_len: u32,
     version: ChunkVersion,
+    /// The key it is sealed with.
+    key: KeyId,
     offset: u64,
 }
 
-/// Read and open one chunk. A blob that ends before the chunk means its data
-/// is missing; a tag that fails means it is damaged. Both name the file in
-/// [`UprivError::VaultFileUnreadable`]. Any other read error is the disk's.
+/// Read and open one chunk with the key its index entry names. A blob that
+/// ends before the chunk means its data is missing; a tag that fails, or a
+/// chunk with no key or on a key the keyring does not hold, means it is
+/// damaged. Both name the file in [`UprivError::VaultFileUnreadable`]. Any
+/// other read error is the disk's.
 fn decrypt_one_chunk(
     blob: &mut BlobRead,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     chunk: SealedChunk<'_>,
 ) -> Result<Vec<u8>> {
+    let Some(content_key) = keys.content(chunk.key) else {
+        return Err(unreadable(chunk.logical_path, FileProblem::Damaged));
+    };
     let cipher_len = cipher_len(chunk.plain_len);
     blob.file
         .seek(SeekFrom::Start(chunk.offset))
@@ -1113,7 +1177,7 @@ fn decrypt_one_chunk(
         }
     })?;
     let aad = chunk_aad(
-        header,
+        keys.identity(),
         chunk.file_id,
         chunk.index,
         chunk.plain_len,
@@ -1134,53 +1198,56 @@ fn decrypt_one_chunk(
 
 fn decrypt_from_open(
     blob: &mut OpenBlob,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     chunk: SealedChunk<'_>,
 ) -> Result<Vec<u8>> {
     let mut read = BlobRead {
         file: blob.file.try_clone()?,
         path: blob.path.clone(),
     };
-    decrypt_one_chunk(&mut read, header, content_key, chunk)
+    decrypt_one_chunk(&mut read, keys, chunk)
 }
 
+/// Seal one chunk with the write key under a fresh random nonce, whose
+/// version the AAD binds ([`ChunkVersion::of_nonce`]).
 fn seal_chunk(
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     file_id: &str,
     chunk_index: u32,
     plaintext: &[u8],
 ) -> Result<(ChunkVersion, Vec<u8>)> {
-    let version = new_chunk_version();
+    let nonce = random_bytes::<XCHACHA_NONCE_LEN>();
+    let version = ChunkVersion::of_nonce(&nonce);
     let aad = chunk_aad(
-        header,
+        keys.identity(),
         file_id,
         chunk_index,
         plaintext.len() as u32,
         version,
     )?;
-    let bytes = encrypt_xchacha(content_key, plaintext, &aad)?;
+    let bytes = encrypt_xchacha_with_nonce(keys.write_content(), &nonce, plaintext, &aad)?;
     Ok((version, bytes))
 }
 
 /// Ciphertext for one chunk, sealed before it is appended to the blob.
 pub(crate) struct SealedPiece {
     pub version: ChunkVersion,
+    /// The key it is sealed with: the keyring's write key.
+    pub key: KeyId,
     pub plaintext_len: u32,
     pub bytes: Vec<u8>,
 }
 
 pub(crate) fn seal_import_chunk(
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     file_id: &str,
     chunk_index: u32,
     plaintext: &[u8],
 ) -> Result<SealedPiece> {
-    let (version, bytes) = seal_chunk(header, content_key, file_id, chunk_index, plaintext)?;
+    let (version, bytes) = seal_chunk(keys, file_id, chunk_index, plaintext)?;
     Ok(SealedPiece {
         version,
+        key: keys.write_id(),
         plaintext_len: plaintext.len() as u32,
         bytes,
     })
@@ -1192,10 +1259,9 @@ pub(crate) struct ImportBlob {
 }
 
 impl ImportBlob {
-    pub(crate) fn create(store_dir: &Path, file_id: &str) -> Result<Self> {
-        let path = blob_path(store_dir, file_id)?;
+    pub(crate) fn create(store_dir: &Path, file_id: &str, keys: &Keyring) -> Result<Self> {
         Ok(Self {
-            inner: OpenBlob::create(path)?,
+            inner: OpenBlob::create(store_dir, file_id, keys)?,
         })
     }
 
@@ -1215,8 +1281,7 @@ pub(crate) fn record_imported_file(
     logical_path: &str,
     file_id: String,
     file_size: u64,
-    chunk_versions: Vec<ChunkVersion>,
-    chunk_offsets: Vec<u64>,
+    chunks: ChunkList,
     content_sha256: Option<String>,
 ) -> Result<Option<RetiredFileChunks>> {
     validate_logical_path(logical_path)?;
@@ -1243,14 +1308,7 @@ pub(crate) fn record_imported_file(
     if let Some((retired, _)) = &previous {
         index.writes.forget_stream(&retired.file_id);
     }
-    let mut node = imported_node(
-        logical_path,
-        file_id,
-        file_size,
-        chunk_versions,
-        chunk_offsets,
-        content_sha256,
-    );
+    let mut node = imported_node(logical_path, file_id, file_size, chunks, content_sha256);
     if let Some(created_at) = created_at {
         node.created_at = created_at;
     }
@@ -1265,57 +1323,51 @@ pub(crate) fn imported_node(
     logical_path: &str,
     file_id: String,
     file_size: u64,
-    chunk_versions: Vec<ChunkVersion>,
-    chunk_offsets: Vec<u64>,
+    chunks: ChunkList,
     content_sha256: Option<String>,
 ) -> VaultNode {
-    let mut node = VaultNode::file(
-        logical_path,
-        file_id,
-        file_size,
-        chunk_versions,
-        chunk_offsets,
-    );
+    let mut node = VaultNode::file(logical_path, file_id, file_size, chunks);
     if let Some(sha256) = content_sha256 {
         node.bind_digest(sha256);
     }
     node
 }
 
+/// Seal one chunk with the write key and append it: its version, key, and
+/// offset.
 fn append_chunk(
     blob: &mut OpenBlob,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     file_id: &str,
     chunk_index: u32,
     plaintext: &[u8],
-) -> Result<(ChunkVersion, u64)> {
-    let (version, bytes) = seal_chunk(header, content_key, file_id, chunk_index, plaintext)?;
+) -> Result<(ChunkVersion, KeyId, u64)> {
+    let (version, bytes) = seal_chunk(keys, file_id, chunk_index, plaintext)?;
     let offset = blob.append_bytes(&bytes)?;
-    Ok((version, offset))
+    Ok((version, keys.write_id(), offset))
 }
 
+/// Seal one chunk with the write key and place it in a free span: its
+/// version, key, and offset.
 fn place_chunk(
     blob: &mut OpenBlob,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     file_id: &str,
     chunk_index: u32,
     plaintext: &[u8],
     occupied: &[(u64, u64)],
-) -> Result<(ChunkVersion, u64)> {
-    let (version, bytes) = seal_chunk(header, content_key, file_id, chunk_index, plaintext)?;
-    let slot = cipher_len(header.chunk_size) as u64;
+) -> Result<(ChunkVersion, KeyId, u64)> {
+    let (version, bytes) = seal_chunk(keys, file_id, chunk_index, plaintext)?;
+    let slot = cipher_len(CHUNK_SIZE) as u64;
     let offset = blob.place_reserved(&bytes, slot, occupied)?;
-    Ok((version, offset))
+    Ok((version, keys.write_id(), offset))
 }
 
 /// Decrypt `[offset, offset+len)` of a logical file. `len == 0` is an empty
 /// read. Missing or damaged data fails with [`UprivError::VaultFileUnreadable`].
 pub fn read_logical_range(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &VaultIndex,
     logical_path: &str,
     offset: u64,
@@ -1326,15 +1378,7 @@ pub fn read_logical_range(
         offset,
         len,
     };
-    read_range(
-        store_dir.as_ref(),
-        header,
-        content_key,
-        index,
-        read,
-        Unreadable::Fail,
-    )
-    .map(|(bytes, _)| bytes)
+    read_range(store_dir.as_ref(), keys, index, read, Unreadable::Fail).map(|(bytes, _)| bytes)
 }
 
 /// [`read_logical_range`] for the plaintext folder, which keeps every file:
@@ -1342,8 +1386,7 @@ pub fn read_logical_range(
 /// being read in full.
 pub(crate) fn read_logical_range_keeping(
     store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &VaultIndex,
     logical_path: &str,
     offset: u64,
@@ -1354,14 +1397,7 @@ pub(crate) fn read_logical_range_keeping(
         offset,
         len,
     };
-    read_range(
-        store_dir,
-        header,
-        content_key,
-        index,
-        read,
-        Unreadable::Keep,
-    )
+    read_range(store_dir, keys, index, read, Unreadable::Keep)
 }
 
 #[derive(Clone, Copy)]
@@ -1373,8 +1409,7 @@ struct LogicalRange<'a> {
 
 fn read_range(
     store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &VaultIndex,
     read: LogicalRange<'_>,
     mode: Unreadable,
@@ -1398,11 +1433,11 @@ fn read_range(
     if len == 0 || offset >= size {
         return Ok((Vec::new(), None));
     }
-    let Some(mut reader) = ChunkReader::open(store_dir, header, content_key, node, mode)? else {
+    let Some(mut reader) = ChunkReader::open(store_dir, keys, node, mode)? else {
         return Ok((Vec::new(), None));
     };
     let end = size.min(offset.saturating_add(len));
-    let chunk_size = u64::from(header.chunk_size);
+    let chunk_size = u64::from(CHUNK_SIZE);
     let first = (offset / chunk_size) as u32;
     let last = ((end - 1) / chunk_size) as u32;
     let mut out = Vec::with_capacity((end - offset) as usize);
@@ -1422,8 +1457,7 @@ fn read_range(
 /// A hole past EOF is filled with zeros (POSIX `pwrite` shape).
 pub fn write_logical_range(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
     logical_path: &str,
     offset: u64,
@@ -1434,37 +1468,20 @@ pub fn write_logical_range(
         if offset != 0 {
             return Err(UprivError::VaultPathNotFound(logical_path.into()));
         }
-        let (_retired, mutation) =
-            write_logical_file(store_dir, header, content_key, index, logical_path, data)?;
+        let (_retired, mutation) = write_logical_file(store_dir, keys, index, logical_path, data)?;
         return Ok(mutation);
     }
     let store_dir = store_dir.as_ref();
-    let chunk_size = header.chunk_size;
-    if chunk_size == 0 {
-        return Err(UprivError::VaultStoreInvalid {
-            path: PathBuf::from(DATA_DIR_NAME),
-            detail: "chunk_size is zero".into(),
-        });
-    }
-    let (file_id, old_size, old_versions, old_offsets, created_at) = {
+    let chunk_size = CHUNK_SIZE;
+    let (file_id, old_size, old_chunks, created_at) = {
         let node = index.find(logical_path).expect("checked");
-        let Some((file_id, size, versions)) = node.as_file() else {
+        let (Some((file_id, size, _)), Some(chunks)) = (node.as_file(), node.chunks()) else {
             return Err(UprivError::VaultStoreInvalid {
                 path: PathBuf::from(logical_path),
                 detail: "logical path is a directory".into(),
             });
         };
-        let offsets = node
-            .chunk_offsets()
-            .expect("file node stores chunk offsets")
-            .to_vec();
-        (
-            file_id.to_string(),
-            size,
-            versions.to_vec(),
-            offsets,
-            node.created_at,
-        )
+        (file_id.to_string(), size, chunks, node.created_at)
     };
     let write_end = offset.saturating_add(data.len() as u64);
     let new_size = old_size.max(write_end);
@@ -1472,11 +1489,10 @@ pub fn write_logical_range(
         require_room_for_zeros(store_dir, chunk_size, old_size, write_end)?;
     }
     let old_count = chunk_count(old_size, chunk_size);
-    require_chunk_lists(logical_path, old_count, &old_versions, &old_offsets)?;
+    require_chunk_lists(logical_path, old_count, &old_chunks)?;
     // The chunks the blob holds: the file's own, then each new one once it is
     // written. A write past the end fills every chunk up to it, in order.
-    let mut versions = old_versions;
-    let mut offsets = old_offsets;
+    let mut chunks = old_chunks;
     let mut plain_lens: Vec<u32> = (0..old_count)
         .map(|index| chunk_plain_len(old_size, index, chunk_size))
         .collect();
@@ -1493,6 +1509,7 @@ pub fn write_logical_range(
                 old_count == 0,
                 logical_path,
                 &mut index.writes,
+                keys,
             )?;
             let first = (union_start / u64::from(chunk_size)) as u32;
             let last = ((union_end - 1) / u64::from(chunk_size)) as u32;
@@ -1502,21 +1519,21 @@ pub fn write_logical_range(
                     let at = chunk_index as usize;
                     let existing = chunk_index < old_count;
                     let this_len = chunk_plain_len(new_size, chunk_index, chunk_size) as usize;
-                    let mut buf = vec![0u8; this_len];
+                    let mut buf = Zeroizing::new(vec![0u8; this_len]);
                     if existing {
-                        let old = decrypt_from_open(
+                        let old = Zeroizing::new(decrypt_from_open(
                             &mut blob,
-                            header,
-                            content_key,
+                            keys,
                             SealedChunk {
                                 logical_path,
                                 file_id: &file_id,
                                 index: chunk_index,
                                 plain_len: plain_lens[at],
-                                version: versions[at],
-                                offset: offsets[at],
+                                version: chunks.versions[at],
+                                key: chunks.keys[at],
+                                offset: chunks.offsets[at],
                             },
-                        )?;
+                        )?);
                         let n = old.len().min(buf.len());
                         buf[..n].copy_from_slice(&old[..n]);
                     }
@@ -1531,36 +1548,23 @@ pub fn write_logical_range(
                     }
                     if existing {
                         // Placed beside the bytes the sealed index still names.
-                        abandoned.push((offsets[at], cipher_len(plain_lens[at]) as u64));
+                        abandoned.push((chunks.offsets[at], cipher_len(plain_lens[at]) as u64));
                         let mut occupied =
-                            occupied_spans(&offsets, &plain_lens, blob.position, slot);
+                            occupied_spans(&chunks.offsets, &plain_lens, blob.position, slot);
                         occupied.extend(abandoned.iter().copied());
                         protect_unsealed(index, &file_id, &mut occupied);
                         blob.protect_record(&mut occupied);
-                        let (version, chunk_offset) = place_chunk(
-                            &mut blob,
-                            header,
-                            content_key,
-                            &file_id,
-                            chunk_index,
-                            &buf,
-                            &occupied,
-                        )?;
-                        versions[at] = version;
-                        offsets[at] = chunk_offset;
+                        let (version, key, chunk_offset) =
+                            place_chunk(&mut blob, keys, &file_id, chunk_index, &buf, &occupied)?;
+                        chunks.versions[at] = version;
+                        chunks.keys[at] = key;
+                        chunks.offsets[at] = chunk_offset;
                         plain_lens[at] = this_len as u32;
                     } else {
-                        debug_assert_eq!(versions.len(), at, "new chunks are written in order");
-                        let (version, chunk_offset) = append_chunk(
-                            &mut blob,
-                            header,
-                            content_key,
-                            &file_id,
-                            chunk_index,
-                            &buf,
-                        )?;
-                        versions.push(version);
-                        offsets.push(chunk_offset);
+                        debug_assert_eq!(chunks.len(), at, "new chunks are written in order");
+                        let (version, key, chunk_offset) =
+                            append_chunk(&mut blob, keys, &file_id, chunk_index, &buf)?;
+                        chunks.push(version, key, chunk_offset);
                         plain_lens.push(this_len as u32);
                     }
                 }
@@ -1614,8 +1618,9 @@ pub fn write_logical_range(
         node.kind = crate::store::index::VaultNodeKind::File {
             file_id,
             size: new_size,
-            chunk_versions: versions,
-            chunk_offsets: offsets,
+            chunk_versions: chunks.versions,
+            chunk_keys: chunks.keys,
+            chunk_offsets: chunks.offsets,
         };
         if changed {
             node.content_digest = None;
@@ -1630,8 +1635,7 @@ pub fn write_logical_range(
 /// Grow by writing zero-filled chunks one at a time (never one huge allocation).
 fn grow_logical_file(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
     logical_path: &str,
     old_size: u64,
@@ -1640,8 +1644,8 @@ fn grow_logical_file(
     if new_size <= old_size {
         return Ok(ChunkBlobMutation::default());
     }
-    require_room_for_zeros(store_dir.as_ref(), header.chunk_size, old_size, new_size)?;
-    let chunk = u64::from(header.chunk_size.max(1));
+    require_room_for_zeros(store_dir.as_ref(), CHUNK_SIZE, old_size, new_size)?;
+    let chunk = u64::from(CHUNK_SIZE);
     let mut pos = old_size;
     let zeros = vec![0u8; chunk as usize];
     let mut mutation = ChunkBlobMutation::default();
@@ -1651,8 +1655,7 @@ fn grow_logical_file(
         let n = remain.min(chunk) as usize;
         let piece = write_logical_range(
             store_dir.as_ref(),
-            header,
-            content_key,
+            keys,
             index,
             logical_path,
             pos,
@@ -1700,8 +1703,7 @@ fn require_room_for_zeros(
 /// Shrink or grow a file. Growth is zero-filled.
 pub fn truncate_logical_file(
     store_dir: impl AsRef<Path>,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
     logical_path: &str,
     new_size: u64,
@@ -1711,21 +1713,13 @@ pub fn truncate_logical_file(
     if index.find(logical_path).is_none() {
         if new_size == 0 {
             let (_retired, mutation) =
-                write_logical_file(store_dir, header, content_key, index, logical_path, b"")?;
+                write_logical_file(store_dir, keys, index, logical_path, b"")?;
             return Ok(mutation);
         }
         let before = index.clone();
         let (_retired, mut mutation) =
-            write_logical_file(store_dir, header, content_key, index, logical_path, b"")?;
-        return match grow_logical_file(
-            store_dir,
-            header,
-            content_key,
-            index,
-            logical_path,
-            0,
-            new_size,
-        ) {
+            write_logical_file(store_dir, keys, index, logical_path, b"")?;
+        return match grow_logical_file(store_dir, keys, index, logical_path, 0, new_size) {
             Ok(piece) => {
                 mutation.merge(piece);
                 Ok(mutation)
@@ -1746,72 +1740,56 @@ pub fn truncate_logical_file(
         return Ok(ChunkBlobMutation::default());
     }
     if new_size > old_size {
-        return grow_logical_file(
-            store_dir,
-            header,
-            content_key,
-            index,
-            logical_path,
-            old_size,
-            new_size,
-        );
+        return grow_logical_file(store_dir, keys, index, logical_path, old_size, new_size);
     }
     let before = index.clone();
-    let mut mutation = write_logical_range(
-        store_dir,
-        header,
-        content_key,
-        index,
-        logical_path,
-        new_size,
-        b"",
-    )?;
+    let mut mutation = write_logical_range(store_dir, keys, index, logical_path, new_size, b"")?;
     // Range write does not shrink; trim the node and extra chunks explicitly.
-    let chunk_size = header.chunk_size;
-    let (file_id, versions, offsets, created_at) = {
+    let chunk_size = CHUNK_SIZE;
+    let (file_id, chunks, created_at) = {
         let node = index.find(logical_path).expect("exists");
-        let (file_id, _, versions) = node.as_file().expect("file");
-        let offsets = node
-            .chunk_offsets()
-            .expect("file node stores chunk offsets")
-            .to_vec();
+        let (file_id, _, _) = node.as_file().expect("file");
         (
             file_id.to_string(),
-            versions.to_vec(),
-            offsets,
+            node.chunks().expect("file"),
             node.created_at,
         )
     };
     let new_count = chunk_count(new_size, chunk_size);
-    let mut versions = versions;
-    let mut offsets = offsets;
+    let mut chunks = chunks;
     let trimmed = (|| {
         if new_size > 0 && new_count > 0 {
             let last = new_count - 1;
             let last_len = chunk_plain_len(new_size, last, chunk_size);
             let old_last_len = chunk_plain_len(old_size, last, chunk_size);
             if last_len < old_last_len {
-                let previous_version = versions[last as usize];
-                let previous_offset = offsets[last as usize];
-                let mut blob =
-                    open_blob(store_dir, &file_id, false, logical_path, &mut index.writes)?;
+                let at = last as usize;
+                let previous_offset = chunks.offsets[at];
+                let mut blob = open_blob(
+                    store_dir,
+                    &file_id,
+                    false,
+                    logical_path,
+                    &mut index.writes,
+                    keys,
+                )?;
                 let appended = (|| -> Result<()> {
-                    let mut buf = decrypt_from_open(
+                    let mut buf = Zeroizing::new(decrypt_from_open(
                         &mut blob,
-                        header,
-                        content_key,
+                        keys,
                         SealedChunk {
                             logical_path,
                             file_id: &file_id,
                             index: last,
                             plain_len: old_last_len,
-                            version: previous_version,
+                            version: chunks.versions[at],
+                            key: chunks.keys[at],
                             offset: previous_offset,
                         },
-                    )?;
+                    )?);
                     buf.truncate(last_len as usize);
                     let slot = cipher_len(chunk_size) as u64;
-                    let plain_lens: Vec<u32> = (0..offsets.len() as u32)
+                    let plain_lens: Vec<u32> = (0..chunks.len() as u32)
                         .map(|index| {
                             if index == last {
                                 old_last_len
@@ -1820,20 +1798,15 @@ pub fn truncate_logical_file(
                             }
                         })
                         .collect();
-                    let mut occupied = occupied_spans(&offsets, &plain_lens, blob.position, slot);
+                    let mut occupied =
+                        occupied_spans(&chunks.offsets, &plain_lens, blob.position, slot);
                     protect_unsealed(index, &file_id, &mut occupied);
                     blob.protect_record(&mut occupied);
-                    let (version, chunk_offset) = place_chunk(
-                        &mut blob,
-                        header,
-                        content_key,
-                        &file_id,
-                        last,
-                        &buf,
-                        &occupied,
-                    )?;
-                    versions[last as usize] = version;
-                    offsets[last as usize] = chunk_offset;
+                    let (version, key, chunk_offset) =
+                        place_chunk(&mut blob, keys, &file_id, last, &buf, &occupied)?;
+                    chunks.versions[at] = version;
+                    chunks.keys[at] = key;
+                    chunks.offsets[at] = chunk_offset;
                     Ok(())
                 })();
                 mutation.merge(blob.mutation());
@@ -1860,8 +1833,9 @@ pub fn truncate_logical_file(
         *index = before;
         return Err(error);
     }
-    versions.truncate(new_count as usize);
-    offsets.truncate(new_count as usize);
+    chunks.versions.truncate(new_count as usize);
+    chunks.keys.truncate(new_count as usize);
+    chunks.offsets.truncate(new_count as usize);
     // The dropped chunks stay in the blob until a pack. Empty, it is superseded.
     if new_count > 0 {
         index.writes.rewritten_blobs.insert(file_id.clone());
@@ -1881,8 +1855,9 @@ pub fn truncate_logical_file(
         node.kind = crate::store::index::VaultNodeKind::File {
             file_id,
             size: new_size,
-            chunk_versions: versions,
-            chunk_offsets: offsets,
+            chunk_versions: chunks.versions,
+            chunk_keys: chunks.keys,
+            chunk_offsets: chunks.offsets,
         };
         node.content_digest = None;
         if new_size == 0 {
@@ -1902,20 +1877,33 @@ pub fn truncate_logical_file(
 /// Pack a blob during a session only after dead ciphertext reaches this size.
 const SESSION_PACK_DEAD_BYTES: u64 = 8 * 1024 * 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BlobPackMode {
     /// After a sealed write: pack when dead ciphertext is at least 8 MiB.
     SessionWaste,
     /// On close: pack large waste, and any waste in a small file.
     Close,
     /// A blob whose flush failed: copy every file in it, waste or not, so the
-    /// seal names bytes a flush of their own covers ([`StagedBlobs`]).
+    /// seal names bytes a flush of their own covers ([`StagedBlobs`]). A
+    /// chunk the copy cannot read keeps its key.
     Rewrite,
+    /// A password change: copy each file it is given onto the write key. A
+    /// chunk the copy cannot read takes no key ([`KeyId::NONE`]): the key it
+    /// was written with leaves the vault when the change finishes.
+    Convert,
+}
+
+impl BlobPackMode {
+    /// Copies every file it is given, marked or not, and carries a chunk it
+    /// cannot read byte for byte ([`carry_unreadable`]).
+    fn copies_all(self) -> bool {
+        matches!(self, Self::Rewrite | Self::Convert)
+    }
 }
 
 fn should_pack(mode: BlobPackMode, dead: u64, live: u64) -> bool {
     match mode {
-        BlobPackMode::Rewrite => true,
+        BlobPackMode::Rewrite | BlobPackMode::Convert => true,
         _ if dead == 0 => false,
         BlobPackMode::SessionWaste => dead >= SESSION_PACK_DEAD_BYTES,
         BlobPackMode::Close => dead >= SESSION_PACK_DEAD_BYTES || live <= SESSION_PACK_DEAD_BYTES,
@@ -1927,29 +1915,26 @@ struct BlobMeasure {
     live: u64,
 }
 
-/// The live chunks of `node`'s blob and the rest of its bytes. Its newest
-/// recovery record is neither: every blob carries one, so it never counts as
-/// waste, and the older records do.
+/// The live part of `node`'s blob, its key copy and its chunks, and the rest
+/// of its bytes. Its newest recovery record is neither: every blob carries
+/// one, so it never counts as waste, and the older records do.
 fn measure_blob(
     store_dir: &Path,
-    header: &VaultHeader,
     node: &VaultNode,
     writes: &SessionWrites,
 ) -> Result<Option<BlobMeasure>> {
-    let Some((file_id, size, versions)) = node.as_file() else {
+    let Some((file_id, size, _)) = node.as_file() else {
         return Ok(None);
     };
     if size == 0 {
         return Ok(None);
     }
-    let offsets = node
-        .chunk_offsets()
-        .ok_or_else(|| UprivError::VaultStoreInvalid {
-            path: PathBuf::from(&node.path),
-            detail: "logical path is a directory".into(),
-        })?;
-    let count = chunk_count(size, header.chunk_size);
-    require_chunk_lists(&node.path, count, versions, offsets)?;
+    let chunks = node.chunks().ok_or_else(|| UprivError::VaultStoreInvalid {
+        path: PathBuf::from(&node.path),
+        detail: "logical path is a directory".into(),
+    })?;
+    let count = chunk_count(size, CHUNK_SIZE);
+    require_chunk_lists(&node.path, count, &chunks)?;
     let path = blob_path(store_dir, file_id)?;
     let mut file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::Read)
         .map_err(|error| blob_open_error(&node.path, error))?;
@@ -1957,10 +1942,9 @@ fn measure_blob(
     let record = super::record::newest_record_span(&mut file, len)
         .or_else(|| writes.records.get(file_id).copied())
         .map_or(0, |(_, record_len)| record_len);
-    let mut live = 0u64;
+    let mut live = KEY_COPY_LEN;
     for index in 0..count {
-        live =
-            live.saturating_add(cipher_len(chunk_plain_len(size, index, header.chunk_size)) as u64);
+        live = live.saturating_add(cipher_len(chunk_plain_len(size, index, CHUNK_SIZE)) as u64);
     }
     Ok(Some(BlobMeasure {
         dead: len.saturating_sub(live).saturating_sub(record),
@@ -1970,7 +1954,6 @@ fn measure_blob(
 
 pub(crate) fn blobs_need_pack(
     store_dir: &Path,
-    header: &VaultHeader,
     index: &VaultIndex,
     mode: BlobPackMode,
     only: Option<&[String]>,
@@ -1988,7 +1971,7 @@ pub(crate) fn blobs_need_pack(
         }
         // A blob that cannot be measured cannot be packed either.
         matches!(
-            measure_blob(store_dir, header, node, &index.writes),
+            measure_blob(store_dir, node, &index.writes),
             Ok(Some(measure)) if should_pack(mode, measure.dead, measure.live)
         )
     })
@@ -2006,11 +1989,11 @@ pub(crate) struct PackedWaste {
 struct PackedBlob {
     logical_path: String,
     new_file_id: String,
-    new_offsets: Vec<u64>,
-    new_versions: Vec<ChunkVersion>,
+    new_chunks: ChunkList,
     new_path: PathBuf,
     old_path: PathBuf,
-    /// What kept the copy from reading every chunk ([`BlobPackMode::Rewrite`]).
+    /// What kept the copy from reading every chunk
+    /// ([`BlobPackMode::copies_all`]).
     problem: Option<FileProblem>,
 }
 
@@ -2022,16 +2005,66 @@ struct PackedBlob {
 ///
 /// Packing for waste leaves a file already marked with a problem as it is, and
 /// one whose data turns out missing or damaged here is marked and left too;
-/// the other blobs are still packed. [`BlobPackMode::Rewrite`] copies every
-/// file it is given, marked or not: a chunk it cannot read stays unreadable in
-/// the copy, and the file is marked.
+/// the other blobs are still packed. [`BlobPackMode::Rewrite`] and
+/// [`BlobPackMode::Convert`] copy every file they are given, marked or not: a
+/// chunk they cannot read is carried byte for byte and stays unreadable, and
+/// the file is marked. A file whose blob does not open at all is marked and
+/// left as it is.
 pub(crate) fn pack_blob_waste(
     store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    keys: &Keyring,
     index: &mut VaultIndex,
     mode: BlobPackMode,
     only: Option<&[String]>,
+) -> Result<PackedWaste> {
+    debug_assert!(
+        mode != BlobPackMode::Convert,
+        "a convert names its new blobs"
+    );
+    let new_id = |_: &str| Uuid::new_v4().to_string();
+    pack_blobs(store_dir, keys, index, mode, only, &new_id, &|_| Ok(()))
+}
+
+/// Copy each file of `plan`, `(file id, new file id)`, onto the write key of
+/// `keys` into a blob under its new id ([`BlobPackMode::Convert`]): a
+/// password change names a batch's new blobs before it makes them, so a crash
+/// leaves them released ([`VaultIndex::released`]). `on_chunk` is told the
+/// plaintext length of each chunk before it is copied, and its error ends the
+/// copy with nothing left of it.
+pub(crate) fn convert_files(
+    store_dir: &Path,
+    keys: &Keyring,
+    index: &mut VaultIndex,
+    plan: &[(String, String)],
+    on_chunk: &dyn Fn(u64) -> Result<()>,
+) -> Result<PackedWaste> {
+    let only: Vec<String> = plan.iter().map(|(file_id, _)| file_id.clone()).collect();
+    let new_id = |file_id: &str| {
+        plan.iter()
+            .find(|(old, _)| old == file_id)
+            .map_or_else(|| Uuid::new_v4().to_string(), |(_, new)| new.clone())
+    };
+    pack_blobs(
+        store_dir,
+        keys,
+        index,
+        BlobPackMode::Convert,
+        Some(&only),
+        &new_id,
+        on_chunk,
+    )
+}
+
+/// [`pack_blob_waste`], each new blob taking the id `new_id` gives the file
+/// id it replaces, and `on_chunk` told of each chunk before it is copied.
+fn pack_blobs(
+    store_dir: &Path,
+    keys: &Keyring,
+    index: &mut VaultIndex,
+    mode: BlobPackMode,
+    only: Option<&[String]>,
+    new_id: &dyn Fn(&str) -> String,
+    on_chunk: &dyn Fn(u64) -> Result<()>,
 ) -> Result<PackedWaste> {
     if matches!(only, Some(ids) if ids.is_empty()) {
         return Ok(PackedWaste {
@@ -2040,35 +2073,27 @@ pub(crate) fn pack_blob_waste(
         });
     }
     let only = only_set(only);
-    let rewrite = matches!(mode, BlobPackMode::Rewrite);
     let mut planned: Vec<PackedBlob> = Vec::new();
     let mut found: Vec<(String, FileProblem)> = Vec::new();
     let packed = (|| -> Result<()> {
         for node in index.nodes() {
-            let Some((file_id, size, _)) = node.as_file() else {
+            let Some((file_id, _, _)) = node.as_file() else {
                 continue;
             };
             // One file per blob (the tree rules), so a blob is the file's own.
-            if !wanted(&only, file_id) || (node.problem.is_some() && !rewrite) {
+            if !wanted(&only, file_id) || (node.problem.is_some() && !mode.copies_all()) {
                 continue;
             }
             let repacked =
-                measure_blob(store_dir, header, node, &index.writes).and_then(|measure| {
-                    match measure {
-                        Some(measure) if should_pack(mode, measure.dead, measure.live) => {
-                            repack_live_blob(
-                                store_dir,
-                                header,
-                                content_key,
-                                node,
-                                file_id,
-                                size,
-                                mode,
-                            )
-                            .map(Some)
-                        }
-                        _ => Ok(None),
+                measure_blob(store_dir, node, &index.writes).and_then(|measure| match measure {
+                    Some(measure) if should_pack(mode, measure.dead, measure.live) => {
+                        let target = new_id(file_id);
+                        let to = blob_path(store_dir, &target)?;
+                        let from = blob_path(store_dir, file_id)?;
+                        let to = (target.as_str(), to);
+                        repack_live_blob(from, to, keys, node, mode, on_chunk).map(Some)
                     }
+                    _ => Ok(None),
                 });
             match repacked {
                 Ok(Some(item)) => {
@@ -2102,26 +2127,16 @@ pub(crate) fn pack_blob_waste(
         if let Some(node) = index.find_mut(&item.logical_path) {
             // Same bytes in a new blob: the digest carries over.
             let carried = node.current_digest().map(str::to_owned);
-            let content_digest = node.content_digest.clone();
-            if let crate::store::index::VaultNodeKind::File {
-                file_id,
-                chunk_offsets,
-                chunk_versions,
-                ..
-            } = &mut node.kind
-            {
+            if let (Some((file_id, _, _)), Some(chunks)) = (node.as_file(), node.chunks()) {
                 mutation.pack_rollback.push(PackNodeRollback {
                     logical_path: item.logical_path.clone(),
-                    file_id: file_id.clone(),
-                    chunk_offsets: chunk_offsets.clone(),
-                    chunk_versions: chunk_versions.clone(),
-                    content_digest,
+                    file_id: file_id.to_string(),
+                    chunks,
+                    content_digest: node.content_digest.clone(),
                 });
-                moved = Some((file_id.clone(), item.new_file_id.clone()));
-                *file_id = item.new_file_id;
-                *chunk_offsets = item.new_offsets;
-                *chunk_versions = item.new_versions;
+                moved = Some((file_id.to_string(), item.new_file_id.clone()));
             }
+            node.set_storage(item.new_file_id, item.new_chunks);
             if let Some(sha256) = carried {
                 node.bind_digest(sha256);
             }
@@ -2143,26 +2158,28 @@ fn wanted(only: &Option<std::collections::HashSet<&str>>, file_id: &str) -> bool
     only.as_ref().is_none_or(|ids| ids.contains(file_id))
 }
 
-/// Copy the live chunks of `node` into a new blob. Packing for waste fails on
-/// a chunk it cannot read. [`BlobPackMode::Rewrite`] copies the file anyway:
-/// such a chunk takes an unreadable slot ([`append_unreadable`]), so the copy
-/// keeps every readable part where it was and the problem stays visible.
+/// Copy the live chunks of `node`, from its blob at `from`, into a new blob
+/// `to` (its id, its path), each chunk sealed with the write key. Packing for
+/// waste fails on a chunk it cannot read. [`BlobPackMode::Rewrite`] and
+/// [`BlobPackMode::Convert`] copy the file anyway: such a chunk is carried
+/// byte for byte ([`carry_unreadable`]), so the copy keeps every readable part
+/// where it was and the problem stays visible.
 fn repack_live_blob(
-    store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
+    from: PathBuf,
+    to: (&str, PathBuf),
+    keys: &Keyring,
     node: &VaultNode,
-    file_id: &str,
-    size: u64,
     mode: BlobPackMode,
+    on_chunk: &dyn Fn(u64) -> Result<()>,
 ) -> Result<PackedBlob> {
-    let count = chunk_count(size, header.chunk_size);
-    let old_path = blob_path(store_dir, file_id)?;
-    let reading = match mode {
-        BlobPackMode::Rewrite => Unreadable::Keep,
-        BlobPackMode::SessionWaste | BlobPackMode::Close => Unreadable::Fail,
+    let size = node.as_file().map_or(0, |(_, size, _)| size);
+    let count = chunk_count(size, CHUNK_SIZE);
+    let reading = if mode.copies_all() {
+        Unreadable::Keep
+    } else {
+        Unreadable::Fail
     };
-    let Some(mut src) = ChunkReader::open(store_dir, header, content_key, node, reading)? else {
+    let Some(mut src) = ChunkReader::open_at(Ok(from.clone()), keys, node, reading)? else {
         return Err(UprivError::VaultStoreInvalid {
             path: PathBuf::from(&node.path),
             detail: "an empty file has no blob to pack".into(),
@@ -2170,25 +2187,29 @@ fn repack_live_blob(
     };
     if src.blob.is_none() {
         // Nothing of it opens, so nothing can be copied: the file is marked as
-        // it is, and a blob of unreadable slots would read as present.
+        // it is, and a blob of carried chunks would read as present.
         let problem = src.problem.unwrap_or(FileProblem::Missing);
         return Err(unreadable(&node.path, problem));
     }
-    let new_file_id = Uuid::new_v4().to_string();
-    let mut dst = OpenBlob::create(blob_path(store_dir, &new_file_id)?)?;
-    let new_path = dst.path.clone();
-    let mut new_offsets = Vec::with_capacity(count as usize);
-    let mut new_versions = Vec::with_capacity(count as usize);
+    let (new_file_id, new_path) = (to.0.to_string(), to.1);
+    let mut dst = OpenBlob::create_at(new_path.clone(), &new_file_id, keys)?;
+    let mut new_chunks = ChunkList::with_capacity(count as usize);
     let rewritten = (|| -> Result<()> {
         for index in 0..count {
-            let (version, offset) = match src.try_chunk(index)? {
-                Some(plain) => {
-                    append_chunk(&mut dst, header, content_key, &new_file_id, index, &plain)?
+            on_chunk(u64::from(chunk_plain_len(size, index, CHUNK_SIZE)))?;
+            let (version, key, offset) = match src.try_chunk(index)? {
+                Some(plain) => append_chunk(&mut dst, keys, &new_file_id, index, &plain)?,
+                None => {
+                    let key = match mode {
+                        BlobPackMode::Convert => KeyId::NONE,
+                        _ => src.chunks.keys[index as usize],
+                    };
+                    let version = src.chunks.versions[index as usize];
+                    let offset = carry_unreadable(&mut dst, &src.raw_chunk(index)?)?;
+                    (version, key, offset)
                 }
-                None => append_unreadable(&mut dst, src.plain_len(index))?,
             };
-            new_versions.push(version);
-            new_offsets.push(offset);
+            new_chunks.push(version, key, offset);
         }
         Ok(())
     })();
@@ -2199,22 +2220,60 @@ fn repack_live_blob(
     Ok(PackedBlob {
         logical_path: node.path.clone(),
         new_file_id,
-        new_offsets,
-        new_versions,
+        new_chunks,
         new_path,
-        old_path,
+        old_path: from,
         problem: src.problem,
     })
 }
 
-/// A slot of zeros the length of a sealed chunk of `plain_len` bytes, under a
-/// version no chunk was sealed with: its tag never checks out, so a read of
-/// it fails as damaged data. It stands in for a chunk a copy could not read,
-/// which nothing can read again either, and keeps the chunks after it in
-/// place.
-fn append_unreadable(blob: &mut OpenBlob, plain_len: u32) -> Result<(ChunkVersion, u64)> {
-    let offset = blob.append_bytes(&vec![0u8; cipher_len(plain_len)])?;
-    Ok((new_chunk_version(), offset))
+/// A held blob's file, copied by [`convert_held_blob`].
+pub(crate) struct HeldCopy {
+    /// The new blob, in `held/`.
+    pub path: PathBuf,
+    /// The file it holds now: its new id, chunks, and key.
+    pub node: VaultNode,
+    /// What kept the copy from reading every chunk.
+    pub problem: Option<FileProblem>,
+}
+
+/// Copy the file `node` of a held blob, from `from` in `held/` to `to` beside
+/// it, onto the write key of `keys`, as a password change copies a file of
+/// the tree ([`BlobPackMode::Convert`]). The file id of `node` is the old
+/// blob's; `new_id` is the new one's. The caller flushes the copy before an
+/// index names it.
+pub(crate) fn convert_held_blob(
+    from: PathBuf,
+    to: PathBuf,
+    new_id: &str,
+    keys: &Keyring,
+    node: &VaultNode,
+    on_chunk: &dyn Fn(u64) -> Result<()>,
+) -> Result<HeldCopy> {
+    let packed = repack_live_blob(
+        from,
+        (new_id, to),
+        keys,
+        node,
+        BlobPackMode::Convert,
+        on_chunk,
+    )?;
+    let mut copied = node.clone();
+    copied.set_storage(packed.new_file_id, packed.new_chunks);
+    Ok(HeldCopy {
+        path: packed.new_path,
+        node: copied,
+        problem: packed.problem,
+    })
+}
+
+/// Append the sealed bytes of a chunk a copy could not read, byte for byte,
+/// and return where they went. The chunk keeps its version and stays
+/// unreadable: its AAD binds the blob it was sealed in, so it opens in no
+/// other. A recovery tool can still work on its bytes, and the chunks after
+/// it keep their places.
+fn carry_unreadable(blob: &mut OpenBlob, sealed: &[u8]) -> Result<u64> {
+    blob.append_bytes(sealed)
 }
 
 pub(crate) fn mutation_blob_ids(mutation: &ChunkBlobMutation) -> Vec<String> {
@@ -2240,24 +2299,18 @@ pub(super) fn blob_file_id(path: &Path) -> Option<&str> {
     Uuid::parse_str(id).is_ok().then_some(id)
 }
 
-/// Fewest bytes a blob that holds one chunk can have: one plaintext byte with
-/// its nonce and tag.
-pub(super) const MIN_BLOB_LEN: u64 = (XCHACHA_NONCE_LEN + 1 + XCHACHA_TAG_LEN) as u64;
-
 /// True when the first chunk of `node` opens from the blob at `path`: that
 /// blob holds this file as `node` records it. Only that chunk is read, and its
 /// plaintext is wiped at once.
-pub(super) fn first_chunk_opens(
-    path: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-    node: &VaultNode,
-) -> bool {
-    let (Some((file_id, size, versions)), Some(offsets)) = (node.as_file(), node.chunk_offsets())
-    else {
+pub(super) fn first_chunk_opens(path: &Path, keys: &Keyring, node: &VaultNode) -> bool {
+    let (Some((file_id, size, _)), Some(chunks)) = (node.as_file(), node.chunks()) else {
         return false;
     };
-    let (Some(&version), Some(&offset)) = (versions.first(), offsets.first()) else {
+    let (Some(&version), Some(&key), Some(&offset)) = (
+        chunks.versions.first(),
+        chunks.keys.first(),
+        chunks.offsets.first(),
+    ) else {
         return false;
     };
     let Ok(file) = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read) else {
@@ -2271,11 +2324,12 @@ pub(super) fn first_chunk_opens(
         logical_path: &node.path,
         file_id,
         index: 0,
-        plain_len: chunk_plain_len(size, 0, header.chunk_size),
+        plain_len: chunk_plain_len(size, 0, CHUNK_SIZE),
         version,
+        key,
         offset,
     };
-    decrypt_one_chunk(&mut blob, header, content_key, chunk)
+    decrypt_one_chunk(&mut blob, keys, chunk)
         .map(Zeroizing::new)
         .is_ok()
 }
@@ -2307,8 +2361,8 @@ mod tests {
     const BESIDE_IN_AA: &str = "aa000000-0000-4000-8000-000000000002";
     const IN_BB: &str = "bb000000-0000-4000-8000-000000000001";
 
-    fn new_blob(store: &Path, id: &str) -> ChunkBlobMutation {
-        let mut blob = ImportBlob::create(store, id).unwrap();
+    fn new_blob(store: &Path, id: &str, keys: &Keyring) -> ChunkBlobMutation {
+        let mut blob = ImportBlob::create(store, id, keys).unwrap();
         blob.append(b"sealed bytes").unwrap();
         blob.mutation()
     }
@@ -2324,7 +2378,7 @@ mod tests {
 
         let mut staged = StagedBlobs::default();
         for id in [IN_AA, BESIDE_IN_AA, IN_BB] {
-            staged.add(&new_blob(&dir, id));
+            staged.add(&new_blob(&dir, id, &opened.keys));
         }
         let mut folders = staged.folders();
         folders.sort();
@@ -2333,7 +2387,11 @@ mod tests {
 
         // Whoever made the shard folder, `data/` is flushed with it again.
         staged.clear();
-        staged.add(&new_blob(&dir, "aa000000-0000-4000-8000-000000000003"));
+        staged.add(&new_blob(
+            &dir,
+            "aa000000-0000-4000-8000-000000000003",
+            &opened.keys,
+        ));
         let mut folders = staged.folders();
         folders.sort();
         assert_eq!(folders, vec![data.as_path(), aa.as_path()]);
@@ -2347,8 +2405,8 @@ mod tests {
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
         let opened = crate::store::open_store(&dir, PW).unwrap();
         let grown = blob_path(&dir, IN_AA).unwrap();
-        new_blob(&dir, IN_AA);
-        let gone = new_blob(&dir, IN_BB);
+        new_blob(&dir, IN_AA, &opened.keys);
+        let gone = new_blob(&dir, IN_BB, &opened.keys);
 
         let mut staged = StagedBlobs::default();
         staged.add(&ChunkBlobMutation {
@@ -2396,15 +2454,7 @@ mod tests {
         for (i, byte) in data.iter_mut().enumerate() {
             *byte = (i % 251) as u8;
         }
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "wide.bin",
-            &data,
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "wide.bin", &data).unwrap();
         flush_index(&dir, &mut opened).unwrap();
         let file_id = opened.index.find("wide.bin").unwrap().as_file().unwrap().0;
         (tmp, dir, data, file_id.to_string())
@@ -2416,26 +2466,11 @@ mod tests {
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
         let mut opened = open_store(&dir, PW).unwrap();
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "empty.txt",
-            b"",
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "empty.txt", b"").unwrap();
         flush_index(&dir, &mut opened).unwrap();
         let data = dir.join(DATA_DIR_NAME);
         assert_eq!(crate::host_fs::read_dir(&data).unwrap().count(), 0);
-        let got = read_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &opened.index,
-            "empty.txt",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &opened.keys, &opened.index, "empty.txt").unwrap();
         assert!(got.is_empty());
     }
 
@@ -2443,14 +2478,7 @@ mod tests {
     fn two_chunks_round_trip_and_unique_nonces() {
         let (_tmp, dir, data, _file_id) = seeded_two_chunk();
         let opened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &opened.index,
-            "wide.bin",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &opened.keys, &opened.index, "wide.bin").unwrap();
         assert_eq!(got, data);
         let (file_id, _, off0) = file_chunk_meta(&opened, "wide.bin", 0);
         let (_, _, off1) = file_chunk_meta(&opened, "wide.bin", 1);
@@ -2495,14 +2523,7 @@ mod tests {
         raw.splice(off0 as usize + c1..off0 as usize + c1, first);
         crate::host_fs::write(&path, &raw).unwrap();
         let opened = open_store(&dir, PW).expect("vault still opens; one file is torn");
-        let err = read_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &opened.index,
-            "wide.bin",
-        )
-        .unwrap_err();
+        let err = read_logical_file(&dir, &opened.keys, &opened.index, "wide.bin").unwrap_err();
         assert!(
             matches!(
                 err,
@@ -2525,21 +2546,13 @@ mod tests {
         raw[off0 as usize + 24] ^= 0x01;
         crate::host_fs::write(&path, &raw).unwrap();
         let opened = open_store(&dir, PW).unwrap();
-        let read = || {
-            read_logical_file(
-                &dir,
-                &opened.header,
-                &opened.content_key,
-                &opened.index,
-                "wide.bin",
-            )
-        };
+        let read = || read_logical_file(&dir, &opened.keys, &opened.index, "wide.bin");
         assert!(matches!(
             read(),
             Err(UprivError::VaultFileUnreadable { ref path, problem: FileProblem::Damaged })
                 if path == "wide.bin"
         ));
-        raw[24] ^= 0x01;
+        raw[off0 as usize + 24] ^= 0x01;
         raw.truncate(raw.len() - 4);
         crate::host_fs::write(&path, &raw).unwrap();
         assert!(matches!(
@@ -2554,16 +2567,68 @@ mod tests {
     #[test]
     fn chunk_rejects_wrap_aad() {
         use super::super::aead::decrypt_xchacha;
-        use super::super::header::chunk_aad;
+        use super::super::header::wrap_aad;
 
         let (_tmp, dir, _data, _file_id) = seeded_two_chunk();
         let opened = open_store(&dir, PW).unwrap();
         let (file_id, v0, off0) = file_chunk_meta(&opened, "wide.bin", 0);
         let blob = read_chunk_bytes(&dir, &file_id, off0, CHUNK_SIZE);
-        let wrap = opened.header.wrap_aad().unwrap();
-        assert!(decrypt_xchacha(&opened.content_key, &blob, &wrap).is_err());
-        let aad = chunk_aad(&opened.header, &file_id, 0, CHUNK_SIZE, v0).unwrap();
-        decrypt_xchacha(&opened.content_key, &blob, &aad).expect("correct chunk AAD");
+        let identity = opened.header.content_identity;
+        let wrap = wrap_aad(identity, &opened.header.top.kdf).unwrap();
+        let content = opened.keys.write_content();
+        assert!(decrypt_xchacha(content, &blob, &wrap).is_err());
+        let aad = chunk_aad(identity, &file_id, 0, CHUNK_SIZE, v0).unwrap();
+        decrypt_xchacha(content, &blob, &aad).expect("correct chunk AAD");
+    }
+
+    /// A chunk's version is the one its own nonce gives, so with the key a
+    /// chunk opens from its own bytes, and its key id is the one it was
+    /// sealed with.
+    #[test]
+    fn a_chunk_opens_with_its_key_and_its_own_bytes() {
+        use super::super::aead::decrypt_xchacha;
+
+        let (_tmp, dir, data, _file_id) = seeded_two_chunk();
+        let opened = open_store(&dir, PW).unwrap();
+        let node = opened.index.find("wide.bin").unwrap();
+        assert!(node
+            .chunk_keys()
+            .unwrap()
+            .iter()
+            .all(|key| *key == opened.keys.write_id()));
+        let (file_id, version, offset) = file_chunk_meta(&opened, "wide.bin", 0);
+        let bytes = read_chunk_bytes(&dir, &file_id, offset, CHUNK_SIZE);
+        let nonce: [u8; 24] = bytes[..24].try_into().unwrap();
+        assert_eq!(ChunkVersion::of_nonce(&nonce), version);
+        let aad = chunk_aad(
+            opened.keys.identity(),
+            &file_id,
+            0,
+            CHUNK_SIZE,
+            ChunkVersion::of_nonce(&nonce),
+        )
+        .unwrap();
+        let plain = decrypt_xchacha(opened.keys.write_content(), &bytes, &aad).unwrap();
+        assert_eq!(plain, data[..CHUNK_SIZE as usize]);
+    }
+
+    /// Every blob starts with the key copy of the header it was written
+    /// under, 4096 bytes, and its first chunk starts right after it.
+    #[test]
+    fn a_blob_starts_with_the_headers_key_copy_and_chunks_at_4096() {
+        let (_tmp, dir, _data, file_id) = seeded_two_chunk();
+        let opened = open_store(&dir, PW).unwrap();
+        let (_, _, first) = file_chunk_meta(&opened, "wide.bin", 0);
+        assert_eq!(first, KEY_COPY_LEN);
+        let blob = blob_path(&dir, &file_id).unwrap();
+        let prefix = super::super::key_copy::read_prefix(&blob).unwrap();
+        assert_eq!(prefix.generation, opened.header.top.generation);
+        assert_eq!(prefix.identity, opened.header.content_identity);
+        assert_eq!(prefix.file_id.to_string(), file_id);
+        let copy = super::super::key_copy::read_key_copy(&blob).unwrap();
+        let kek = opened.header.top.kdf.derive_kek(PW).unwrap();
+        let alone = copy.open(&kek).unwrap();
+        assert_eq!(alone.write_content(), opened.keys.write_content());
     }
 
     /// The replay guard: a chunk blob that was valid under its old version id
@@ -2578,8 +2643,7 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         write_logical_file(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "wide.bin",
             b"rewritten",
@@ -2599,14 +2663,7 @@ mod tests {
         raw[new_off as usize..end].copy_from_slice(&stale);
         crate::host_fs::write(&path, &raw).unwrap();
 
-        let err = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "wide.bin",
-        )
-        .unwrap_err();
+        let err = read_logical_file(&dir, &reopened.keys, &reopened.index, "wide.bin").unwrap_err();
         assert!(
             matches!(
                 err,
@@ -2630,19 +2687,11 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
 
         let first = vec![7u8; CHUNK_SIZE as usize];
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "grow.bin",
-            &first,
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "grow.bin", &first).unwrap();
         let (_, _, versions) = opened.index.find("grow.bin").unwrap().as_file().unwrap();
         let version_before = versions[0];
         let aad_before = chunk_aad(
-            &opened.header,
+            opened.header.content_identity,
             "00000000-0000-4000-8000-000000000001",
             0,
             CHUNK_SIZE,
@@ -2652,19 +2701,11 @@ mod tests {
 
         let mut grown = first.clone();
         grown.extend_from_slice(b"tail");
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "grow.bin",
-            &grown,
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "grow.bin", &grown).unwrap();
         flush_index(&dir, &mut opened).unwrap();
 
         let aad_after = chunk_aad(
-            &opened.header,
+            opened.header.content_identity,
             "00000000-0000-4000-8000-000000000001",
             0,
             CHUNK_SIZE,
@@ -2677,14 +2718,7 @@ mod tests {
         );
 
         let reopened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "grow.bin",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &reopened.keys, &reopened.index, "grow.bin").unwrap();
         assert_eq!(got, grown);
     }
 
@@ -2696,8 +2730,7 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         write_logical_file(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             b"generation-one",
@@ -2710,8 +2743,7 @@ mod tests {
 
         write_logical_file(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             b"generation-two",
@@ -2723,14 +2755,7 @@ mod tests {
         );
 
         let reopened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "notes.txt",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &reopened.keys, &reopened.index, "notes.txt").unwrap();
         assert_eq!(got, b"generation-one");
     }
 
@@ -2742,8 +2767,7 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         write_logical_file(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             b"generation-one",
@@ -2756,8 +2780,7 @@ mod tests {
 
         write_logical_range(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             0,
@@ -2770,14 +2793,7 @@ mod tests {
         );
 
         let reopened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "notes.txt",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &reopened.keys, &reopened.index, "notes.txt").unwrap();
         assert_eq!(got, b"generation-one");
     }
 
@@ -2789,23 +2805,14 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         let chunk = CHUNK_SIZE as usize;
         let head = vec![3u8; chunk + 10];
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "grow.bin",
-            &head,
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "grow.bin", &head).unwrap();
 
         // Starts inside the last chunk and ends three chunks later, past a gap.
         let at = 3 * chunk + 100;
         let tail = vec![9u8; chunk];
         write_logical_range(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "grow.bin",
             at as u64,
@@ -2823,14 +2830,7 @@ mod tests {
 
         flush_index(&dir, &mut opened).unwrap();
         let reopened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "grow.bin",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &reopened.keys, &reopened.index, "grow.bin").unwrap();
         assert_eq!(got, want);
     }
 
@@ -2853,63 +2853,59 @@ mod tests {
         path: &str,
         body: &[u8],
     ) -> (PathBuf, String) {
-        let (_, made) = write_logical_file(
-            dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            path,
-            body,
-        )
-        .unwrap();
+        let (_, made) =
+            write_logical_file(dir, &opened.keys, &mut opened.index, path, body).unwrap();
         made.sync_before_index(&opened.records()).unwrap();
         flush_index(dir, opened).unwrap();
         let file_id = opened.index.find(path).unwrap().as_file().unwrap().0;
         (blob_path(dir, file_id).unwrap(), file_id.to_string())
     }
 
+    /// A slot goes in the first gap that holds it, from the end of the key
+    /// copy on, and never over a span placement keeps off: with the newest
+    /// record among them, a record as large as a slot is never overwritten.
     #[test]
-    fn chunk_placement_keeps_off_the_newest_record_after_chunks_follow_it() {
+    fn chunk_placement_keeps_off_the_key_copy_and_the_newest_record() {
+        let slot = 500;
+        let chunk = (KEY_COPY_LEN, 100);
+        let record = (KEY_COPY_LEN + 100, 1000);
+        let end = KEY_COPY_LEN + 1100;
+        // The record's bytes are a gap that holds the slot.
+        assert_eq!(first_fit(end, slot, &[chunk]), KEY_COPY_LEN + 100);
+        // Kept off, the slot goes after them.
+        assert_eq!(first_fit(end, slot, &[chunk, record]), end);
+        // Nothing before the key copy's end is a gap.
+        assert_eq!(first_fit(KEY_COPY_LEN, slot, &[]), KEY_COPY_LEN);
+        assert_eq!(first_fit(0, slot, &[]), KEY_COPY_LEN);
+    }
+
+    /// A blob grown after its newest record keeps that record where it is,
+    /// and it still reads.
+    #[test]
+    fn chunks_written_after_a_record_leave_it_readable() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
         let mut opened = open_store(&dir, PW).unwrap();
-        // Chunks of 64 bytes: the record of ten of them spans several chunk
-        // slots, so a chunk could fit where it is.
-        opened.header.chunk_size = 64;
-        let body: Vec<u8> = (0..640u32).map(|n| n as u8).collect();
+        let body = vec![5u8; CHUNK_SIZE as usize];
         let (blob, file_id) = write_recorded(&dir, &mut opened, "f.bin", &body);
         let (span, before) = newest_record(&blob);
-        assert!(span.1 > 2 * cipher_len(64) as u64);
-
-        let write = |opened: &mut crate::store::OpenedStore, at: u64, data: &[u8]| {
-            write_logical_range(
-                &dir,
-                &opened.header,
-                &opened.content_key,
-                &mut opened.index,
-                "f.bin",
-                at,
-                data,
-            )
-            .unwrap();
-        };
-        // A chunk after the record: the blob no longer ends with it.
-        write(&mut opened, 640, &[7u8; 64]);
-        flush_index(&dir, &mut opened).unwrap();
-        // Five chunks written again in one batch each need a new slot.
-        write(&mut opened, 0, &[1u8; 5 * 64]);
-        let bytes = crate::host_fs::read(&blob).unwrap();
-        assert_eq!(&bytes[span.0 as usize..(span.0 + span.1) as usize], before);
-        let record = super::super::record::read_record(
-            &blob,
-            &file_id,
-            &opened.header,
-            &opened.record_key,
-            true,
+        write_logical_range(
+            &dir,
+            &opened.keys,
+            &mut opened.index,
+            "f.bin",
+            u64::from(CHUNK_SIZE),
+            &[7u8; 64],
         )
         .unwrap();
-        assert_eq!(record.node.as_file().unwrap().1, 640);
+        flush_index(&dir, &mut opened).unwrap();
+        write_logical_range(&dir, &opened.keys, &mut opened.index, "f.bin", 0, &body).unwrap();
+        let bytes = crate::host_fs::read(&blob).unwrap();
+        assert_eq!(&bytes[span.0 as usize..(span.0 + span.1) as usize], before);
+        let record =
+            super::super::record::read_record(&blob, &file_id, &opened.keys, true).unwrap();
+        assert_eq!(record.node.as_file().unwrap().1, u64::from(CHUNK_SIZE));
     }
 
     #[test]
@@ -2920,28 +2916,19 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         let (blob, _) = write_recorded(&dir, &mut opened, "note.txt", b"a short note");
         let need_pack = |opened: &crate::store::OpenedStore| {
-            blobs_need_pack(
-                &dir,
-                &opened.header,
-                &opened.index,
-                BlobPackMode::Close,
-                None,
-            )
+            blobs_need_pack(&dir, &opened.index, BlobPackMode::Close, None)
         };
         assert!(!need_pack(&opened), "a small file with only its record");
 
         // The record a close writes leaves the first one as waste.
         let node = opened.index.find("note.txt").unwrap().clone();
-        let record_key = &opened.record_key;
-        super::super::record::append_record(&blob, &opened.header, record_key, &node, 9, None)
-            .unwrap();
+        super::super::record::append_record(&blob, &opened.keys, &node, 9, None).unwrap();
         assert!(need_pack(&opened));
 
         // Packing copies the chunks to a new blob, which gets one record.
         let packed = pack_blob_waste(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             BlobPackMode::Close,
             None,
@@ -2949,14 +2936,13 @@ mod tests {
         .unwrap()
         .mutation;
         packed.sync_before_index(&opened.records()).unwrap();
+        opened.index.list_released(packed.superseded_ids());
         flush_index(&dir, &mut opened).unwrap();
-        for id in packed.superseded_ids() {
-            remove_file_chunks(&dir, &id).unwrap();
-        }
+        crate::store::delete_released(&dir, &mut opened.index);
         assert!(!need_pack(&opened));
         let file_id = opened.index.find("note.txt").unwrap().as_file().unwrap().0;
         let (span, _) = newest_record(&blob_path(&dir, file_id).unwrap());
-        assert_eq!(span.0, cipher_len(12) as u64);
+        assert_eq!(span.0, KEY_COPY_LEN + cipher_len(12) as u64);
     }
 
     /// No drive has an exbibyte free, so each way of asking for one is
@@ -2967,15 +2953,7 @@ mod tests {
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
         let mut opened = open_store(&dir, PW).unwrap();
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "sparse.bin",
-            b"head",
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "sparse.bin", b"head").unwrap();
         let before = opened.index.nodes().to_vec();
         let (file_id, _, _) = opened.index.find("sparse.bin").unwrap().as_file().unwrap();
         let blob = blob_path(&dir, file_id).unwrap();
@@ -2983,27 +2961,25 @@ mod tests {
         let exbibyte = 1u64 << 60;
         let refused = |result: Result<ChunkBlobMutation>| matches!(result, Err(UprivError::Io(error)) if error.kind() == std::io::ErrorKind::StorageFull);
 
-        let (header, key) = (&opened.header, &opened.content_key);
+        let keys = &opened.keys;
         let index = &mut opened.index;
         assert!(refused(truncate_logical_file(
             &dir,
-            header,
-            key,
+            keys,
             index,
             "sparse.bin",
             exbibyte
         )));
         assert!(refused(write_logical_range(
             &dir,
-            header,
-            key,
+            keys,
             index,
             "sparse.bin",
             exbibyte,
             b"tail"
         )));
         assert!(refused(truncate_logical_file(
-            &dir, header, key, index, "new.bin", exbibyte
+            &dir, keys, index, "new.bin", exbibyte
         )));
         assert_eq!(opened.index.nodes(), before.as_slice());
         assert_eq!(std::fs::metadata(&blob).unwrap().len(), blob_len);
@@ -3018,26 +2994,9 @@ mod tests {
         let payload = vec![7u8; CHUNK_SIZE as usize];
         let next = vec![8u8; CHUNK_SIZE as usize];
         let third = vec![9u8; CHUNK_SIZE as usize];
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "wide.bin",
-            &payload,
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "wide.bin", &payload).unwrap();
         flush_index(&dir, &mut opened).unwrap();
-        write_logical_range(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "wide.bin",
-            0,
-            &next,
-        )
-        .unwrap();
+        write_logical_range(&dir, &opened.keys, &mut opened.index, "wide.bin", 0, &next).unwrap();
         flush_index(&dir, &mut opened).unwrap();
         let file_id = opened
             .index
@@ -3050,16 +3009,7 @@ mod tests {
         let len_after_seal = crate::host_fs::metadata(blob_path(&dir, &file_id).unwrap())
             .unwrap()
             .len();
-        write_logical_range(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "wide.bin",
-            0,
-            &third,
-        )
-        .unwrap();
+        write_logical_range(&dir, &opened.keys, &mut opened.index, "wide.bin", 0, &third).unwrap();
         let len_after_reuse = crate::host_fs::metadata(blob_path(&dir, &file_id).unwrap())
             .unwrap()
             .len();
@@ -3069,14 +3019,7 @@ mod tests {
         );
 
         let sealed = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &sealed.header,
-            &sealed.content_key,
-            &sealed.index,
-            "wide.bin",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &sealed.keys, &sealed.index, "wide.bin").unwrap();
         assert_eq!(
             got, next,
             "the sealed generation must survive the next rewrite"
@@ -3091,25 +3034,16 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         let mut payload = vec![1u8; CHUNK_SIZE as usize];
         payload.extend(std::iter::repeat_n(2u8, CHUNK_SIZE as usize));
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "wide.bin",
-            &payload,
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "wide.bin", &payload).unwrap();
         flush_index(&dir, &mut opened).unwrap();
         let (file_id, _, offset) = file_chunk_meta(&opened, "wide.bin", 0);
-        assert_eq!(offset, 0);
-        let sealed_bytes = read_chunk_bytes(&dir, &file_id, 0, CHUNK_SIZE);
+        assert_eq!(offset, KEY_COPY_LEN);
+        let sealed_bytes = read_chunk_bytes(&dir, &file_id, offset, CHUNK_SIZE);
 
         let replacement = vec![3u8; CHUNK_SIZE as usize];
         write_logical_range(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "wide.bin",
             0,
@@ -3119,8 +3053,7 @@ mod tests {
         let other = vec![4u8; CHUNK_SIZE as usize];
         write_logical_range(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "wide.bin",
             u64::from(CHUNK_SIZE),
@@ -3129,18 +3062,11 @@ mod tests {
         .unwrap();
 
         assert!(
-            read_chunk_bytes(&dir, &file_id, 0, CHUNK_SIZE) == sealed_bytes,
+            read_chunk_bytes(&dir, &file_id, offset, CHUNK_SIZE) == sealed_bytes,
             "the second rewrite must not overwrite the sealed span"
         );
         let reopened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "wide.bin",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &reopened.keys, &reopened.index, "wide.bin").unwrap();
         assert_eq!(got, payload);
     }
 
@@ -3152,8 +3078,7 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         write_logical_file(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             b"generation-one",
@@ -3162,8 +3087,7 @@ mod tests {
         flush_index(&dir, &mut opened).unwrap();
         write_logical_range(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             0,
@@ -3172,8 +3096,7 @@ mod tests {
         .unwrap();
         let packed = pack_blob_waste(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             BlobPackMode::Close,
             None,
@@ -3182,10 +3105,9 @@ mod tests {
         .mutation;
         assert!(!packed.created.is_empty(), "dead ciphertext must be packed");
         packed.sync_before_index(&opened.records()).unwrap();
+        opened.index.list_released(packed.superseded_ids());
         flush_index(&dir, &mut opened).unwrap();
-        for id in packed.superseded_ids() {
-            remove_file_chunks(&dir, &id).unwrap();
-        }
+        crate::store::delete_released(&dir, &mut opened.index);
         let file_id = opened.index.find("notes.txt").unwrap().as_file().unwrap().0;
         let path = blob_path(&dir, file_id).unwrap();
         let mut blob =
@@ -3193,21 +3115,14 @@ mod tests {
         let len = blob.metadata().unwrap().len();
         let (record_start, record_len) =
             super::super::record::newest_record_span(&mut blob, len).expect("its record");
-        // The live chunk, then its record: no dead ciphertext.
+        // The key copy, the live chunk, then its record: no dead ciphertext.
         assert_eq!(
             record_start,
-            cipher_len(b"generation-two".len() as u32) as u64
+            KEY_COPY_LEN + cipher_len(b"generation-two".len() as u32) as u64
         );
         assert_eq!(record_start + record_len, len);
         let reopened = open_store(&dir, PW).unwrap();
-        let got = read_logical_file(
-            &dir,
-            &reopened.header,
-            &reopened.content_key,
-            &reopened.index,
-            "notes.txt",
-        )
-        .unwrap();
+        let got = read_logical_file(&dir, &reopened.keys, &reopened.index, "notes.txt").unwrap();
         assert_eq!(got, b"generation-two");
     }
 
@@ -3220,8 +3135,7 @@ mod tests {
         let mut opened = open_store(&dir, PW).unwrap();
         write_logical_file(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             b"generation-one",
@@ -3236,8 +3150,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &blob).unwrap();
         let err = write_logical_range(
             &dir,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &mut opened.index,
             "notes.txt",
             0,

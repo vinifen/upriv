@@ -29,12 +29,13 @@
 //! ```
 //!
 //! The newest record ends at the blob's last byte; the previous one ends where
-//! its footer says. Its key is its own HKDF layer of the master key
-//! ([`super::aead::derive_record_key`]); its AAD binds the vault, the blob's
-//! file id, and `seq` ([`super::header::record_aad`]), so a record copied into
-//! another vault, blob, or place in the chain does not open. A record is
-//! decrypted before any of it is parsed, then checked against the header and
-//! its blob before recovery uses it.
+//! its footer says. It is sealed with the record key of the keyring's write
+//! key at the time it is written ([`super::keys`]), and a reader tries the
+//! keys it holds, newest first. Its AAD binds the vault, the blob's file id,
+//! and `seq` ([`super::header::record_aad`]), so a record copied into another
+//! vault, blob, or place in the chain does not open. A record is decrypted
+//! before any of it is parsed, then checked against the vault and its blob
+//! before recovery uses it.
 //!
 //! Recovery may get older data than the vault last held, since someone with
 //! the disk can put back an older blob with its older record. That is why
@@ -51,12 +52,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::aead::{
-    decrypt_xchacha, encrypt_xchacha, CONTENT_KEY_LEN, INDEX_KEY_LEN, RECORD_KEY_LEN,
-};
+use super::aead::{decrypt_xchacha, encrypt_xchacha};
 use super::chunk::{blob_file_id, chunk_count, chunk_plain_len, cipher_len, validate_logical_path};
-use super::header::{record_aad, VaultHeader};
+use super::header::{record_aad, CHUNK_SIZE};
 use super::index::{VaultIndex, VaultNode};
+use super::key_copy::KEY_COPY_LEN;
+use super::keys::Keyring;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 
@@ -150,10 +151,10 @@ struct RecordPayload {
     node: VaultNode,
 }
 
-/// The tree a seal is about to write, and what its records are sealed with.
+/// The tree a seal is about to write, and the keyring its records and key
+/// copies come from.
 pub(crate) struct Records<'a> {
-    pub header: &'a VaultHeader,
-    pub key: &'a [u8; RECORD_KEY_LEN],
+    pub keys: &'a Keyring,
     pub index: &'a VaultIndex,
 }
 
@@ -184,12 +185,11 @@ pub(crate) fn append_records(records: &Records<'_>, blobs: &[PathBuf]) -> Vec<Pa
             continue;
         }
         let known = records.index.writes.records.get(file_id).copied();
-        match append_record(path, records.header, records.key, node, save, known) {
+        match append_record(path, records.keys, node, save, known) {
             Ok(()) => {
                 #[cfg(all(test, debug_assertions))]
                 assert_eq!(
-                    read_record(path, file_id, records.header, records.key, false)
-                        .map(|record| record.node.kind),
+                    read_record(path, file_id, records.keys, false).map(|record| record.node.kind),
                     Some(node.kind.clone()),
                     "a record reads back as the entry it was written from"
                 );
@@ -211,8 +211,7 @@ pub(crate) fn append_records(records: &Records<'_>, blobs: &[PathBuf]) -> Vec<Pa
 /// could not be written: the seal that names the blob then writes it.
 pub(crate) fn record_made_blob(
     store_dir: &Path,
-    header: &VaultHeader,
-    key: &[u8; RECORD_KEY_LEN],
+    keys: &Keyring,
     node: &VaultNode,
     save: u64,
 ) -> bool {
@@ -222,7 +221,7 @@ pub(crate) fn record_made_blob(
     let Ok(path) = super::chunk::blob_path(store_dir, file_id) else {
         return false;
     };
-    let appended = append_record(&path, header, key, node, save, None).is_ok();
+    let appended = append_record(&path, keys, node, save, None).is_ok();
     if !appended {
         log_record_failed(&path, 1);
     }
@@ -245,17 +244,17 @@ fn log_record_failed(blob: &Path, count: usize) {
     );
 }
 
-/// Append a record of `node` to its blob at `path`, after everything in it.
-/// The caller flushes the blob with the seal that names `node`. The file's
-/// problem mark is the vault's state, not the file's, and is left out.
+/// Append a record of `node` to its blob at `path`, after everything in it,
+/// sealed with the write key's record key. The caller flushes the blob with
+/// the seal that names `node`. The file's problem mark is the vault's state,
+/// not the file's, and is left out.
 ///
 /// It links to the blob's newest record: the one its last bytes end with, or,
 /// once the session wrote chunks after it, `known` (`(start, length)`, as
 /// [`newest_record_span`] gave it), so a reader can fall back along the chain.
 pub(crate) fn append_record(
     path: &Path,
-    header: &VaultHeader,
-    key: &[u8; RECORD_KEY_LEN],
+    keys: &Keyring,
     node: &VaultNode,
     save: u64,
     known: Option<(u64, u64)>,
@@ -281,14 +280,18 @@ pub(crate) fn append_record(
     node.problem = None;
     let payload = Zeroizing::new(
         serde_json::to_vec(&RecordPayload {
-            vault: header.content_identity,
+            vault: keys.identity(),
             save,
             written_at: crate::time::unix_millis(),
             node,
         })
         .map_err(|error| record_error(&format!("record serialize: {error}")))?,
     );
-    let sealed = encrypt_xchacha(key, &payload, &record_aad(header, file_id, seq)?)?;
+    let sealed = encrypt_xchacha(
+        keys.write_record(),
+        &payload,
+        &record_aad(keys.identity(), file_id, seq)?,
+    )?;
     let record_len = u32::try_from(sealed.len())
         .ok()
         .filter(|len| u64::from(*len) <= MAX_RECORD_LEN)
@@ -315,15 +318,14 @@ pub(crate) fn append_record(
 pub(crate) fn read_record(
     path: &Path,
     file_id: &str,
-    header: &VaultHeader,
-    key: &[u8; RECORD_KEY_LEN],
+    keys: &Keyring,
     scan: bool,
 ) -> Option<BlobRecord> {
     let mut file = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read).ok()?;
     let len = file.metadata().ok()?.len();
     let mut end = len;
     while let Some(footer) = footer_at(&mut file, end) {
-        if let Some(record) = open_record(&mut file, end, footer, header, key, file_id) {
+        if let Some(record) = open_record(&mut file, end, footer, keys, file_id) {
             return Some(record);
         }
         if footer.prev_end == 0 {
@@ -334,15 +336,14 @@ pub(crate) fn read_record(
     if !scan {
         return None;
     }
-    scan_back(&mut file, len, header, key, file_id)
+    scan_back(&mut file, len, keys, file_id)
 }
 
 /// Search the blob from its end for a footer whose record opens.
 fn scan_back(
     file: &mut crate::host_fs::File,
     len: u64,
-    header: &VaultHeader,
-    key: &[u8; RECORD_KEY_LEN],
+    keys: &Keyring,
     file_id: &str,
 ) -> Option<BlobRecord> {
     let overlap = FOOTER_MAGIC.len() as u64 - 1;
@@ -362,7 +363,7 @@ fn scan_back(
                 let Some(footer) = footer_at(file, end) else {
                     continue;
                 };
-                if let Some(record) = open_record(file, end, footer, header, key, file_id) {
+                if let Some(record) = open_record(file, end, footer, keys, file_id) {
                     return Some(record);
                 }
             }
@@ -375,42 +376,47 @@ fn scan_back(
     None
 }
 
-/// Decrypt the record before the footer ending at `end`, then check it: it
-/// belongs to this vault and this blob, its path is a valid store path, its
-/// chunk lists match its size, and every chunk it names lies before it.
+/// Decrypt the record before the footer ending at `end` with each key of
+/// `keys`, newest first, then check it: it belongs to this vault and this
+/// blob, its path is a valid store path, its chunk lists match its size, and
+/// every chunk it names lies between the key copy and the record.
 fn open_record(
     file: &mut crate::host_fs::File,
     end: u64,
     footer: Footer,
-    header: &VaultHeader,
-    key: &[u8; RECORD_KEY_LEN],
+    keys: &Keyring,
     file_id: &str,
 ) -> Option<BlobRecord> {
     let start = footer.record_start(end);
     let mut sealed = vec![0u8; footer.len as usize];
     file.seek(SeekFrom::Start(start)).ok()?;
     file.read_exact(&mut sealed).ok()?;
-    let aad = record_aad(header, file_id, footer.seq).ok()?;
-    let plain = Zeroizing::new(decrypt_xchacha(key, &sealed, &aad).ok()?);
+    let aad = record_aad(keys.identity(), file_id, footer.seq).ok()?;
+    let plain = keys
+        .records_newest_first()
+        .find_map(|key| decrypt_xchacha(key, &sealed, &aad).ok())
+        .map(Zeroizing::new)?;
     let payload: RecordPayload = serde_json::from_slice(&plain).ok()?;
-    if payload.vault != header.content_identity {
+    if payload.vault != keys.identity() {
         return None;
     }
     let node = payload.node;
-    let (named_id, size, versions) = node.as_file()?;
-    let offsets = node.chunk_offsets()?;
+    let (named_id, size, _) = node.as_file()?;
+    let chunks = node.chunks()?;
     if named_id != file_id || validate_logical_path(&node.path).is_err() {
         return None;
     }
-    let count = chunk_count(size, header.chunk_size) as usize;
-    if versions.len() != count || offsets.len() != count {
+    let count = chunk_count(size, CHUNK_SIZE) as usize;
+    if chunks.versions.len() != count || chunks.keys.len() != count || chunks.offsets.len() != count
+    {
         return None;
     }
-    let chunks_fit = offsets.iter().enumerate().all(|(index, offset)| {
-        let sealed_len = cipher_len(chunk_plain_len(size, index as u32, header.chunk_size)) as u64;
-        offset
-            .checked_add(sealed_len)
-            .is_some_and(|chunk_end| chunk_end <= start)
+    let chunks_fit = chunks.offsets.iter().enumerate().all(|(index, offset)| {
+        let sealed_len = cipher_len(chunk_plain_len(size, index as u32, CHUNK_SIZE)) as u64;
+        *offset >= KEY_COPY_LEN
+            && offset
+                .checked_add(sealed_len)
+                .is_some_and(|chunk_end| chunk_end <= start)
     });
     if !chunks_fit || node.problem.is_some() {
         return None;
@@ -445,10 +451,7 @@ pub(crate) struct RebuiltTree {
 
 /// What a rebuild reads to name a store's blobs.
 pub(crate) struct RebuildSources<'a> {
-    pub header: &'a VaultHeader,
-    pub content_key: &'a [u8; CONTENT_KEY_LEN],
-    pub index_key: &'a [u8; INDEX_KEY_LEN],
-    pub record_key: &'a [u8; RECORD_KEY_LEN],
+    pub keys: &'a Keyring,
     /// This vault's backup zips, newest first.
     pub backup_zips: &'a dyn Fn() -> Vec<PathBuf>,
 }
@@ -487,22 +490,10 @@ pub(crate) fn rebuild_tree(
     let mut records = Vec::with_capacity(blobs.len());
     for (path, file_id) in &blobs {
         step()?;
-        records.push(read_record(
-            path,
-            file_id,
-            sources.header,
-            sources.record_key,
-            true,
-        ));
+        records.push(read_record(path, file_id, sources.keys, true));
     }
     step()?;
-    let backups = super::held::name_from_backups(
-        &blobs,
-        sources.header,
-        sources.content_key,
-        sources.index_key,
-        sources.backup_zips,
-    );
+    let backups = super::held::name_from_backups(&blobs, sources.keys, sources.backup_zips);
     let mut named: Vec<Named> = Vec::with_capacity(blobs.len());
     let mut unnamed = 0;
     for (record, backup) in records.into_iter().zip(backups) {
@@ -586,7 +577,7 @@ fn place(index: &mut VaultIndex, node: VaultNode) -> bool {
 
 /// Every blob in the `data/` of `store_dir`, with its file id: a file named
 /// `<id>.blob` in a shard folder of two hex digits. Anything else is skipped.
-fn list_blobs(store_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
+pub(crate) fn list_blobs(store_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
     let data = store_dir.join(super::index::DATA_DIR_NAME);
     let shards = match crate::host_fs::read_dir(&data) {
         Ok(shards) => shards,
@@ -646,15 +637,8 @@ mod tests {
         /// Returns its blob and id.
         fn write(&mut self, path: &str, body: &[u8]) -> (PathBuf, String) {
             let opened = &mut self.opened;
-            let (_, mutation) = write_logical_file(
-                &self.dir,
-                &opened.header,
-                &opened.content_key,
-                &mut opened.index,
-                path,
-                body,
-            )
-            .unwrap();
+            let (_, mutation) =
+                write_logical_file(&self.dir, &opened.keys, &mut opened.index, path, body).unwrap();
             mutation.sync_before_index(&opened.records()).unwrap();
             let id = self.node(path).as_file().unwrap().0.to_string();
             (blob_path(&self.dir, &id).unwrap(), id)
@@ -665,17 +649,17 @@ mod tests {
         }
 
         fn read(&self, blob: &Path, id: &str, scan: bool) -> Option<BlobRecord> {
-            read_record(blob, id, &self.opened.header, &self.opened.record_key, scan)
+            read_record(blob, id, &self.opened.keys, scan)
         }
 
-        /// Append `payload` as a record sealed with this vault's key, bound
-        /// to `id` and `seq`, the way [`append_record`] does.
+        /// Append `payload` as a record sealed with this vault's write key,
+        /// bound to `id` and `seq`, the way [`append_record`] does.
         fn append_sealed(&self, blob: &Path, id: &str, seq: u32, payload: &[u8]) {
-            let header = &self.opened.header;
+            let keys = &self.opened.keys;
             let sealed = encrypt_xchacha(
-                &self.opened.record_key,
+                keys.write_record(),
                 payload,
-                &record_aad(header, id, seq).unwrap(),
+                &record_aad(keys.identity(), id, seq).unwrap(),
             )
             .unwrap();
             let len = crate::host_fs::metadata(blob).unwrap().len();
@@ -720,8 +704,11 @@ mod tests {
         assert_eq!(&record.node, store.node("a.txt"));
         assert_eq!(record.save, store.opened.index.saves + 1);
         assert!(record.written_at > 0);
-        // The record sits after the one chunk it names.
-        assert_eq!(tail(&blob), cipher_len(10) as u64);
+        // The record sits after the key copy and the one chunk it names.
+        assert_eq!(
+            tail(&blob),
+            crate::store::KEY_COPY_LEN + cipher_len(10) as u64
+        );
     }
 
     #[test]
@@ -730,15 +717,7 @@ mod tests {
         let (blob, id) = store.write("a.txt", b"body");
         let mut node = store.node("a.txt").clone();
         node.problem = Some(FileProblem::Damaged);
-        append_record(
-            &blob,
-            &store.opened.header,
-            &store.opened.record_key,
-            &node,
-            4,
-            None,
-        )
-        .unwrap();
+        append_record(&blob, &store.opened.keys, &node, 4, None).unwrap();
         let record = store.read(&blob, &id, false).unwrap();
         assert_eq!(record.node.problem, None);
         assert_eq!(record.save, 4);
@@ -751,8 +730,7 @@ mod tests {
         let first = store.read(&blob, &id, false).unwrap();
         let mut renamed = store.node("a.txt").clone();
         renamed.path = "b.txt".into();
-        let header = &store.opened.header;
-        append_record(&blob, header, &store.opened.record_key, &renamed, 7, None).unwrap();
+        append_record(&blob, &store.opened.keys, &renamed, 7, None).unwrap();
         let newest = store.read(&blob, &id, false).unwrap();
         assert_eq!((newest.node.path.as_str(), newest.save), ("b.txt", 7));
 
@@ -779,9 +757,8 @@ mod tests {
         let mut bytes = crate::host_fs::read(&blob).unwrap();
         bytes.extend_from_slice(&[0x33; 100]);
         crate::host_fs::write(&blob, &bytes).unwrap();
-        let header = &store.opened.header;
         let node = store.node("a.txt").clone();
-        append_record(&blob, header, &store.opened.record_key, &node, 8, span).unwrap();
+        append_record(&blob, &store.opened.keys, &node, 8, span).unwrap();
         assert_eq!(store.read(&blob, &id, false).unwrap().save, 8);
 
         // The newest broken: the chain still reaches the first, with no scan.
@@ -878,8 +855,15 @@ mod tests {
                 store.payload(&edit_file(&node, |_, size, _| *size = 600 * 1024), |_| {}),
             ),
             (
-                "a chunk that ends past the record's start",
+                "a chunk inside the key copy",
                 store.payload(&edit_file(&node, |_, _, offsets| offsets[0] = 40), |_| {}),
+            ),
+            (
+                "a chunk that ends past the record's start",
+                store.payload(
+                    &edit_file(&node, |_, _, offsets| offsets[0] = KEY_COPY_LEN + 40),
+                    |_| {},
+                ),
             ),
             (
                 "a problem mark",

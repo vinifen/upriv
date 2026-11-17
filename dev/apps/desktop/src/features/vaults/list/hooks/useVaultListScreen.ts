@@ -29,12 +29,12 @@ import {
   createVaultImportPackage,
   dataFolderCanExport,
   fileNameOfPath,
-  formatBytes,
   vaultCanSaveBackupNow,
   vaultDeleteHold,
+  isVaultDeleteUnfinished,
   resolveVaultListStatus,
   vaultRowControls,
-  vaultRebuildSpaceShort,
+  vaultRebuiltToast,
   vaultRowJobWork,
   vaultStatusLabelKey,
   VAULT_DELETE_HOLD_I18N_KEY,
@@ -53,6 +53,7 @@ import {
   shouldRecordVaultHidden,
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
+  type KeyCopies,
   type VaultBackupEntry,
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
@@ -72,12 +73,14 @@ import {
   useDataFolderExportJob,
   useFileManagerSelector,
   useOperationLimit,
+  usePasswordChangeJob,
   useUnfinishedSweep,
+  useUnlockRamChangeJob,
   useVaultBackupJob,
+  useVaultDeleteJob,
   useVaultRebuildJob,
-  useVaultRewrapJob,
-  type VaultRewrapOutcome,
-  type VaultRewrapTarget,
+  type PasswordChangeOutcome,
+  type UnlockRamChangeOutcome,
 } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { publishRunningWork, type RunningWorkItem } from "@/lib/runningWork";
@@ -563,66 +566,129 @@ export function useVaultListScreen() {
     },
     onStopRefused: (_vaultId, error) => showError(error, "error.job_not_stoppable"),
   });
-  const [rewrapOutcome, setRewrapOutcome] = useState<VaultRewrapOutcome | null>(null);
-  const rewrapSeqRef = useRef(0);
-  /** The settings window shows this change's screen, so it marks the outcome itself. */
-  const rewrapShown = (target: VaultRewrapTarget) =>
-    modals.settingsVaultId === target.vaultId && modals.settingsArea === target.kind;
-  const rewrap = useVaultRewrapJob(securityService, jobs, {
-    onChanged: (target) => {
-      if (target.nextPreset) updateVaultUnlockPreset(target.vaultId, target.nextPreset);
-      showToast(
-        t(
-          target.kind === "password" ? "vault.change_password.success" : "vault.change_kdf.success",
-        ),
-      );
-      setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error: null });
+  /** Read the rows again from core: a change or a delete moved a row's keys, state, or session. */
+  const reloadVaults = useCallback(() => {
+    const fetchStartedAt = Date.now();
+    void vaultService.listVaults().then(
+      (rows) => applyVaultList(rows, fetchStartedAt),
+      (error: unknown) => showError(error, "toast.refresh_failed"),
+    );
+  }, [applyVaultList, showError, vaultService]);
+
+  const changeSeqRef = useRef(0);
+  /** The settings window shows this screen of the vault, so it shows the outcome itself. */
+  const settingsShows = (vaultId: string, area: VaultSettingsAreaId) =>
+    modals.settingsVaultId === vaultId && modals.settingsArea === area;
+  /** A change's toast, saying when the key copies of its files wait for the next open. */
+  const changedToast = (
+    key: "toast.password_changed" | "toast.password_change_finished" | "toast.unlock_ram_changed",
+    vaultId: string,
+    keyCopies: KeyCopies,
+  ) => {
+    const name = vaultName(vaultId);
+    const waiting = keyCopies === "waiting" ? ` ${t("toast.key_copies_waiting", { name })}` : "";
+    showToast(`${t(key, { name })}${waiting}`);
+  };
+  const [passwordOutcome, setPasswordOutcome] = useState<PasswordChangeOutcome | null>(null);
+  /** Hand the settings window how a password change or Finish ended. */
+  const passwordEnded = (outcome: Omit<PasswordChangeOutcome, "seq">) =>
+    setPasswordOutcome({ ...outcome, seq: ++changeSeqRef.current });
+  const passwordChange = usePasswordChangeJob(securityService, jobs, {
+    onChanged: (result, target) => {
+      changedToast("toast.password_changed", target.vaultId, result.keyCopies);
+      passwordEnded({ ...target, result, error: null, stopped: false });
+      reloadVaults();
+    },
+    onFinished: (result, target) => {
+      changedToast("toast.password_change_finished", target.vaultId, result.keyCopies);
+      passwordEnded({ ...target, result, error: null, stopped: false });
+      reloadVaults();
     },
     onFailed: (error, target) => {
-      setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error });
-      if (!rewrapShown(target)) showError(error, "error.settings_save_failed");
+      passwordEnded({ ...target, result: null, error, stopped: false });
+      if (!settingsShows(target.vaultId, "password")) {
+        showError(error, "error.settings_save_failed");
+      }
+      reloadVaults();
     },
-    onCancelled: () => showToast(t("error.job_cancelled")),
+    onCancelled: (target) => {
+      passwordEnded({ ...target, result: null, error: null, stopped: true });
+      showToast(
+        target.kind === "finish"
+          ? t("vault.change_password.finish_stopped")
+          : t("toast.password_change_stopped", { name: vaultName(target.vaultId) }),
+      );
+      reloadVaults();
+    },
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
+  });
+  const [unlockRamOutcome, setUnlockRamOutcome] = useState<UnlockRamChangeOutcome | null>(null);
+  /** Hand the settings window how an unlock-RAM change ended. */
+  const unlockRamEnded = (outcome: Omit<UnlockRamChangeOutcome, "seq">) =>
+    setUnlockRamOutcome({ ...outcome, seq: ++changeSeqRef.current });
+  const unlockRamChange = useUnlockRamChangeJob(securityService, jobs, {
+    onChanged: (result, target) => {
+      updateVaultUnlockPreset(target.vaultId, target.nextPreset);
+      changedToast("toast.unlock_ram_changed", target.vaultId, result.keyCopies);
+      unlockRamEnded({ ...target, result, error: null, stopped: false });
+    },
+    onFailed: (error, target) => {
+      unlockRamEnded({ ...target, result: null, error, stopped: false });
+      if (!settingsShows(target.vaultId, "kdf")) showError(error, "error.settings_save_failed");
+    },
+    onCancelled: (target) => {
+      unlockRamEnded({ ...target, result: null, error: null, stopped: true });
+      showToast(t("toast.unlock_ram_change_stopped", { name: vaultName(target.vaultId) }));
+    },
     onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
   /** The lifecycle's open with a password, set once it exists below. */
   const openWithPasswordRef = useRef<(vaultId: string, password: string) => boolean>(() => false);
   const rebuild = useVaultRebuildJob(securityService, jobs, {
     onRebuilt: (result, { vaultId }, password) => {
-      // The new index is sealed and recorded: the vault is closed, not in recovery.
+      // The header and the index are sealed and recorded: the vault is closed, not in recovery.
       setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
-      const name = vaultName(vaultId);
-      showToast(
-        result.setAside > 0
-          ? t("toast.vault_rebuilt_set_aside", {
-              name,
-              files: result.files,
-              count: result.setAside,
-            })
-          : t("toast.vault_rebuilt", { name, files: result.files }),
-      );
+      showToast(vaultRebuiltToast(result, vaultName(vaultId), t));
+      reloadVaults();
       // Ready to use: it opens with the password the rebuild ran with. The
       // rebuild no longer holds it, though the list has not drawn that yet.
       if (!password) return;
       blockOpenVaultIdsRef.current.delete(vaultId);
       openWithPasswordRef.current(vaultId, password);
     },
-    onFailed: (error, { vaultId }) => {
-      const space = vaultRebuildSpaceShort(error);
-      if (space) {
-        showToast(
-          t("toast.vault_rebuild_space_short", {
-            name: vaultName(vaultId),
-            needed: formatBytes(space.needed),
-            available: formatBytes(space.available),
-          }),
-        );
-        return;
-      }
-      showError(error, "toast.vault_rebuild_failed");
-    },
+    onFailed: (error) => showError(error, "toast.vault_rebuild_failed"),
     onCancelled: () => showToast(t("error.job_cancelled")),
     onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
+  });
+  /** Running deletes already told to finish the Delete now way. */
+  const [deleteNowIds, setDeleteNowIds] = useState<readonly string[]>([]);
+  /** The vault whose Delete now waits for its confirmation. */
+  const [deleteNowAsk, setDeleteNowAsk] = useState<string | null>(null);
+  const deleteJob = useVaultDeleteJob(vaultService, jobs, {
+    onDeleted: (outcome, target) => {
+      setDeleteNowIds([]);
+      const params = { name: target.displayName, folder: outcome.folder ?? "" };
+      showToast(
+        outcome.outside === "kept"
+          ? t("toast.vault_deleted_outside_kept", params)
+          : outcome.outside === "failed"
+            ? t("toast.vault_deleted_outside_failed", params)
+            : t("toast.vault_deleted", params),
+      );
+      forgetDeletedVault(target.vaultId);
+    },
+    // A refusal leaves the vault as it was; a failure once the delete began
+    // leaves its row `deleting`, with Continue.
+    onFailed: (error) => {
+      setDeleteNowIds([]);
+      showError(error);
+      reloadVaults();
+    },
+    onCancelled: (target) => {
+      setDeleteNowIds([]);
+      showToast(t("toast.vault_delete_stopped", { name: target.displayName }));
+      reloadVaults();
+    },
   });
   const backupExportFolder = useExportFolder(t("modal.backup.export_picker_title"));
   const backupExport = useBackupExportJob(backupService, jobs, {
@@ -661,9 +727,11 @@ export function useVaultListScreen() {
   // The export holds every vault: none may open until it ends.
   blockOpenVaultIdsRef.current = new Set(
     [
-      rewrap.job?.vaultId,
+      passwordChange.job?.vaultId,
+      unlockRamChange.job?.vaultId,
       rebuild.job?.vaultId,
       backupJob.job?.vaultId,
+      deleteJob.job?.vaultId,
       ...(dataFolderExport.job ? vaults.map((vault) => vault.id) : []),
     ].filter((id): id is string => id != null),
   );
@@ -676,10 +744,12 @@ export function useVaultListScreen() {
   }, [
     backupJob.job,
     dataFolderExport.job,
+    deleteJob.job,
     lifecycleRequest,
+    passwordChange.job,
     rebuild.job,
-    rewrap.job,
     setLifecycleRequest,
+    unlockRamChange.job,
   ]);
 
   const lifecycle = useVaultLifecycleActions({
@@ -734,20 +804,31 @@ export function useVaultListScreen() {
     () => filterVisibleVaults(vaults, showHiddenVaults),
     [showHiddenVaults, vaults],
   );
-  const rewrapJob = rewrap.job;
+  const passwordJob = passwordChange.job;
+  const unlockRamJob = unlockRamChange.job;
   const rebuildJob = rebuild.job;
   const backupNowJob = backupJob.job;
+  const runningDelete = deleteJob.job;
   const quitClose = useQuitCloseProgress(vaults, setVaultRuntimeState);
   const pipelineListStatus = useMemo(() => {
     // A close this window started keeps its own row; the quit only adds the rest.
     const rowWork = { ...quitClose.rowWork, ...lifecycle.pipelineListStatus.rowWork };
-    for (const job of [rewrapJob, rebuildJob, backupNowJob]) {
+    for (const job of [passwordJob, unlockRamJob, rebuildJob, backupNowJob]) {
       if (!job) continue;
       rowWork[job.vaultId] = vaultRowJobWork({
         startedAt: job.startedAt,
         stoppable: job.progress?.stoppable ?? true,
         stoppingSince: job.stoppingSince,
       });
+    }
+    // A delete has no row Stop: Delete now, in More options, ends it early.
+    if (runningDelete) {
+      rowWork[runningDelete.vaultId] = {
+        startedAt: runningDelete.startedAt,
+        timed: true,
+        stop: null,
+        stoppingSince: null,
+      };
     }
     return {
       ...lifecycle.pipelineListStatus,
@@ -767,8 +848,10 @@ export function useVaultListScreen() {
         ...(lifecycle.pipelineListStatus.recoveringVaultIds ?? []),
         ...(rebuildJob ? [rebuildJob.vaultId] : []),
       ],
-      passwordChangeVaultIds: rewrapJob?.kind === "password" ? [rewrapJob.vaultId] : undefined,
-      kdfChangeVaultIds: rewrapJob?.kind === "kdf" ? [rewrapJob.vaultId] : undefined,
+      passwordChangeVaultIds: passwordJob ? [passwordJob.vaultId] : undefined,
+      kdfChangeVaultIds: unlockRamJob ? [unlockRamJob.vaultId] : undefined,
+      deletingVaultIds: runningDelete ? [runningDelete.vaultId] : undefined,
+      deleteNowVaultIds: deleteNowIds,
       backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
       backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
       dataFolderExporting: dataFolderExport.job !== null,
@@ -778,21 +861,35 @@ export function useVaultListScreen() {
     backupExport.job,
     backupNowJob,
     dataFolderExport.job,
+    deleteNowIds,
     lifecycle.pipelineListStatus,
+    passwordJob,
     quitClose,
     rebuildJob,
-    rewrapJob,
+    runningDelete,
+    unlockRamJob,
   ]);
 
   /** Stop the work a row shows, whichever owner runs it. */
   const stopRowWork = useCallback(
     (vaultId: string) => {
-      if (rewrapJob?.vaultId === vaultId) rewrap.stop();
+      if (passwordJob?.vaultId === vaultId) passwordChange.stop();
+      else if (unlockRamJob?.vaultId === vaultId) unlockRamChange.stop();
       else if (rebuildJob?.vaultId === vaultId) rebuild.stop();
       else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
       else lifecycle.stopVaultWork(vaultId);
     },
-    [backupJob, backupNowJob, lifecycle, rebuild, rebuildJob, rewrap, rewrapJob],
+    [
+      backupJob,
+      backupNowJob,
+      lifecycle,
+      passwordChange,
+      passwordJob,
+      rebuild,
+      rebuildJob,
+      unlockRamChange,
+      unlockRamJob,
+    ],
   );
 
   // Everything running, for the quit overlay; the counts go to Electron main,
@@ -829,6 +926,17 @@ export function useVaultListScreen() {
         stop: isBackup ? backupExport.stop : dataFolderExport.stop,
       });
     }
+    // A normal quit waits for a delete; the quit's Close now leaves it where it is.
+    if (runningDelete) {
+      items.push({
+        key: `delete:${runningDelete.vaultId}`,
+        label: `${runningDelete.displayName} · ${t("vault.status.deleting")}`,
+        startedAt: runningDelete.startedAt,
+        stoppingSince: null,
+        stoppable: false,
+        stop: () => {},
+      });
+    }
     for (const vaultId of importingVaultIds) {
       items.push({
         key: `import:${vaultId}`,
@@ -848,6 +956,7 @@ export function useVaultListScreen() {
     dataFolderExport.job,
     dataFolderExport.stop,
     importingVaultIds,
+    runningDelete,
     pipelineListStatus,
     stopRowWork,
     t,
@@ -1120,6 +1229,7 @@ export function useVaultListScreen() {
     modals.noteVaultId ||
     modals.backupVaultId ||
     modals.settingsVaultId ||
+    modals.deleteVaultId ||
     modals.lifecycleRequest ||
     modals.recoveryVaultId ||
     fileManagerMaximized,
@@ -1167,67 +1277,92 @@ export function useVaultListScreen() {
     [showError, updateNote, vaultService, vaults],
   );
 
-  const handleVaultDelete = useCallback(
-    async (vaultId: string, outsideBackups: boolean) => {
-      if (lifecycle.pipeline.isVaultPipelineBusy(vaultId)) {
-        showToast(t("toast.pipeline_busy"));
-        return;
-      }
-      if (!vaultService.canDeleteVault) {
-        const error = new RpcError("not_implemented", "Vault delete is not implemented");
-        showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
-        throw error;
-      }
-      const target = vaults.find((vault) => vault.id === vaultId);
-      const hold = target ? vaultDeleteHold(target, pipelineListStatus) : "busy";
-      if (hold) {
-        showToast(t(VAULT_DELETE_HOLD_I18N_KEY[hold]));
-        return;
-      }
-
-      try {
-        const deleted = await vaultService.unregisterSettings(vaultId, outsideBackups);
-        const params = { name: target?.displayName ?? vaultId, folder: deleted.folder ?? "" };
-        if (deleted.outside === "kept") showToast(t("toast.vault_deleted_outside_kept", params));
-        if (deleted.outside === "failed") {
-          showToast(t("toast.vault_deleted_outside_failed", params));
-        }
-      } catch (error) {
-        showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
-        throw error;
-      }
-
-      lifecycle.handleVaultDelete(vaultId);
-      removeVault(vaultId);
-      try {
-        await reloadGroups();
-      } catch (listError) {
-        showError(listError, "toast.refresh_failed");
-      }
+  /** The vault's folder is gone: drop its row, its place in a group, and its windows. */
+  function forgetDeletedVault(vaultId: string) {
+    lifecycle.handleVaultDelete(vaultId);
+    removeVault(vaultId);
+    void reloadGroups().catch((error: unknown) => showError(error, "toast.refresh_failed"));
+    if (modals.settingsVaultId === vaultId) {
       modals.setSettingsVaultId(null);
       modals.setSettingsArea(null);
-      modals.setNoteVaultId(null);
-      modals.setBackupVaultId(null);
-      if (modals.lifecycleRequest?.vaultId === vaultId) {
-        modals.setLifecycleRequest(null);
+    }
+    if (modals.noteVaultId === vaultId) modals.setNoteVaultId(null);
+    if (modals.backupVaultId === vaultId) modals.setBackupVaultId(null);
+    if (modals.vaultInfoVaultId === vaultId) modals.setVaultInfoVaultId(null);
+    if (modals.deleteVaultId === vaultId) modals.setDeleteVaultId(null);
+    if (modals.lifecycleRequest?.vaultId === vaultId) modals.setLifecycleRequest(null);
+    if (modals.recoveryVaultId === vaultId) modals.setRecoveryVaultId(null);
+  }
+
+  /**
+   * Start the delete of `vaultId` as a job the list owns, or go on with one
+   * that did not finish, which keeps the outside-backups choice it began
+   * with. `now` removes the files with no overwrite. False when it cannot
+   * start; the reason is a toast.
+   */
+  const startVaultDelete = useCallback(
+    (vaultId: string, outsideBackups: boolean, now: boolean): boolean => {
+      const target = vaults.find((vault) => vault.id === vaultId);
+      if (!target) return false;
+      if (!vaultService.canDeleteVault) {
+        showError(new RpcError("not_implemented", "Vault delete is not implemented"));
+        return false;
       }
-      if (modals.recoveryVaultId === vaultId) {
-        modals.setRecoveryVaultId(null);
+      if (deleteJob.job) {
+        showToast(t("vault.delete.busy"));
+        return false;
       }
+      if (!isVaultDeleteUnfinished(target, pipelineListStatus)) {
+        if (lifecycle.pipeline.isVaultPipelineBusy(vaultId)) {
+          showToast(t("toast.pipeline_busy"));
+          return false;
+        }
+        const hold = vaultDeleteHold(target, pipelineListStatus);
+        if (hold) {
+          showToast(t(VAULT_DELETE_HOLD_I18N_KEY[hold]));
+          return false;
+        }
+      }
+      const started = deleteJob.deleteVault(
+        { vaultId, displayName: target.displayName },
+        outsideBackups,
+        now,
+      );
+      if (started && now) setDeleteNowIds([vaultId]);
+      return started;
     },
-    [
-      lifecycle,
-      modals,
-      pipelineListStatus,
-      reloadGroups,
-      removeVault,
-      showError,
-      showToast,
-      t,
-      vaultService,
-      vaults,
-    ],
+    [deleteJob, lifecycle, pipelineListStatus, showError, showToast, t, vaultService, vaults],
   );
+
+  /** Continue a delete that did not finish, or ask before Delete now. */
+  const handleDeleteWork = useCallback(
+    (vault: VaultListItem, now: boolean) => {
+      if (now) setDeleteNowAsk(vault.id);
+      else startVaultDelete(vault.id, false, false);
+    },
+    [startVaultDelete],
+  );
+
+  /** Delete now, once confirmed: tell the running delete, or run one with no overwrite. */
+  const confirmDeleteNow = useCallback(() => {
+    const vaultId = deleteNowAsk;
+    setDeleteNowAsk(null);
+    if (!vaultId) return;
+    if (deleteJob.job?.vaultId !== vaultId) {
+      startVaultDelete(vaultId, false, true);
+      return;
+    }
+    setDeleteNowIds([vaultId]);
+    void deleteJob.hurry(vaultId).then(
+      (running) => {
+        if (!running) setDeleteNowIds([]);
+      },
+      (error: unknown) => {
+        setDeleteNowIds([]);
+        showError(error);
+      },
+    );
+  }, [deleteJob, deleteNowAsk, showError, startVaultDelete]);
 
   const handleCreateGroup = useCallback(
     async (displayName: string, groupedVaultIds: string[] = [], hidden = false) => {
@@ -1471,18 +1606,19 @@ export function useVaultListScreen() {
       onOpenNote: modals.setNoteVaultId,
       onOpenVaultInfo: modals.setVaultInfoVaultId,
       onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => {
-        const run = rewrap.job;
-        if (
-          run &&
-          (area === "password" || area === "kdf") &&
-          (run.vaultId !== vaultId || run.kind !== area)
-        ) {
-          showToast(t("vault.rewrap.busy"));
+        // One change of each kind at a time: another vault's screen waits.
+        if (area === "password" && passwordJob && passwordJob.vaultId !== vaultId) {
+          showToast(t("vault.password_change.busy"));
+          return;
+        }
+        if (area === "kdf" && unlockRamJob && unlockRamJob.vaultId !== vaultId) {
+          showToast(t("vault.unlock_ram_change.busy"));
           return;
         }
         modals.setSettingsVaultId(vaultId);
         modals.setSettingsArea(area);
       },
+      onOpenDelete: modals.setDeleteVaultId,
       onOpenGroupSettings: modals.setSettingsGroupId,
       onToggleGroupCollapsed: handleToggleGroupCollapsed,
       onExportVault: (vault: VaultListItem) => {
@@ -1496,6 +1632,12 @@ export function useVaultListScreen() {
       onUnlockVault: lifecycle.handleUnlockVault,
       onCloseNow: lifecycle.handleCloseNow,
       onStopWork: (vault: VaultListItem) => stopRowWork(vault.id),
+      onDeleteWork: handleDeleteWork,
+      deleteNowVault: deleteNowAsk
+        ? (vaults.find((vault) => vault.id === deleteNowAsk) ?? null)
+        : null,
+      onCancelDeleteNow: () => setDeleteNowAsk(null),
+      onConfirmDeleteNow: confirmDeleteNow,
       onPlainRecordRetry: () => void refresh(),
       onPlainRecordForget: (vault: VaultListItem, token: string) => {
         void lifecycleService
@@ -1652,13 +1794,16 @@ export function useVaultListScreen() {
       onPersistBusyChange: (vaultIds: readonly string[] | null) => {
         settingsPersistVaultIdsRef.current = new Set(vaultIds ?? []);
       },
-      onVaultDelete: handleVaultDelete,
       onNotice: showToast,
-      rewrapJob: rewrap.job,
-      rewrapOutcome,
-      onChangePassword: rewrap.changePassword,
-      onChangeKdf: rewrap.changeKdf,
-      onStopRewrap: rewrap.stop,
+      passwordJob,
+      passwordOutcome,
+      onChangePassword: passwordChange.changePassword,
+      onFinishPasswordChange: passwordChange.finish,
+      onStopPasswordChange: passwordChange.stop,
+      unlockRamJob,
+      unlockRamOutcome,
+      onChangeKdf: unlockRamChange.changeKdf,
+      onStopUnlockRamChange: unlockRamChange.stop,
       groups,
       onCommitGroupAssignment: async (vaultId: string, assignment: CreateVaultGroupAssignment) => {
         if (assignment.kind === "create") {
@@ -1738,6 +1883,13 @@ export function useVaultListScreen() {
       vault: modals.vaultInfoVault,
       open: modals.vaultInfoVaultId !== null,
       onClose: () => modals.setVaultInfoVaultId(null),
+    },
+    deleteVault: {
+      vault: modals.deleteVault,
+      job: runningDelete,
+      onClose: () => modals.setDeleteVaultId(null),
+      onDelete: (vaultId: string, outsideBackups: boolean) =>
+        startVaultDelete(vaultId, outsideBackups, false),
     },
     createVault: {
       open: modals.createVaultOpen,

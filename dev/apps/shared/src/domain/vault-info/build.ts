@@ -6,6 +6,7 @@ import { formatIsoDate } from "../format/datetime";
 import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
 import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
 import { KDF_UNLOCK_OPTION_META } from "../vault-settings/kdf";
+import type { VaultKeyStatus } from "../vault/keyChanges";
 import {
   idleWarnLeadSeconds,
   resolveVaultListStatus,
@@ -18,7 +19,22 @@ const SESSION_KEYS = {
   open: "modal.info.value.session.open",
   closing: "modal.info.value.session.closing",
   recovery: "modal.info.value.session.recovery",
+  deleting: "modal.info.value.session.deleting",
 } as const;
+
+const PASSWORD_CHANGE_KEYS = {
+  none: "modal.info.value.password_change.none",
+  pending: "modal.info.value.password_change.pending",
+  unfinished: "modal.info.value.password_change.unfinished",
+} as const;
+
+/** The key copies of an open vault's files, from its key status. */
+function keyCopiesValue(status: VaultKeyStatus, t: InfoTranslate): string {
+  if (status.keyCopiesUpdating) return t("modal.info.value.key_copies.updating");
+  return t(
+    status.keyCopiesDue ? "modal.info.value.key_copies.due" : "modal.info.value.key_copies.done",
+  );
+}
 
 const STORAGE_KEYS = {
   encrypted_dir: "modal.settings.option.storage.encrypted_dir",
@@ -76,6 +92,7 @@ export function buildVaultInfoSections(
     runtime,
     passwordInSession,
     unlockedFolder,
+    keyStatus,
     storePath,
     backupsPath,
     storeOpenPath,
@@ -117,7 +134,7 @@ export function buildVaultInfoSections(
     {
       id: "display_status",
       label: t("modal.info.field.display_status"),
-      value: t(vaultStatusLabelKey(displayStatus, vault.id, pipeline, vault.autoClosed === true)),
+      value: t(vaultStatusLabelKey(displayStatus, vault.id, pipeline, vault)),
     },
     {
       id: "session",
@@ -223,6 +240,39 @@ export function buildVaultInfoSections(
         ? formatIsoDate(settings.security.password_changed_at, locale)
         : "—",
     },
+    {
+      id: "key_count",
+      label: t("modal.info.field.key_count"),
+      value: countOrDash(vault.keyCount && vault.keyCount > 0 ? vault.keyCount : null),
+    },
+    {
+      id: "password_change",
+      label: t("modal.info.field.password_change"),
+      value: t(PASSWORD_CHANGE_KEYS[vault.passwordChange ?? "none"]),
+    },
+    // Only an open session knows which files wait and where the key copies stand.
+    ...(keyStatus === "reading"
+      ? [
+          {
+            id: "files_waiting",
+            label: t("modal.info.field.files_waiting"),
+            value: t("modal.info.loading"),
+          },
+        ]
+      : keyStatus
+        ? [
+            {
+              id: "files_waiting",
+              label: t("modal.info.field.files_waiting"),
+              value: String(keyStatus.filesWaiting),
+            },
+            {
+              id: "key_copies",
+              label: t("modal.info.field.key_copies"),
+              value: keyCopiesValue(keyStatus, t),
+            },
+          ]
+        : []),
   ];
 
   const unlockedPath = unlockedFolder?.path ?? "";

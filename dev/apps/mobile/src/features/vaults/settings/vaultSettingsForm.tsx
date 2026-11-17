@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import {
   AUTO_CLOSE_WHEN_BUSY,
@@ -78,7 +77,6 @@ interface VaultSettingsFormProps {
   /** What the folder lists need: the app's lists, the vault's as loaded, this device. */
   lists: VaultListsContext;
   hiddenLocked?: boolean;
-  children?: ReactNode;
 }
 
 /** What a vault's folder lists show beside its draft. */
@@ -104,7 +102,6 @@ export function VaultSettingsForm({
   editHold = {},
   lists,
   hiddenLocked = false,
-  children,
 }: VaultSettingsFormProps) {
   const { t } = useTranslation();
   const locks = {
@@ -126,7 +123,6 @@ export function VaultSettingsForm({
           {renderSection(sectionId, draft, patchDraft, locks, lists)}
         </SettingsAccordionSection>
       ))}
-      {children}
     </View>
   );
 }

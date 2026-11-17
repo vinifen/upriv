@@ -37,6 +37,7 @@ export function parseBackupEntry(raw: unknown): VaultBackupEntry {
     sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : 0,
     saved: record.saved === true,
     path: text(record.path),
+    lowerUnlockRam: record.lowerUnlockRam === true,
   };
 }
 

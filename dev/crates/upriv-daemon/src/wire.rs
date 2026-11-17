@@ -53,14 +53,13 @@ pub fn waits_before_lane(method: &str, params: &Value) -> bool {
     method == "vault_open" && upriv_rpc::vault_open_must_wait(params)
 }
 
-/// Close, delete, and plaintext-folder work that waits for a sync pass. Own
-/// worker so a lock is not stuck behind a multi-minute import, export, or
-/// rewrap, and stdin is not stuck behind a pass.
+/// Close and plaintext-folder work that waits for a sync pass. Own worker so
+/// a lock is not stuck behind a multi-minute import, export, or password
+/// change, and stdin is not stuck behind a pass.
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
         "vault_close"
-            | "vault_delete"
             | "vault_discard_import"
             | "vault_plain_sync"
             | "vault_plain_deletions"
@@ -69,15 +68,32 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
     )
 }
 
-/// Password and unlock-RAM change, and the rebuild of a lost index. Own
-/// worker: the safety zip of `store/` must not sit ahead of another vault's
-/// close. Argon2 inside the call still takes `with_unlock_lock` only for the
-/// derive.
-pub fn is_rewrap_io_method(method: &str) -> bool {
+/// The work that changes a closed vault's keys or header: the password
+/// change and its Finish, the unlock-RAM change, and the rebuild. Own
+/// worker: rewriting every file must not sit ahead of another vault's close.
+/// Argon2 inside the call still takes `with_unlock_lock` only for the derive.
+pub fn is_keys_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_change_password" | "vault_change_kdf" | "vault_rebuild"
+        "vault_change_password"
+            | "vault_password_change_finish"
+            | "vault_change_kdf"
+            | "vault_rebuild"
     )
+}
+
+/// The delete of a vault. Own worker: overwriting every key copy must not
+/// sit ahead of a close, and Delete now (`vault_delete_hurry`) answers on
+/// stdin while it runs.
+pub fn is_delete_io_method(method: &str) -> bool {
+    method == "vault_delete"
+}
+
+/// The pass after an open that makes every key copy the header's. Own worker:
+/// it runs beside the session, one blob at a time, and must not wait behind
+/// a long export or a password change.
+pub fn is_key_copies_io_method(method: &str) -> bool {
+    method == "vault_key_copies_update"
 }
 
 /// Zip and `.7z` import, portable export, the wipes of what a crashed plain-text
@@ -142,7 +158,9 @@ pub fn is_data_folder_io_method(method: &str, params: &Value) -> bool {
 pub enum HeavyLane {
     Argon2,
     Lifecycle,
-    Rewrap,
+    Keys,
+    Delete,
+    KeyCopies,
     Pack,
     Import,
     DataFolder,
@@ -162,8 +180,14 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     if is_lifecycle_io_method(method) {
         return Some(HeavyLane::Lifecycle);
     }
-    if is_rewrap_io_method(method) {
-        return Some(HeavyLane::Rewrap);
+    if is_keys_io_method(method) {
+        return Some(HeavyLane::Keys);
+    }
+    if is_delete_io_method(method) {
+        return Some(HeavyLane::Delete);
+    }
+    if is_key_copies_io_method(method) {
+        return Some(HeavyLane::KeyCopies);
     }
     if is_import_io_method(method) {
         return Some(HeavyLane::Import);
@@ -235,28 +259,32 @@ mod tests {
         assert!(is_heavy_method("vault_import_zip", &empty));
         assert!(is_heavy_method("vault_import_7z", &empty));
         assert!(is_lifecycle_io_method("vault_close"));
-        assert!(!is_lifecycle_io_method("vault_change_password"));
-        assert!(!is_lifecycle_io_method("vault_change_kdf"));
-        assert!(is_rewrap_io_method("vault_change_password"));
-        assert!(is_rewrap_io_method("vault_change_kdf"));
-        assert!(is_rewrap_io_method("vault_rebuild"));
-        assert!(!is_argon2_bound_method("vault_change_password", &empty));
-        assert!(!is_argon2_bound_method("vault_change_kdf", &empty));
-        assert!(!is_argon2_bound_method("vault_rebuild", &empty));
-        assert_eq!(heavy_lane("vault_rebuild", &empty), Some(HeavyLane::Rewrap));
-        assert_eq!(
-            heavy_lane("vault_change_password", &empty),
-            Some(HeavyLane::Rewrap)
-        );
-        assert_eq!(
-            heavy_lane("vault_change_kdf", &empty),
-            Some(HeavyLane::Rewrap)
-        );
+        for method in [
+            "vault_change_password",
+            "vault_password_change_finish",
+            "vault_change_kdf",
+            "vault_rebuild",
+        ] {
+            assert!(!is_lifecycle_io_method(method), "{method}");
+            assert!(!is_argon2_bound_method(method, &empty), "{method}");
+            assert_eq!(
+                heavy_lane(method, &empty),
+                Some(HeavyLane::Keys),
+                "{method}"
+            );
+        }
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_change_password", &empty)
         );
-        assert!(is_lifecycle_io_method("vault_delete"));
+        assert_eq!(heavy_lane("vault_delete", &empty), Some(HeavyLane::Delete));
+        assert_eq!(
+            heavy_lane("vault_key_copies_update", &empty),
+            Some(HeavyLane::KeyCopies)
+        );
+        // Delete now and Close now answer on stdin, beside the work they hurry.
+        assert_eq!(heavy_lane("vault_delete_hurry", &empty), None);
+        assert_eq!(heavy_lane("vault_close_hurry", &empty), None);
         assert_eq!(
             heavy_lane("vault_close", &empty),
             Some(HeavyLane::Lifecycle)
@@ -387,7 +415,9 @@ mod tests {
             "vault_import_probe",
             "vault_import_zip",
             "vault_ingest_open",
+            "vault_key_copies_update",
             "vault_open",
+            "vault_password_change_finish",
             "vault_plain_deletions",
             "vault_plain_remove",
             "vault_plain_send",

@@ -4,6 +4,7 @@ import {
   rpcVaultConfigSave,
   rpcVaultCreate,
   rpcVaultDelete,
+  rpcVaultDeleteHurry,
   rpcVaultExportCapabilities,
   rpcVaultExportToFolder,
   rpcVaultUnfinishedSweep,
@@ -24,7 +25,8 @@ export const desktopVaultService = createLiveVaultService({
   diskUsage: (vaultId) => rpcVaultDiskUsage(vaultId),
   saveSettings: (vaultId, config, lists) => rpcVaultConfigSave(vaultId, config, lists),
   rename: (vaultId, displayName) => rpcVaultRename(vaultId, displayName),
-  deleteVault: (vaultId, outsideBackups) => rpcVaultDelete(vaultId, outsideBackups),
+  deleteVault: (vaultId, input) => rpcVaultDelete(vaultId, input),
+  hurryDelete: (vaultId) => rpcVaultDeleteHurry(vaultId),
   exportVaultToFolder: (vaultId, request, destDir, job) =>
     rpcVaultExportToFolder(vaultId, request, destDir, job),
   exportCapabilities: () => rpcVaultExportCapabilities(),

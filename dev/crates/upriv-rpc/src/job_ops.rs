@@ -46,7 +46,8 @@ fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, RpcResponse> 
 
 /// How far the job got. `running: false` before it starts and once it ended;
 /// the request's own reply tells those apart. `stoppable: false` once the job
-/// is in its last step.
+/// is in its last step. `step` names what a job made of steps does now (a
+/// password change, an unlock-RAM change, a delete), `null` for the others.
 pub(super) fn status(params: Value) -> RpcResponse {
     let parsed: JobParams = match parse(params) {
         Ok(parsed) => parsed,
@@ -58,8 +59,15 @@ pub(super) fn status(params: Value) -> RpcResponse {
             "bytesDone": status.bytes_done,
             "bytesTotal": status.bytes_total,
             "stoppable": status.stoppable,
+            "step": status.step.map(|step| step.as_str()),
         }),
-        None => json!({ "running": false, "bytesDone": 0, "bytesTotal": 0, "stoppable": true }),
+        None => json!({
+            "running": false,
+            "bytesDone": 0,
+            "bytesTotal": 0,
+            "stoppable": true,
+            "step": null,
+        }),
     })
 }
 

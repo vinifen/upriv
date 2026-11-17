@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 use crate::config::vault_config::{VaultArchiveMode, VaultSevenZipSection};
 use crate::error::{Result, UprivError};
 use crate::session::Job;
-use crate::store::{read_file_chunks_keeping, VaultHeader, VaultIndex, VaultNode, CHUNK_SIZE};
+use crate::store::{read_file_chunks_keeping, VaultIndex, VaultNode, CHUNK_SIZE};
 
 use super::config_folder::ConfigFile;
 
@@ -601,8 +601,7 @@ fn push_directory<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str) ->
 #[derive(Clone, Copy)]
 pub(crate) struct LogicalSource<'a> {
     pub store_dir: &'a Path,
-    pub header: &'a VaultHeader,
-    pub content_key: &'a [u8; 32],
+    pub keys: &'a crate::store::Keyring,
 }
 
 /// The shape of a `.7z`: the package folder, which holds the vault folder
@@ -693,21 +692,15 @@ pub(super) fn decrypt_in_order(
     for node in files {
         job.ensure_running()?;
         let mut encoder_gone = false;
-        let read = read_file_chunks_keeping(
-            source.store_dir,
-            source.header,
-            source.content_key,
-            node,
-            |chunk| {
-                if job.is_stopped() {
-                    return Err(UprivError::JobCancelled);
-                }
-                queue.send(chunk).map_err(|_| {
-                    encoder_gone = true;
-                    UprivError::JobCancelled
-                })
-            },
-        );
+        let read = read_file_chunks_keeping(source.store_dir, source.keys, node, |chunk| {
+            if job.is_stopped() {
+                return Err(UprivError::JobCancelled);
+            }
+            queue.send(chunk).map_err(|_| {
+                encoder_gone = true;
+                UprivError::JobCancelled
+            })
+        });
         if encoder_gone {
             return Ok(unreadable);
         }
@@ -908,8 +901,7 @@ mod tests {
                 &format!("docs/file-{at}.bin"),
                 uuid::Uuid::new_v4().to_string(),
                 *size,
-                Vec::new(),
-                Vec::new(),
+                Default::default(),
             ));
         }
         index
@@ -966,8 +958,7 @@ mod tests {
             dest,
             LogicalSource {
                 store_dir: &store,
-                header: &opened.header,
-                content_key: &opened.content_key,
+                keys: &opened.keys,
             },
             PASSWORD,
             opts,
@@ -1341,8 +1332,8 @@ mod tests {
         };
         let damaged = blob_of("docs/hi.txt");
         let mut bytes = crate::host_fs::read(&damaged).unwrap();
-        // Past the nonce, inside the blob's one chunk.
-        bytes[30] ^= 0x01;
+        // Past the key copy and the nonce, inside the blob's one chunk.
+        bytes[crate::store::KEY_COPY_LEN as usize + 30] ^= 0x01;
         crate::host_fs::write(&damaged, &bytes).unwrap();
         crate::host_fs::remove_file(blob_of("gone.txt")).unwrap();
 

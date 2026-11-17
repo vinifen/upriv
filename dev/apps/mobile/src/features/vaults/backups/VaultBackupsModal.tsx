@@ -826,6 +826,9 @@ function BackupRow({
               <Text> · </Text>
               <Text style={typography.mono}>{formatBytes(entry.sizeBytes)}</Text>
             </Text>
+            {entry.lowerUnlockRam ? (
+              <Text style={typography.caption}>{t("modal.backup.lower_unlock_ram")}</Text>
+            ) : null}
           </Pressable>
         </View>
         <View style={styles.rowActions}>

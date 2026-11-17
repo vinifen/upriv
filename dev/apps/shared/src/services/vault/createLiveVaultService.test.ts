@@ -91,7 +91,7 @@ describe("createLiveVaultService", () => {
     expect(peekVaultSettings("notes")).not.toBe(config);
     await service.registerSettings("notes", config);
     expect(peekVaultSettings("notes")).toEqual(config);
-    await service.unregisterSettings("notes");
+    await service.deleteVault("notes", { outsideBackups: false, now: false, job: "delete-1" });
     expect(peekVaultSettings("notes")).toBeUndefined();
   });
 });

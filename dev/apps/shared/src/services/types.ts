@@ -46,6 +46,6 @@ export interface AppServices {
   filesystem: VaultFileSystemService;
   lifecycle: VaultLifecycleService;
   createVault: CreateVaultService;
-  /** Password / KDF rewrap — the only place a password is ever verified. */
+  /** The password change, Finish, the unlock-RAM change, the pass, and the rebuild. */
   vaultSecurity: VaultSecurityService;
 }

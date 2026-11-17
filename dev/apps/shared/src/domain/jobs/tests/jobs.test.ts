@@ -8,7 +8,9 @@ import {
   jobProgressFinishing,
   jobProgressLine,
   jobProgressPercent,
+  jobStepCopy,
   parseJobStatus,
+  type JobProgress,
 } from "../progress";
 
 /** Same rule as core `is_valid_job_id`. */
@@ -32,10 +34,21 @@ describe("parseJobStatus", () => {
       bytesDone: 5,
       bytesTotal: 10,
       stoppable: true,
+      step: null,
     });
     expect(
       parseJobStatus({ running: true, bytesDone: 5, bytesTotal: 10, stoppable: false }),
-    ).toEqual({ bytesDone: 5, bytesTotal: 10, stoppable: false });
+    ).toEqual({ bytesDone: 5, bytesTotal: 10, stoppable: false, step: null });
+  });
+
+  it("reads the step of a job made of steps, and no other", () => {
+    const status = (step: unknown) =>
+      parseJobStatus({ running: true, bytesDone: 0, bytesTotal: 0, step })?.step;
+    expect(status("rewriting_files")).toBe("rewriting_files");
+    expect(status("updating_key_copies")).toBe("updating_key_copies");
+    expect(status("overwriting")).toBe("overwriting");
+    expect(status("unknown")).toBeNull();
+    expect(status(null)).toBeNull();
   });
 
   it("is null when the job does not run or the answer is not an object", () => {
@@ -85,6 +98,21 @@ describe("jobProgressLine", () => {
     expect(jobProgressLine({ bytesDone: 2048, bytesTotal: 2048 }, copy)).toEqual({
       key: copy.finishing,
     });
+  });
+});
+
+describe("jobStepCopy", () => {
+  it("names the step core reports, and the given line before one", () => {
+    const running: JobProgress = {
+      bytesDone: 5,
+      bytesTotal: 10,
+      stoppable: true,
+      step: "rewriting_files",
+    };
+    expect(jobProgressLine(running, jobStepCopy(running, "job.step.unlocking")).key).toBe(
+      "job.step.rewriting_files",
+    );
+    expect(jobStepCopy(null, "job.step.unlocking").measuring).toBe("job.step.unlocking");
   });
 });
 

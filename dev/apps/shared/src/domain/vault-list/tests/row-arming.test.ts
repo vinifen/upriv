@@ -24,6 +24,17 @@ describe("vaultRowButtonRole", () => {
     expect(vaultRowButtonRole("recovery", null)).toBe("unlock");
     expect(vaultRowButtonRole("closing", { ...work, stop: null })).toBe("busy");
   });
+
+  it("is busy while a delete runs, and Continue once one did not finish", () => {
+    expect(vaultRowButtonRole("deleting", null)).toBe("busy");
+    expect(vaultRowButtonRole("deleting", null, true)).toBe("continue_delete");
+  });
+
+  it("never runs Continue from a row click", () => {
+    expect(
+      vaultRowClick("continue_delete", { open: false, resumeOpen: false, runsButton: true }),
+    ).toBe(null);
+  });
 });
 
 describe("vaultRowClick", () => {

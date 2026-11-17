@@ -1,9 +1,9 @@
 export type {
+  PasswordChangeState,
   StorageMode,
   VaultDeleteHold,
   VaultDisplayStatus,
   VaultPipelineListStatus,
-  VaultRewrapKind,
   VaultRow,
   VaultRowStop,
   VaultRowWork,
@@ -12,6 +12,7 @@ export type {
 export {
   STORAGE_MODES,
   isVaultBlockingDataFolderChange,
+  isVaultDeleteUnfinished,
   isVaultSessionLive,
   isVaultFileManagerEligible,
   isVaultFileManagerRetained,
@@ -21,6 +22,7 @@ export {
   isVaultOpenCredentialResumeStatus,
   isVaultOpenResumeTarget,
   vaultCloseNowOffered,
+  vaultDeleteNowOffered,
   isVaultCloseQueued,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
@@ -81,9 +83,11 @@ export { displayNameErrorI18nKey, DISPLAY_NAME_ERROR_I18N_KEYS } from "./errors/
 export type { DisplayNameErrorI18nKey } from "./errors/nameMessages";
 export {
   VAULT_DELETE_HOLD_I18N_KEY,
+  vaultPasswordChangeLineKey,
   vaultStatusColorVar,
   vaultStatusI18nKey,
   vaultStatusLabelKey,
+  type VaultStatusRowFlags,
 } from "./statusTokens";
 /** Rust wire codes + UI i18n. */
 export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
@@ -96,6 +100,25 @@ export {
   vaultErrorI18nKey,
 } from "./errors/messages";
 export type { VaultErrorI18nKey } from "./errors/messages";
-export { parseVaultRebuildResult, vaultRebuildSpaceShort } from "./rebuild";
+export { parseVaultRebuildResult, vaultRebuiltToast } from "./rebuild";
 export { parseVaultDeleteOutcome, type VaultDeleteOutcome } from "./delete";
-export type { VaultRebuildResult, VaultRebuildSpace } from "./rebuild";
+export type { VaultRebuildResult } from "./rebuild";
+export {
+  parseBackupSkip,
+  parseKeyCopiesUpdate,
+  parsePasswordChangeFinishResult,
+  parsePasswordChangeResult,
+  parseUnlockRamChangeResult,
+  parseVaultKeyStatus,
+  passwordChangeReportLines,
+  passwordChangeSpaceShort,
+  unlockRamChangeReportLines,
+  type BackupSkip,
+  type KeyChangeReportLine,
+  type KeyCopies,
+  type PasswordChangeFinishResult,
+  type PasswordChangeResult,
+  type PasswordChangeSpace,
+  type UnlockRamChangeResult,
+  type VaultKeyStatus,
+} from "./keyChanges";

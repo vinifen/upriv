@@ -52,7 +52,7 @@ use crate::session::{
     ensure_backups_not_exporting, ensure_data_folder_export_idle, remove_backup_unless_exporting,
     try_with_vault_dir_lock, with_vault_dir_lock, BackupExportGuard, Job, JobKind,
 };
-use crate::store::{backup_zip_identity, load_header};
+use crate::store::{backup_zip_header, load_header};
 use crate::time::utc_filename_stamp;
 
 const SAVES_DIR: &str = "saves";
@@ -78,6 +78,9 @@ pub struct BackupEntry {
     pub size_bytes: u64,
     pub saved: bool,
     pub path: PathBuf,
+    /// Its header unlocks with less RAM than the vault's does now: someone
+    /// who has this zip guesses the password at that lower cost.
+    pub lower_unlock_ram: bool,
 }
 
 /// Which folder a section of the listing shows.
@@ -353,9 +356,11 @@ pub fn backup_listing(root: &VaultRoot, vault_id: &str) -> Result<BackupListing>
     let saved = load_vault_persistence(&vault_dir)?;
     // A vault whose header is gone cannot tell its zips from another vault's
     // in a folder outside the data folder, and that is when it needs them most.
-    let identity = load_header(vault_dir.join(STORE_DIR_NAME))
-        .ok()
-        .map(|header| header.content_identity);
+    let header = load_header(vault_dir.join(STORE_DIR_NAME)).ok();
+    let vault = ZipsOf {
+        identity: header.as_ref().map(|header| header.content_identity),
+        unlock_kib: header.as_ref().map(|header| header.top.kdf.memory_kib),
+    };
     let in_use = targets(root, vault_id, &vault_dir).selected;
     let mut sections = vec![section(
         DATA_FOLDER_REF.to_string(),
@@ -363,7 +368,7 @@ pub fn backup_listing(root: &VaultRoot, vault_id: &str) -> Result<BackupListing>
         &vault_dir.join(BACKUPS_DIR),
         None,
         FolderState::Ok,
-        None,
+        vault,
     )];
     let mut shown: HashSet<PathBuf> = HashSet::new();
     shown.insert(vault_dir.join(BACKUPS_DIR));
@@ -394,7 +399,7 @@ pub fn backup_listing(root: &VaultRoot, vault_id: &str) -> Result<BackupListing>
             &in_use.dir,
             Some(device),
             status,
-            identity,
+            vault,
         ));
         shown.insert(in_use.dir.clone());
     }
@@ -413,11 +418,20 @@ pub fn backup_listing(root: &VaultRoot, vault_id: &str) -> Result<BackupListing>
                 system: folder.system,
             }),
             status,
-            identity,
+            vault,
         ));
     }
     forget_zips_gone(&vault_dir, vault_id, saved.as_ref(), &sections);
     Ok(BackupListing { sections })
+}
+
+/// What a listing compares each zip's header with: the vault's own header,
+/// when it reads.
+#[derive(Debug, Clone, Copy)]
+struct ZipsOf {
+    identity: Option<uuid::Uuid>,
+    /// The RAM the vault's password unlocks with now, in KiB.
+    unlock_kib: Option<u32>,
 }
 
 fn section(
@@ -426,7 +440,7 @@ fn section(
     dir: &Path,
     device: Option<SectionDevice>,
     status: FolderState,
-    identity: Option<uuid::Uuid>,
+    vault: ZipsOf,
 ) -> BackupSection {
     let mut entries = Vec::new();
     let readable = matches!(
@@ -438,8 +452,11 @@ fn section(
     );
     if readable {
         let checked = match kind {
-            SectionKind::DataFolder => None,
-            SectionKind::InUse | SectionKind::Other => identity,
+            SectionKind::DataFolder => ZipsOf {
+                identity: None,
+                ..vault
+            },
+            SectionKind::InUse | SectionKind::Other => vault,
         };
         for saved in [true, false] {
             let at = if saved {
@@ -467,14 +484,15 @@ fn section(
     }
 }
 
-/// With `identity`, only zips of that vault: a folder outside the data folder
-/// can hold another vault's backups under the same name. Without it, every
-/// zip that holds a vault store.
+/// With `vault.identity`, only zips of that vault: a folder outside the data
+/// folder can hold another vault's backups under the same name. Without it,
+/// every zip that holds a vault store. Each zip's header is read once, which
+/// also tells whether it unlocks with less RAM than the vault.
 fn collect_backup_dir(
     dir: &Path,
     folder: &str,
     saved: bool,
-    identity: Option<uuid::Uuid>,
+    vault: ZipsOf,
     out: &mut Vec<BackupEntry>,
 ) -> Result<()> {
     if !dir.host_is_dir() {
@@ -495,9 +513,12 @@ fn collect_backup_dir(
             continue;
         }
         let path = entry.path();
-        let is_this_vaults = match identity {
-            Some(identity) => backup_zip_identity(&path) == Some(identity),
-            None => super::zip_io::zip_contains_store_header(&path),
+        let header = backup_zip_header(&path);
+        let is_this_vaults = match vault.identity {
+            Some(identity) => header
+                .as_ref()
+                .is_some_and(|header| header.content_identity == identity),
+            None => header.is_some() || super::zip_io::zip_contains_store_header(&path),
         };
         if !is_this_vaults {
             continue;
@@ -515,9 +536,19 @@ fn collect_backup_dir(
             size_bytes: size,
             saved,
             path,
+            lower_unlock_ram: lower_unlock_ram(header.as_ref(), vault.unlock_kib),
         });
     }
     Ok(())
+}
+
+/// True when the zip's header unlocks with less RAM than `vault_kib`. A zip or
+/// a vault whose header does not read says nothing.
+fn lower_unlock_ram(header: Option<&crate::store::VaultHeader>, vault_kib: Option<u32>) -> bool {
+    match (header, vault_kib) {
+        (Some(header), Some(vault_kib)) => header.top.kdf.memory_kib < vault_kib,
+        _ => false,
+    }
 }
 
 /// References go when their zips are gone: a folder that answers, holds the
@@ -738,6 +769,8 @@ pub fn save_backup_now(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result
                     stamp: written.stamp,
                     saved: true,
                     path: written.path,
+                    // A copy of the vault as it is now unlocks as it does.
+                    lower_unlock_ram: false,
                 },
                 switches: written.switches,
             })
@@ -869,66 +902,113 @@ fn record_written(vault_dir: &Path, vault_id: &str, target: &BackupTarget, path:
     folder
 }
 
-/// Where a safety zip goes: the data folder, so the work it protects never
-/// waits on another drive, and the folder in use only when the data folder
-/// has no room for it. `Err` holds the free bytes when neither can take it.
-fn safety_zip_place(
+/// Where a zip written before a flow changes `store/` goes: the data folder,
+/// so the work never waits on another drive, while it holds the zip and the
+/// `reserve` the flow itself needs there; else the folder in use, when it
+/// holds the zip. `None` when neither has the room.
+fn start_backup_place(
     root: &VaultRoot,
     vault_id: &str,
     vault_dir: &Path,
     needed: u64,
-) -> std::result::Result<BackupTarget, u64> {
+    reserve: u64,
+) -> Option<BackupTarget> {
     let data = BackupTarget::of(
         crate::folder_list::backup::BackupPlace::DataFolder,
         vault_dir,
         vault_id,
     );
     let Some(available) = crate::host_fs::free_bytes(&data.dir) else {
-        return Ok(data);
+        return Some(data);
     };
-    if available >= needed {
-        return Ok(data);
+    if available >= needed.saturating_add(reserve) {
+        return Some(data);
     }
     let in_use = targets(root, vault_id, vault_dir).selected;
-    if !in_use.is_data_folder()
-        && check_target(vault_dir, &in_use, Some(needed), FOLDER_SWITCH_CHECK_LIMIT).is_ok()
-    {
-        return Ok(in_use);
-    }
-    Err(available)
+    (!in_use.is_data_folder()
+        && check_target(vault_dir, &in_use, Some(needed), FOLDER_SWITCH_CHECK_LIMIT).is_ok())
+    .then_some(in_use)
 }
 
-/// One zip of the current `store/`, to protect a password or unlock-RAM
-/// change, even when backups are off or a close would skip because the file
-/// tree is unchanged. Written as part of `job`, so its stop ends the zip.
-/// Regular backups stay as they are: [`remove_safety_zip`] takes this one away
-/// once the change is committed, a failed change keeps it, and a stopped one
-/// removes it. Returns the zip.
-pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str, job: &Job) -> Result<PathBuf> {
+/// Why a zip a flow writes before it changes `store/` was not written. The
+/// flow goes on without it: no process depends on a backup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupSkip {
+    /// The person turned the switch off.
+    Off,
+    /// Neither the data folder nor the folder in use has room for it.
+    NoRoom,
+    /// It could not be written.
+    Failed,
+}
+
+impl BackupSkip {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::NoRoom => "no_room",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// What became of the zip a flow writes before it changes `store/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CopyBefore {
+    /// The zip, a save in `saves/`, kept until the person deletes it.
+    Written(PathBuf),
+    Skipped(BackupSkip),
+}
+
+/// A save of `store/` as it is, as part of `job`, before a flow changes it:
+/// in the data folder while it holds the zip and `reserve`, else in the
+/// folder in use. A stop removes the partial file and fails with the stop;
+/// no room or any other failure skips it, logged as `backup_skipped` with
+/// the reason, and the flow goes on.
+fn save_before_change(
+    root: &VaultRoot,
+    vault_id: &str,
+    reserve: u64,
+    into: BackupDir,
+    job: &Job,
+) -> Result<CopyBefore> {
     let vault_dir = root.vault_dir(vault_id)?;
-    // A broken config fails before a zip is written.
-    load_vault_config(&vault_dir)?;
-    let needed = zip_bytes_of(&vault_dir).unwrap_or(0);
-    let place = safety_zip_place(root, vault_id, &vault_dir, needed)
-        .map_err(|_| UprivError::VaultBackupFailed)?;
-    let (_, zip) = write_backup_zip(&vault_dir, vault_id, &place.dir, BackupDir::Standard, job)?;
-    record_written(&vault_dir, vault_id, &place, &zip);
-    Ok(zip)
+    let skipped = |reason: BackupSkip| {
+        log_event(
+            LogLevel::Warn,
+            "backup_skipped",
+            &[("id", vault_id), ("reason", reason.as_str())],
+        );
+        Ok(CopyBefore::Skipped(reason))
+    };
+    if load_vault_config(&vault_dir).is_err() {
+        return skipped(BackupSkip::Failed);
+    }
+    let needed = super::zip_io::store_zip_bytes(&vault_dir.join(STORE_DIR_NAME)).unwrap_or(0);
+    let Some(place) = start_backup_place(root, vault_id, &vault_dir, needed, reserve) else {
+        return skipped(BackupSkip::NoRoom);
+    };
+    match write_backup_zip(&vault_dir, vault_id, &place.dir, into, job) {
+        Ok((_, zip)) => {
+            record_written(&vault_dir, vault_id, &place, &zip);
+            Ok(CopyBefore::Written(zip))
+        }
+        Err(_) if job.is_stopped() => Err(UprivError::JobCancelled),
+        Err(_) => skipped(BackupSkip::Failed),
+    }
 }
 
-/// The change this zip protected is committed: it has served its purpose.
-pub(crate) fn remove_safety_zip(vault_dir: &Path, vault_id: &str, zip: &Path) -> Result<()> {
-    if !remove_backup_unless_exporting(vault_dir, zip)? {
-        // An export reads it. It stays on the list and ages out with the rest.
-        return Ok(());
-    }
-    let Some(name) = zip.file_name().and_then(|name| name.to_str()) else {
-        return Ok(());
-    };
-    update_vault_persistence(vault_dir, vault_id, |persistence| {
-        persistence.backups_written.retain(|kept| kept.name != name);
-        persistence.drop_empty_folders();
-    })
+/// The save a password change writes at its start when its switch is on: the
+/// store as it is, under the password from before the change. `reserve` is
+/// what the change itself needs in the data folder.
+pub(crate) fn backup_before_password_change(
+    root: &VaultRoot,
+    vault_id: &str,
+    reserve: u64,
+    job: &Job,
+) -> Result<CopyBefore> {
+    save_before_change(root, vault_id, reserve, BackupDir::ChangeSave, job)
 }
 
 /// Remove the zips a killed process never finished. The caller holds this
@@ -955,38 +1035,50 @@ pub(crate) fn discard_unfinished_backups(vault_dir: &Path) {
     }
 }
 
-/// Pin a copy of `store/` as it is before a rebuild of its index
-/// ([`super::rebuild`]): a save, which retention never rotates, kept until the
-/// person deletes it, because a rebuild is a best guess and this copy is the
-/// way back. It goes in the data folder, and in the folder in use only when
-/// the data folder has no room. Refused with
-/// [`UprivError::VaultRebuildSpaceShort`], and nothing written, when neither
-/// has.
-pub(crate) fn pin_before_rebuild(root: &VaultRoot, vault_id: &str, job: &Job) -> Result<PathBuf> {
-    let vault_dir = root.vault_dir(vault_id)?;
-    // A broken config fails before a zip is written.
-    load_vault_config(&vault_dir)?;
-    crate::host_fs::create_dir_all(vault_dir.join(BACKUPS_DIR))?;
-    let store = vault_dir.join(STORE_DIR_NAME);
-    let needed = super::zip_io::store_zip_bytes(&store)?;
-    let place = safety_zip_place(root, vault_id, &vault_dir, needed)
-        .map_err(|available| UprivError::VaultRebuildSpaceShort { needed, available })?;
-    let (_, zip) = write_backup_zip(&vault_dir, vault_id, &place.dir, BackupDir::RebuildPin, job)?;
-    record_written(&vault_dir, vault_id, &place, &zip);
-    Ok(zip)
+/// The copy of `store/` a rebuild writes before its tree step
+/// ([`super::rebuild`]): a save, which retention never rotates, kept until
+/// the person deletes it, because a rebuild is a best guess and this copy is
+/// the way back. A rebuild goes on without it.
+pub(crate) fn copy_before_rebuild(
+    root: &VaultRoot,
+    vault_id: &str,
+    job: &Job,
+) -> Result<CopyBefore> {
+    save_before_change(root, vault_id, 0, BackupDir::RebuildCopy, job)
 }
 
-/// Where a new zip goes in its folder, and what its check asks of its index files.
-#[derive(Clone, Copy)]
+/// Where a new zip goes in its folder, what its check asks of its index
+/// files, and whether it is the whole of its job.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum BackupDir {
     /// The folder itself, rotated by retention.
     Standard,
-    /// `saves/`, kept until the person deletes it.
+    /// `saves/`, kept until the person deletes it: Back up now, whose zip is
+    /// the whole of its job.
     Saves,
-    /// `saves/`, before a rebuild: its index files do not open, so the check
-    /// that they hold one tree is left out. A vault made from it is rebuilt
-    /// the same way.
-    RebuildPin,
+    /// `saves/`, the start of a password change: one step of longer work, so
+    /// a stop is still taken after it.
+    ChangeSave,
+    /// `saves/`, before a rebuild's tree step: its index files do not open,
+    /// so the check that they hold one tree is left out. A vault made from it
+    /// is rebuilt the same way.
+    RebuildCopy,
+}
+
+impl BackupDir {
+    fn in_saves(self) -> bool {
+        self != Self::Standard
+    }
+
+    /// The zip is the whole of its job: its rename is the last step.
+    fn whole_job(self) -> bool {
+        self == Self::Saves
+    }
+
+    /// Its check opens the index files to see that they hold one tree.
+    fn checks_tree(self) -> bool {
+        self != Self::RebuildCopy
+    }
 }
 
 /// Remove this vault's unfinished zips from a folder. Only names on its own
@@ -1058,9 +1150,10 @@ fn write_backup_zip(
     into: BackupDir,
     job: &Job,
 ) -> Result<(String, PathBuf)> {
-    let dir = match into {
-        BackupDir::Standard => backups.to_path_buf(),
-        BackupDir::Saves | BackupDir::RebuildPin => backups.join(SAVES_DIR),
+    let dir = if into.in_saves() {
+        backups.join(SAVES_DIR)
+    } else {
+        backups.to_path_buf()
     };
     crate::host_fs::create_dir_all(&dir)?;
     // One stamp across both folders, so a save never shares a name with a backup.
@@ -1082,22 +1175,21 @@ fn write_backup_zip(
             job,
         )?;
         sync_closed_file(&partial)?;
-        match into {
-            BackupDir::RebuildPin => {
-                super::zip_io::verify_store_zip_entries(&partial, job)?;
-            }
-            BackupDir::Standard | BackupDir::Saves => {
-                super::zip_io::verify_store_zip_copies(&partial, job)?;
-            }
+        if into.checks_tree() {
+            super::zip_io::verify_store_zip_copies(&partial, job)?;
+        } else {
+            super::zip_io::verify_store_zip_entries(&partial, job)?;
         }
-        match into {
-            BackupDir::Saves => job.final_step(),
-            BackupDir::Standard | BackupDir::RebuildPin => job.ensure_running(),
+        if into.whole_job() {
+            job.final_step()
+        } else {
+            job.ensure_running()
         }
     })();
-    let work = match into {
-        BackupDir::Standard => PartialWork::Backup,
-        BackupDir::Saves | BackupDir::RebuildPin => PartialWork::BackupSave,
+    let work = if into.in_saves() {
+        PartialWork::BackupSave
+    } else {
+        PartialWork::Backup
     };
     if let Err(error) = checked {
         discard_partial(&partial, work);
@@ -1120,13 +1212,14 @@ fn write_backup_zip(
     // The new name must be durable before retention unlinks the previous one.
     // Otherwise a crash can publish the deletion and lose the new copy.
     sync_dir(&dir)?;
-    if matches!(into, BackupDir::Saves | BackupDir::RebuildPin) {
+    if into.in_saves() {
         // `saves/` itself may be new.
         sync_dir(backups)?;
     }
-    let event = match into {
-        BackupDir::Standard => "vault_backup_created",
-        BackupDir::Saves | BackupDir::RebuildPin => "vault_backup_saved",
+    let event = if into.in_saves() {
+        "vault_backup_saved"
+    } else {
+        "vault_backup_created"
     };
     log_event(
         LogLevel::Info,
@@ -1390,6 +1483,10 @@ pub fn rename_backup(
         let named = parse_zip_name(&file)
             .map(|parsed| parsed.name)
             .unwrap_or_default();
+        let vault_kib = load_header(vault_dir.join(STORE_DIR_NAME))
+            .ok()
+            .map(|header| header.top.kdf.memory_kib);
+        let lower = lower_unlock_ram(backup_zip_header(&dest).as_ref(), vault_kib);
         Ok(BackupEntry {
             key: entry_key(parsed.folder, true, &file),
             created_at: crate::time::filename_stamp_to_iso(&zip.stamp).unwrap_or_default(),
@@ -1399,6 +1496,7 @@ pub fn rename_backup(
             size_bytes,
             saved: true,
             path: dest,
+            lower_unlock_ram: lower,
         })
     })
 }
@@ -1835,6 +1933,11 @@ mod tests {
     use crate::test_support::{backup_rows, test_job_id, vault_root_with};
     use crate::vault::create_vault;
 
+    /// Delete the vault `notes`, with the outside backups when `outside`.
+    fn delete_notes(root: &VaultRoot, outside: bool) -> Result<crate::vault::VaultDeleteOutcome> {
+        crate::vault::delete_vault(root, "notes", outside, false, &test_job_id())
+    }
+
     fn sample_config(id: &str, name: &str) -> crate::config::VaultConfig {
         toml::from_str(&format!(
             r#"
@@ -2221,7 +2324,7 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn a_save_refuses_a_stop_once_its_zip_is_in_and_a_safety_zip_still_takes_one() {
+    fn a_save_refuses_a_stop_once_its_zip_is_in_and_a_change_start_backup_still_takes_one() {
         let (_tmp, root) = vault_root_with(&[]);
         create_vault(
             &root,
@@ -2242,15 +2345,15 @@ mode = "encrypted_dir"
             Err(UprivError::JobNotStoppable)
         ));
 
-        // The safety zip of a password change is one step of that change.
+        // The backup at the start of a password change is one step of that change.
         let id = test_job_id();
-        let rewrapping = Job::start(&id).unwrap();
+        let changing = Job::start(&id).unwrap();
         write_backup_zip(
             &vault_dir,
             "notes",
             &backups,
-            BackupDir::Standard,
-            &rewrapping,
+            BackupDir::ChangeSave,
+            &changing,
         )
         .unwrap();
         assert_eq!(
@@ -2591,6 +2694,7 @@ mode = "encrypted_dir"
                 bytes_done: expected,
                 bytes_total: expected,
                 stoppable: false,
+                step: None,
             })
         );
     }
@@ -2602,7 +2706,7 @@ mode = "encrypted_dir"
         let zip = backup_zip_file(&root, "notes", &name).unwrap();
         let reading = BackupExportGuard::enter(&vault_dir, vec![zip.clone()]).unwrap();
         assert!(matches!(
-            crate::vault::delete_vault(&root, "notes", false),
+            delete_notes(&root, false),
             Err(UprivError::VaultConfigBusy { .. })
         ));
         assert!(matches!(
@@ -2617,11 +2721,11 @@ mode = "encrypted_dir"
         let second = BackupExportGuard::enter(&vault_dir, vec![zip]).unwrap();
         drop(reading);
         assert!(matches!(
-            crate::vault::delete_vault(&root, "notes", false),
+            delete_notes(&root, false),
             Err(UprivError::VaultConfigBusy { .. })
         ));
         drop(second);
-        crate::vault::delete_vault(&root, "notes", false).unwrap();
+        delete_notes(&root, false).unwrap();
         assert!(!vault_dir.host_exists());
     }
 
@@ -2697,7 +2801,7 @@ mode = "encrypted_dir"
         let (_tmp, root, name, _) = vault_with_two_backups();
         let out = tempfile::tempdir().unwrap();
         export_backups(&root, "notes", &[name], out.path(), &test_job_id()).unwrap();
-        crate::vault::delete_vault(&root, "notes", false).unwrap();
+        delete_notes(&root, false).unwrap();
     }
 
     #[test]
@@ -3276,7 +3380,7 @@ mode = "encrypted_dir"
         let theirs = second.join("upriv-notes-backups").join("my-file.txt");
         crate::host_fs::write(&theirs, b"kept").unwrap();
 
-        let outcome = crate::vault::delete_vault(&root, "notes", true).unwrap();
+        let outcome = delete_notes(&root, true).unwrap();
         assert!(!first.join("upriv-notes-backups").host_exists());
         assert_eq!(
             zips_in(&second.join("upriv-notes-backups")),
@@ -3295,7 +3399,7 @@ mode = "encrypted_dir"
         let drive = tempfile::tempdir().unwrap();
         let (_tmp, root) = vault_with_rows(&[drive.path()], 1);
         let written = close_backup(&root);
-        let outcome = crate::vault::delete_vault(&root, "notes", false).unwrap();
+        let outcome = delete_notes(&root, false).unwrap();
         assert_eq!(outcome.outside, crate::vault::OutsideBackups::Kept);
         assert!(written.path.host_is_file());
     }
@@ -3308,7 +3412,7 @@ mode = "encrypted_dir"
         let (_keep, root) = vault_with_rows(&[&drive], 1);
         close_backup(&root);
         crate::host_fs::rename(&drive, tmp.path().join("away")).unwrap();
-        let outcome = crate::vault::delete_vault(&root, "notes", true).unwrap();
+        let outcome = delete_notes(&root, true).unwrap();
         assert_eq!(outcome.outside, crate::vault::OutsideBackups::Failed);
         assert!(tmp
             .path()

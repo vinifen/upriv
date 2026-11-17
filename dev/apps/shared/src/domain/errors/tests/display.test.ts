@@ -20,8 +20,8 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("open_terminal_failed", "no terminal"))).toBe(
       "modal.file_manager.toast.open_terminal_failed",
     );
-    expect(errorDisplayI18nKey(new RpcError("vault_backup_failed", "zip"))).toBe(
-      "error.vault_backup_failed",
+    expect(errorDisplayI18nKey(new RpcError("vault_deleting", "deleting"))).toBe(
+      "error.vault_deleting",
     );
     expect(errorDisplayI18nKey(new RpcError("backup_exporting", "held"))).toBe(
       "error.backup_exporting",
@@ -80,16 +80,14 @@ describe("errorDisplayI18nKey", () => {
     );
   });
 
-  it("maps an unchanged rewrap to the must-be-different copy", () => {
-    expect(errorDisplayI18nKey(new RpcError("rewrap_password_unchanged", "same"))).toBe(
+  it("maps an unchanged password or unlock RAM to the must-be-different copy", () => {
+    expect(errorDisplayI18nKey(new RpcError("password_unchanged", "same"))).toBe(
       "vault.change_password.same_as_current",
     );
-    expect(errorDisplayI18nKey(new RpcError("rewrap_kdf_unchanged", "same"))).toBe(
+    expect(errorDisplayI18nKey(new RpcError("unlock_ram_unchanged", "same"))).toBe(
       "vault.change_kdf.same_as_current",
     );
-    expect(
-      errorDisplayI18nKey(new RpcError("vault_config_invalid", "rewrap changes nothing")),
-    ).toBe(null);
+    expect(errorDisplayI18nKey(new RpcError("vault_config_invalid", "changes nothing"))).toBe(null);
   });
 
   it("returns null for unknown errors", () => {

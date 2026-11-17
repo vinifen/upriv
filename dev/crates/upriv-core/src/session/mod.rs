@@ -11,12 +11,13 @@ use std::time::{Duration, Instant};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{Result, UprivError};
-use crate::store::{OpenedStore, VaultHeader, VaultIndex};
+use crate::store::{Keyring, OpenedStore, VaultHeader, VaultIndex};
 
 mod jobs;
 
 pub use jobs::{
-    cancel_job, job_status, log_request_panic, note_panic, stop_all_jobs, JobStatus, JobStop,
+    cancel_job, job_status, log_request_panic, note_panic, stop_all_jobs, JobStatus, JobStep,
+    JobStop,
 };
 pub(crate) use jobs::{Job, JobKind, ProgressReader};
 
@@ -34,11 +35,9 @@ pub struct OpenSession {
     pub vault_dir: PathBuf,
     #[zeroize(skip)]
     pub header: VaultHeader,
-    pub master_key: [u8; 32],
-    pub content_key: [u8; 32],
-    pub index_key: [u8; 64],
-    /// The key of the recovery records the vault's blobs carry.
-    pub record_key: [u8; 32],
+    /// The keys of the header's top block. Wiped when the session drops.
+    #[zeroize(skip)]
+    pub keys: Keyring,
     #[zeroize(skip)]
     pub index: VaultIndex,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
@@ -76,6 +75,10 @@ pub struct OpenSession {
     /// the last seal. Layout is not vault data, so it waits in RAM for the
     /// next seal or close instead of sealing the index on its own.
     pub pending_layout: Option<Zeroizing<Vec<u8>>>,
+    /// The stop flag of the pass running on this session
+    /// (`vault_key_copies_update`); a close sets it.
+    #[zeroize(skip)]
+    pub(crate) key_copies: Option<Arc<AtomicBool>>,
 }
 
 /// Where the unlocked folder attach of an open encrypted vault stands.
@@ -109,23 +112,12 @@ impl OpenSession {
         vault_dir: PathBuf,
         opened: OpenedStore,
     ) -> Self {
-        let mut master_key = [0u8; 32];
-        master_key.copy_from_slice(opened.master_key.as_ref());
-        let mut content_key = [0u8; 32];
-        content_key.copy_from_slice(opened.content_key.as_ref());
-        let mut index_key = [0u8; 64];
-        index_key.copy_from_slice(opened.index_key.as_ref());
-        let mut record_key = [0u8; 32];
-        record_key.copy_from_slice(opened.record_key.as_ref());
         Self {
             vault_id,
             display_name,
             vault_dir,
             header: opened.header,
-            master_key,
-            content_key,
-            index_key,
-            record_key,
+            keys: opened.keys,
             index: opened.index,
             dirty: false,
             tree_revision: 0,
@@ -138,14 +130,15 @@ impl OpenSession {
             staged_blobs: crate::store::StagedBlobs::default(),
             deferred: None,
             pending_layout: None,
+            key_copies: None,
         }
     }
 
-    /// What the next seal of this session's tree writes its records with.
+    /// What the next seal of this session's tree writes its records and key
+    /// copies with.
     pub(crate) fn records(&self) -> crate::store::Records<'_> {
         crate::store::Records {
-            header: &self.header,
-            key: &self.record_key,
+            keys: &self.keys,
             index: &self.index,
         }
     }
@@ -154,8 +147,7 @@ impl OpenSession {
     /// for the seal of the tree as it is now.
     pub(crate) fn sync_staged_blobs(&mut self, due: crate::store::RecordsDue) -> Result<()> {
         let records = crate::store::Records {
-            header: &self.header,
-            key: &self.record_key,
+            keys: &self.keys,
             index: &self.index,
         };
         self.staged_blobs.sync(&records, due)
@@ -215,6 +207,18 @@ fn open_session_poisoned() -> UprivError {
     }
 }
 
+/// True for an answer of a failed unlock that counts once for the unlock
+/// limit: a wrong password, an earlier password of the vault, and a password
+/// that cannot settle a pending password change.
+pub(crate) fn counts_as_failed_unlock(error: &UprivError) -> bool {
+    matches!(
+        error,
+        UprivError::WrongPassword
+            | UprivError::PasswordOutdated
+            | UprivError::PasswordChangeInterrupted
+    )
+}
+
 /// Serialize Argon2-bound work for the whole process (`open` + create seed).
 pub fn with_unlock_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     let _held = lock_table(&UNLOCK_GATE);
@@ -236,7 +240,8 @@ pub fn with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -
 }
 
 /// Same section as [`with_vault_dir_lock`], without waiting.
-/// A holder (rewrap, open, rename) makes the caller return [`UprivError::VaultBusy`].
+/// A holder (a password or unlock-RAM change, open, rename) makes the caller
+/// return [`UprivError::VaultBusy`].
 pub fn try_with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let gate = vault_dir_gate(vault_dir);
     let _held = match gate.try_lock() {
@@ -332,7 +337,8 @@ pub fn open_session_ids() -> Vec<String> {
     ids
 }
 
-/// Refuse export and rewrap while this vault is open, closing, or already held.
+/// Refuse export and the password and unlock-RAM changes while this vault is
+/// open, closing, or already held.
 pub fn ensure_vault_session_closed(vault_dir: &Path) -> Result<()> {
     if is_vault_open_at(vault_dir) || is_vault_closing_at(vault_dir) {
         return Err(UprivError::VaultMustBeClosed);
@@ -344,8 +350,8 @@ pub fn ensure_vault_session_closed(vault_dir: &Path) -> Result<()> {
 }
 
 /// Refuse vault-root switch while any vault is open, mid-close, held for
-/// export / rewrap / open / create, Argon2 is in flight, or the data folder
-/// is being exported.
+/// export / a password or unlock-RAM change / open / create, Argon2 is in
+/// flight, or the data folder is being exported.
 ///
 /// UI also blocks queued opening/creating rows before core work starts. This is
 /// the process-side backstop so setup RPCs cannot race unlock, flush, export,
@@ -444,7 +450,7 @@ pub(crate) fn any_session_under(vaults_dir: &Path) -> bool {
 }
 
 /// True while a vault folder under `vaults_dir` is held for open, create,
-/// import, export, backup, or rewrap.
+/// import, export, backup, or a password or unlock-RAM change.
 pub(crate) fn any_preparing_under(vaults_dir: &Path) -> bool {
     lock_table(&PREPARING)
         .iter()
@@ -648,7 +654,8 @@ impl Drop for ClosingGuard {
     }
 }
 
-/// Mark `vault_dir` as preparing until dropped (open, create, export, or rewrap).
+/// Mark `vault_dir` as preparing until dropped (open, create, export, or a
+/// password or unlock-RAM change).
 pub(crate) struct PreparingGuard {
     vault_dir: PathBuf,
 }
@@ -663,7 +670,7 @@ impl PreparingGuard {
         }
     }
 
-    /// One holder. Open, export, and rewrap use this so they cannot overlap.
+    /// One holder. Open, export, and the two changes use this so they cannot overlap.
     pub(crate) fn enter_exclusive(vault_dir: &Path) -> Result<Self> {
         let mut guard = lock_table(&PREPARING);
         if guard.get(vault_dir).is_some_and(|count| *count > 0) {

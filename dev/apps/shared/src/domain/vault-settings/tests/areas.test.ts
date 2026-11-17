@@ -1,48 +1,58 @@
 import { describe, expect, it } from "vitest";
 import { vaultRowFixture } from "../../vault/tests/fixtures.shared";
-import { vaultRowControls, vaultSettingsMenuAreas, type VaultRowControls } from "../areas";
+import { vaultRowControls, vaultSettingsMenuEntries, type VaultRowControls } from "../areas";
 import type { VaultPipelineListStatus } from "../../vault/types";
 
-describe("vaultSettingsMenuAreas", () => {
-  it("includes password and unlock RAM for a closed vault of either mode", () => {
-    const areas = ["preferences", "password", "kdf", "group"] as const;
-    expect(vaultSettingsMenuAreas(vaultRowFixture())).toEqual(areas);
-    expect(vaultSettingsMenuAreas(vaultRowFixture({ storageMode: "upriv_plain" }))).toEqual(areas);
+describe("vaultSettingsMenuEntries", () => {
+  it("lists every settings screen, then Delete vault, for a closed vault of either mode", () => {
+    const areas = ["preferences", "password", "kdf", "group", "delete"] as const;
+    expect(vaultSettingsMenuEntries(vaultRowFixture())).toEqual(areas);
+    expect(vaultSettingsMenuEntries(vaultRowFixture({ storageMode: "upriv_plain" }))).toEqual(
+      areas,
+    );
   });
 
-  it("omits both when the vault cannot rewrap", () => {
-    const preferencesAndGroup = ["preferences", "group"];
-    expect(vaultSettingsMenuAreas(vaultRowFixture({ session: "open" }))).toEqual(
+  it("offers the Delete vault window alone while a delete runs or did not finish", () => {
+    expect(vaultSettingsMenuEntries(vaultRowFixture({ session: "deleting" }))).toEqual(["delete"]);
+    expect(vaultSettingsMenuEntries(vaultRowFixture(), { deletingVaultIds: ["demo"] })).toEqual([
+      "delete",
+    ]);
+  });
+
+  it("omits password and unlock RAM when the vault is not strictly closed", () => {
+    const preferencesAndGroup = ["preferences", "group", "delete"];
+    expect(vaultSettingsMenuEntries(vaultRowFixture({ session: "open" }))).toEqual(
       preferencesAndGroup,
     );
-    expect(vaultSettingsMenuAreas(vaultRowFixture({ session: "recovery" }))).toEqual(
+    expect(vaultSettingsMenuEntries(vaultRowFixture({ session: "recovery" }))).toEqual(
       preferencesAndGroup,
     );
-    expect(vaultSettingsMenuAreas(vaultRowFixture({ session: "closing" }))).toEqual(
+    expect(vaultSettingsMenuEntries(vaultRowFixture({ session: "closing" }))).toEqual(
       preferencesAndGroup,
     );
-    expect(vaultSettingsMenuAreas(vaultRowFixture(), { openingVaultIds: ["demo"] })).toEqual(
+    expect(vaultSettingsMenuEntries(vaultRowFixture(), { openingVaultIds: ["demo"] })).toEqual(
       preferencesAndGroup,
     );
-    expect(vaultSettingsMenuAreas(vaultRowFixture(), { exportingVaultIds: ["demo"] })).toEqual(
+    expect(vaultSettingsMenuEntries(vaultRowFixture(), { exportingVaultIds: ["demo"] })).toEqual(
       preferencesAndGroup,
     );
   });
 
   it("keeps the in-progress password or unlock RAM entry so that screen can reopen", () => {
-    expect(vaultSettingsMenuAreas(vaultRowFixture(), { passwordChangeVaultIds: ["demo"] })).toEqual(
-      ["preferences", "password", "group"],
-    );
-    expect(vaultSettingsMenuAreas(vaultRowFixture(), { kdfChangeVaultIds: ["demo"] })).toEqual([
+    expect(
+      vaultSettingsMenuEntries(vaultRowFixture(), { passwordChangeVaultIds: ["demo"] }),
+    ).toEqual(["preferences", "password", "group", "delete"]);
+    expect(vaultSettingsMenuEntries(vaultRowFixture(), { kdfChangeVaultIds: ["demo"] })).toEqual([
       "preferences",
       "kdf",
       "group",
+      "delete",
     ]);
     expect(
-      vaultSettingsMenuAreas(vaultRowFixture({ storageMode: "upriv_plain" }), {
+      vaultSettingsMenuEntries(vaultRowFixture({ storageMode: "upriv_plain" }), {
         passwordChangeVaultIds: ["demo"],
       }),
-    ).toEqual(["preferences", "password", "group"]);
+    ).toEqual(["preferences", "password", "group", "delete"]);
   });
 });
 
@@ -102,15 +112,16 @@ describe("vaultRowControls", () => {
     expect(controls({ backupJobVaultIds: ["demo"] })).toEqual(holding);
   });
 
-  it("keeps the gear open during a password or unlock-RAM change so that countdown can reopen", () => {
-    const rewrap: VaultRowControls = {
+  it("keeps the gear and the menu open during a change or a delete so its window can reopen", () => {
+    const working: VaultRowControls = {
       ...idle,
       noteBlocked: true,
       noteHidden: true,
       settingsSaveBlocked: true,
       dragBlocked: true,
     };
-    expect(controls({ passwordChangeVaultIds: ["demo"] })).toEqual(rewrap);
-    expect(controls({ kdfChangeVaultIds: ["demo"] })).toEqual(rewrap);
+    expect(controls({ passwordChangeVaultIds: ["demo"] })).toEqual(working);
+    expect(controls({ kdfChangeVaultIds: ["demo"] })).toEqual(working);
+    expect(controls({ deletingVaultIds: ["demo"] })).toEqual(working);
   });
 });

@@ -260,6 +260,18 @@ pub struct VaultConfig {
     pub file_manager: VaultFileManagerSection,
     #[serde(default)]
     pub seven_zip: VaultSevenZipSection,
+    /// Present while the vault is being deleted, or a delete of it did not
+    /// finish. Only the delete writes it, and it leaves with `config.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleting: Option<VaultDeletingSection>,
+}
+
+/// `[deleting]`: a delete of this vault started (`vault_delete`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultDeletingSection {
+    /// The backups outside the data folder go too.
+    pub outside_backups: bool,
 }
 
 impl VaultConfig {

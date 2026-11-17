@@ -16,6 +16,7 @@ export function backupEntry(
     sizeBytes: 1,
     saved,
     path: `/data/.upriv/vaults/notes/backups/${saved ? "saves/" : ""}${fileName}`,
+    lowerUnlockRam: false,
     ...patch,
   };
 }

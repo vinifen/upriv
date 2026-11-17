@@ -12,7 +12,6 @@ import { Icon } from "@/components/icons";
 import { Button, Modal, SwitchRow } from "@/components/ui";
 import { useOperationLimit } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
-import { useRevealWhen } from "@/hooks/useRevealWhen";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import {
   GROUPED_VAULT_SORT_MODES,
@@ -77,8 +76,8 @@ export function VaultGroupSettingsModal({
     useState<VaultListSortDirection>("asc");
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The Delete group window shows in place of the settings. */
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const deleteConfirmRef = useRevealWhen<HTMLDivElement>(deleteOpen);
   const [error, setError] = useState<string | null>(null);
   const limit = useOperationLimit(busy);
 
@@ -171,6 +170,45 @@ export function VaultGroupSettingsModal({
 
   if (!open || !group) return null;
 
+  if (deleteOpen) {
+    return (
+      <Modal
+        open={open}
+        title={t("vault.group.settings.delete")}
+        titleIcon="trash"
+        contextTitle={group.displayName}
+        onClose={() => {
+          if (!busy) setDeleteOpen(false);
+        }}
+        dismissible={!busy}
+        panelClassName="max-w-md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="md" onClick={() => setDeleteOpen(false)} disabled={busy}>
+              {t("action.cancel")}
+            </Button>
+            <Button
+              variant="danger"
+              size="md"
+              disabled={!canConfirmDelete}
+              onClick={() => void remove()}
+            >
+              {t("vault.group.settings.delete")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-on-surface-variant">{t("vault.group.settings.delete_help")}</p>
+          <p className="text-sm text-on-surface-variant">
+            {t("vault.group.settings.delete_confirm")}
+          </p>
+          {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
+        </div>
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       open={open}
@@ -181,13 +219,26 @@ export function VaultGroupSettingsModal({
       dismissible={!busy}
       panelClassName="max-w-3xl"
       footer={
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="md" onClick={close} disabled={busy}>
-            {t("action.cancel")}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="md"
+            disabled={busy}
+            onClick={() => {
+              setError(null);
+              setDeleteOpen(true);
+            }}
+          >
+            {t("vault.group.settings.delete_entry")}
           </Button>
-          <Button variant="primary" size="md" disabled={!canSave} onClick={() => void save()}>
-            {t("vault.group.settings.save")}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="md" onClick={close} disabled={busy}>
+              {t("action.cancel")}
+            </Button>
+            <Button variant="primary" size="md" disabled={!canSave} onClick={() => void save()}>
+              {t("vault.group.settings.save")}
+            </Button>
+          </div>
         </div>
       }
     >
@@ -310,52 +361,6 @@ export function VaultGroupSettingsModal({
               onToggle={toggleGroupedVault}
             />
           </SettingsFormGrid>
-        </VaultSettingsSection>
-
-        <VaultSettingsSection title={t("modal.settings.danger_zone")} tone="danger">
-          {!deleteOpen ? (
-            <div className="space-y-3">
-              <p className="text-sm text-on-surface-variant">
-                {t("vault.group.settings.delete_help")}
-              </p>
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={busy}
-                onClick={() => {
-                  setDeleteOpen(true);
-                }}
-              >
-                {t("vault.group.settings.delete")}
-              </Button>
-            </div>
-          ) : (
-            <div ref={deleteConfirmRef} className="space-y-3">
-              <p className="text-sm text-on-surface-variant">
-                {t("vault.group.settings.delete_confirm")}
-              </p>
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => {
-                    setDeleteOpen(false);
-                  }}
-                >
-                  {t("action.cancel")}
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={!canConfirmDelete}
-                  onClick={() => void remove()}
-                >
-                  {t("action.delete")}
-                </Button>
-              </div>
-            </div>
-          )}
         </VaultSettingsSection>
 
         {error ? <p className="text-sm text-on-error-container">{error}</p> : null}

@@ -6,6 +6,7 @@
 use crate::host_fs::HostFsQuery;
 mod backup;
 mod backup_folder;
+mod closed_store;
 mod config_folder;
 mod create;
 mod data_folder;
@@ -17,23 +18,26 @@ mod export_folder;
 mod files_zip;
 mod folder_status;
 pub(crate) mod fs;
+mod header_commit;
 mod import;
 mod import_job;
 mod import_slots;
+mod key_pass;
 mod lost_sessions;
 mod open_close;
 mod os_import;
 mod package;
 mod partial;
+mod password_change;
 mod persistence;
 mod plain;
 mod plain_zip;
 mod rebuild;
 mod rename;
-mod rewrap;
 mod seven_zip;
 mod seven_zip_pack;
 mod unfinished;
+mod unlock_ram_change;
 mod unlocked_folder;
 mod welcome;
 pub(crate) mod wipe;
@@ -46,16 +50,17 @@ use crate::config::vault_config::{load_vault_config, VaultConfig, VaultStorageMo
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
-use crate::session::is_vault_open_at;
-use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
+use crate::session::{is_vault_closing_at, is_vault_open_at};
+use crate::store::{content_hash_hex, probe_header, KdfUnlockPreset, PasswordChangeState};
 
 pub(crate) use backup::reuse_selected_backup_folder;
 pub use backup::{
     backup_listing, backup_zip_file, delete_backups, export_backups, forget_backup_folder,
     list_backups, promote_backup_save, rename_backup, save_backup_now, BackupEntry, BackupListing,
-    BackupSection, SavedBackup, SectionDevice, SectionKind, BACKUP_NAME_MAX_CHARS,
+    BackupSection, BackupSkip, SavedBackup, SectionDevice, SectionKind, BACKUP_NAME_MAX_CHARS,
 };
 pub use config_folder::{ExportInclude, ImportExtras};
+pub(crate) use create::vault_folder_is_free;
 pub use create::{create_vault, create_vault_as_job};
 pub use data_folder::{
     apply_data_folder, data_folder_status, data_folder_view, search_data_folder, DataFolderApplied,
@@ -63,7 +68,7 @@ pub use data_folder::{
     DataFolderView,
 };
 pub use data_folder_export::{export_data_folder, DataFolderExport};
-pub use delete::{delete_vault, OutsideBackups, VaultDeleteOutcome};
+pub use delete::{delete_vault, hurry_delete, OutsideBackups, VaultDeleteOutcome};
 pub use embedded_settings::EmbeddedVaultSettings;
 pub use export::{export_logical_seven_zip, export_plain_zip, export_store_zip};
 pub use export_folder::ExportedFile;
@@ -84,6 +89,7 @@ pub use import::{
     StoreZipSettings,
 };
 pub use import_slots::{import_slots, import_slots_for};
+pub use key_pass::{update_key_copies, vault_key_status, KeyCopies, KeyStatus};
 pub use lost_sessions::{data_folder_entered, end_lost_sessions, leave_lost_data_folder};
 pub use open_close::{
     close_all_vaults, close_all_vaults_now, close_state, close_vault, close_vault_auto,
@@ -95,6 +101,9 @@ pub use os_import::{
     ingest_import_reader, open_import_session,
 };
 pub use partial::{hurry_partial_wipes, wait_for_partial_wipes};
+pub use password_change::{
+    change_vault_password, finish_password_change, PasswordChangeFinishResult, PasswordChangeResult,
+};
 pub(crate) use persistence::forget_backup_devices;
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub(crate) use plain::{ensure_no_leftover, PlainSession};
@@ -107,13 +116,13 @@ pub use plain::{
 };
 pub use rebuild::{rebuild_vault, VaultRebuild};
 pub use rename::{rename_vault, VaultRenameResult};
-pub use rewrap::{change_vault_kdf, change_vault_password};
 pub use seven_zip::{
     import_logical_seven_zip, import_logical_seven_zip_path, probe_logical_seven_zip,
     probe_logical_seven_zip_path, SevenZipProbe,
 };
 pub use seven_zip_pack::seven_zip_export_available;
 pub use unfinished::sweep_unfinished;
+pub use unlock_ram_change::{change_vault_kdf, UnlockRamChangeResult};
 pub use unlocked_folder::{
     attach_unlocked_folder, unlocked_folder_info, AttachAnswer, UnlockedFolderInfo,
 };
@@ -146,6 +155,15 @@ pub struct VaultListItem {
     pub note: String,
     pub last_accessed_at: Option<String>,
     pub unlock_preset: Option<KdfUnlockPreset>,
+    /// Keys the header holds: one in a steady vault, more while files wait
+    /// on earlier keys.
+    pub key_count: usize,
+    /// A password change pending (the row is `recovery`) or not finished,
+    /// read from the header in the clear.
+    pub password_change: PasswordChangeState,
+    /// The row is `deleting` and no delete of it runs in this process: one
+    /// that a quit or a crash stopped, which Continue goes on with.
+    pub delete_unfinished: bool,
     /// A plaintext folder from an earlier session waits to be removed. Its
     /// folder path, mode, and name are locked until then.
     pub plain_leftover: bool,
@@ -317,10 +335,15 @@ fn list_item_from_entry(
     let last_accessed_at = saved
         .as_ref()
         .and_then(|item| item.last_close_ok_at.clone());
-    let unlock_preset = probe_unlock_preset(entry.vault_dir.join(crate::paths::STORE_DIR_NAME));
+    let header = probe_header(entry.vault_dir.join(crate::paths::STORE_DIR_NAME));
+    let password_change = header.map_or(PasswordChangeState::None, |probe| probe.password_change);
+    let deleting = entry.config.deleting.is_some();
     let session = if is_vault_open_at(&entry.vault_dir) {
         Some("open")
-    } else if dirty.contains(&entry.id)
+    } else if deleting {
+        Some("deleting")
+    } else if password_change == PasswordChangeState::Pending
+        || dirty.contains(&entry.id)
         || content_hash_mismatch(
             &entry.vault_dir,
             saved.as_ref().and_then(|item| item.content_hash.as_deref()),
@@ -356,7 +379,10 @@ fn list_item_from_entry(
         hidden: entry.hidden,
         note: entry.note.clone(),
         last_accessed_at,
-        unlock_preset,
+        unlock_preset: header.and_then(|probe| probe.unlock_preset),
+        key_count: header.map_or(0, |probe| probe.keys),
+        password_change,
+        delete_unfinished: deleting && !is_vault_closing_at(&entry.vault_dir),
         plain_leftover,
         plain_records,
         outside_backups,
@@ -671,8 +697,7 @@ mode = "encrypted_dir"
         let expected = crate::store::seed_plaintext(opened.header.content_identity);
         let got = crate::store::read_logical_file(
             &store,
-            &opened.header,
-            &opened.content_key,
+            &opened.keys,
             &opened.index,
             crate::store::SEED_LOGICAL_PATH,
         )

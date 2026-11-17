@@ -279,17 +279,18 @@ private fun deviceIdentityJson(ctx: Context): String {
  * "TOML failure from Rust" and "SAF failure from Kotlin".
  */
 /** Light RPCs that may run beside a long heavy call. */
-private val PROBE_METHODS = setOf("vault_close_phase", "vault_close_hurry")
+private val PROBE_METHODS = setOf("vault_close_phase", "vault_close_hurry", "vault_delete_hurry")
 
 /**
  * Same lanes as the desktop daemon (`upriv-daemon` `wire.rs`), plus a light
- * lane for everything else. Argon2, close, rewrap, and pack are one thread each.
- * File import uses up to two threads, the phone cap in `import_slots_for`.
- * A one-core phone uses one thread.
+ * lane for everything else. Argon2, close, keys, delete, key copies, and pack
+ * are one thread each. File import uses up to two threads, the phone cap in
+ * `import_slots_for`. A one-core phone uses one thread.
  *
  * Method names match `is_argon2_bound_method`, `is_lifecycle_io_method`,
- * `is_rewrap_io_method`, `is_import_io_method`, `is_pack_io_method`,
- * `is_data_folder_io_method`, and `is_folder_method`.
+ * `is_keys_io_method`, `is_delete_io_method`, `is_key_copies_io_method`,
+ * `is_import_io_method`, `is_pack_io_method`, `is_data_folder_io_method`, and
+ * `is_folder_method`.
  */
 private object CoreLanes {
   private fun single(name: String): CoroutineDispatcher =
@@ -300,7 +301,9 @@ private object CoreLanes {
   private val light = single("upriv-rpc")
   private val argon2 = single("upriv-argon2")
   private val lifecycle = single("upriv-fs-io")
-  private val rewrap = single("upriv-rewrap")
+  private val keys = single("upriv-keys")
+  private val delete = single("upriv-delete")
+  private val keyCopies = single("upriv-key-copies")
   val pack = single("upriv-pack")
   private val dataFolder = single("upriv-data-folder")
   private val folderNames = AtomicInteger()
@@ -330,9 +333,12 @@ private object CoreLanes {
 
   fun dispatcher(method: String): CoroutineDispatcher = when (method) {
     "vault_open", "vault_create", "vault_ingest_open" -> argon2
-    "vault_close", "vault_delete", "vault_discard_import", "vault_plain_sync",
+    "vault_close", "vault_discard_import", "vault_plain_sync",
     "vault_plain_deletions", "vault_plain_send", "vault_plain_unsend" -> lifecycle
-    "vault_change_password", "vault_change_kdf", "vault_rebuild" -> rewrap
+    "vault_change_password", "vault_password_change_finish", "vault_change_kdf",
+    "vault_rebuild" -> keys
+    "vault_delete" -> delete
+    "vault_key_copies_update" -> keyCopies
     "vault_fs_import_os_file", "vault_import_probe" -> importFiles
     "vault_import_zip",
     "vault_import_7z",

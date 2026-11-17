@@ -1,6 +1,7 @@
 //! Long work a person can stop: opening, creating, importing, the password and
-//! unlock-RAM change, the rebuild of a lost index, exports, backups, file
-//! imports, the copy of a data folder, and the removal of a leftover folder.
+//! unlock-RAM change, the pass that updates key copies, the rebuild, exports,
+//! backups, file imports, the copy of a data folder, the removal of a leftover
+//! folder, and the delete of a vault.
 //!
 //! The UI names each job with an id it sends with the request, then asks
 //! `job_status` and `job_cancel` by that id. A stop can arrive while the
@@ -12,7 +13,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
@@ -39,10 +40,18 @@ pub(crate) enum JobKind {
     ImportProbe,
     /// One file streamed into an open vault.
     FileImport,
-    /// The password or unlock-RAM change of a closed vault.
-    Rewrap,
-    /// A closed vault's tree, built again from its blobs' records.
+    /// The password change of a closed vault: a new key, every file rewritten.
+    PasswordChange,
+    /// The files an unfinished password change left on earlier keys, rewritten.
+    PasswordChangeFinish,
+    /// The unlock-RAM change of a closed vault.
+    UnlockRamChange,
+    /// The pass that makes an open vault's key copies the header's.
+    KeyCopies,
+    /// A closed vault's header and tree, built again from its blobs.
     Rebuild,
+    /// The delete of a vault: each key copy overwritten, then the folder.
+    VaultDelete,
     VaultExport,
     BackupSave,
     BackupExport,
@@ -66,8 +75,12 @@ impl JobKind {
             Self::VaultImport => "vault_import",
             Self::ImportProbe => "import_probe",
             Self::FileImport => "file_import",
-            Self::Rewrap => "rewrap",
+            Self::PasswordChange => "password_change",
+            Self::PasswordChangeFinish => "password_change_finish",
+            Self::UnlockRamChange => "unlock_ram_change",
+            Self::KeyCopies => "key_copies",
             Self::Rebuild => "rebuild",
+            Self::VaultDelete => "vault_delete",
             Self::VaultExport => "vault_export",
             Self::BackupSave => "backup_save",
             Self::BackupExport => "backup_export",
@@ -89,6 +102,61 @@ pub struct JobStatus {
     pub bytes_total: u64,
     /// False once the job is in its last step: a stop is refused from then on.
     pub stoppable: bool,
+    /// What a job made of steps is doing now; `None` for one that has none.
+    pub step: Option<JobStep>,
+}
+
+/// The step a job made of several is in, for its window to name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobStep {
+    Unlocking,
+    BackingUp,
+    /// Files rewritten onto a new key.
+    RewritingFiles,
+    /// The header written.
+    Finishing,
+    /// Each blob's key copy made the header's ([`crate::store::pass_one`]).
+    UpdatingKeyCopies,
+    /// A deleted vault's key copies overwritten.
+    Overwriting,
+    /// A deleted vault's files removed.
+    Removing,
+}
+
+impl JobStep {
+    const ALL: [Self; 7] = [
+        Self::Unlocking,
+        Self::BackingUp,
+        Self::RewritingFiles,
+        Self::Finishing,
+        Self::UpdatingKeyCopies,
+        Self::Overwriting,
+        Self::Removing,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unlocking => "unlocking",
+            Self::BackingUp => "backing_up",
+            Self::RewritingFiles => "rewriting_files",
+            Self::Finishing => "finishing",
+            Self::UpdatingKeyCopies => "updating_key_copies",
+            Self::Overwriting => "overwriting",
+            Self::Removing => "removing",
+        }
+    }
+
+    /// Its slot in [`JobState::step`]: one more than its place, 0 for none.
+    fn slot(self) -> u8 {
+        Self::ALL
+            .iter()
+            .position(|step| *step == self)
+            .map_or(0, |at| at as u8 + 1)
+    }
+
+    fn of_slot(slot: u8) -> Option<Self> {
+        Self::ALL.get(usize::from(slot.checked_sub(1)?)).copied()
+    }
 }
 
 /// What a stop did.
@@ -109,6 +177,8 @@ struct JobState {
     /// Cleared by [`Job::final_step`], under the registry lock, so a stop and
     /// the last step never cross.
     stoppable: AtomicBool,
+    /// [`JobStep::slot`] of the step it is in; 0 for none.
+    step: AtomicU8,
 }
 
 impl JobState {
@@ -118,6 +188,7 @@ impl JobState {
             bytes_total: AtomicU64::new(0),
             stop,
             stoppable: AtomicBool::new(true),
+            step: AtomicU8::new(0),
         }
     }
 }
@@ -268,6 +339,11 @@ impl Job {
         self.state.bytes_done.fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// The job is in `step` now.
+    pub(crate) fn set_step(&self, step: JobStep) {
+        self.state.step.store(step.slot(), Ordering::Relaxed);
+    }
+
     pub(crate) fn is_stopped(&self) -> bool {
         self.state.stop.load(Ordering::Relaxed)
     }
@@ -300,9 +376,9 @@ impl Job {
         Ok(())
     }
 
-    /// The work begins again from nothing, as when a backup that failed in its
-    /// chosen folder is written to the data folder: its bytes count from zero
-    /// and a stop is taken again.
+    /// The work begins again from nothing: a backup that failed in its chosen
+    /// folder written to the data folder, or the pass that follows a header
+    /// commit. Its bytes count from zero and a stop is taken again.
     pub(crate) fn start_over(&self) {
         self.state.bytes_done.store(0, Ordering::Relaxed);
         self.state.stoppable.store(true, Ordering::Relaxed);
@@ -539,6 +615,7 @@ fn status_of(state: &JobState) -> JobStatus {
         },
         bytes_total,
         stoppable: state.stoppable.load(Ordering::Relaxed),
+        step: JobStep::of_slot(state.step.load(Ordering::Relaxed)),
     }
 }
 
@@ -609,18 +686,25 @@ mod tests {
                 bytes_done: 0,
                 bytes_total: 0,
                 stoppable: true,
+                step: None,
             })
         );
         job.set_total(10);
         job.advance(4);
+        job.set_step(JobStep::RewritingFiles);
         assert_eq!(
             job_status(&id),
             Some(JobStatus {
                 bytes_done: 4,
                 bytes_total: 10,
                 stoppable: true,
+                step: Some(JobStep::RewritingFiles),
             })
         );
+        for step in JobStep::ALL {
+            assert_eq!(JobStep::of_slot(step.slot()), Some(step));
+        }
+        assert_eq!(JobStep::of_slot(0), None);
         job.advance(20);
         assert_eq!(job_status(&id).unwrap().bytes_done, 10);
         drop(job);
@@ -718,7 +802,7 @@ mod tests {
         let registry = registry();
         let out: Result<()> = Job::run_in(registry, "stopped", JobKind::VaultExport, None, |_| {
             cancel_in(registry, "stopped").unwrap();
-            Err(UprivError::VaultBackupFailed)
+            Err(UprivError::VaultBusy)
         });
         assert!(matches!(out, Err(UprivError::JobCancelled)));
     }
@@ -727,9 +811,9 @@ mod tests {
     fn run_keeps_a_failure_without_a_stop() {
         let registry = registry();
         let out: Result<()> = Job::run_in(registry, "failed", JobKind::VaultImport, None, |_| {
-            Err(UprivError::VaultBackupFailed)
+            Err(UprivError::VaultBusy)
         });
-        assert!(matches!(out, Err(UprivError::VaultBackupFailed)));
+        assert!(matches!(out, Err(UprivError::VaultBusy)));
     }
 
     #[test]
@@ -780,7 +864,7 @@ mod tests {
         cancel_job(&id).unwrap();
         assert!(out.write_all(b"after").is_err());
         assert_eq!(out.into_inner(), b"before");
-        let failed: Result<()> = Err(UprivError::VaultBackupFailed);
+        let failed: Result<()> = Err(UprivError::VaultBusy);
         assert!(matches!(job.settle(failed), Err(UprivError::JobCancelled)));
         assert!(job.settle(Ok(())).is_ok());
     }
@@ -801,6 +885,7 @@ mod tests {
                 bytes_done: 11,
                 bytes_total: 11,
                 stoppable: true,
+                step: None,
             })
         );
         cancel_job(&id).unwrap();
@@ -874,10 +959,7 @@ mod tests {
         out.write_all(b"close backup").unwrap();
         job.ensure_running().unwrap();
         job.final_step().unwrap();
-        let failed: Result<()> = Err(UprivError::VaultBackupFailed);
-        assert!(matches!(
-            job.settle(failed),
-            Err(UprivError::VaultBackupFailed)
-        ));
+        let failed: Result<()> = Err(UprivError::VaultBusy);
+        assert!(matches!(job.settle(failed), Err(UprivError::VaultBusy)));
     }
 }

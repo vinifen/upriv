@@ -12,11 +12,12 @@ import {
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
   vaultCloseNowOffered,
+  vaultDeleteNowOffered,
   vaultExportMenuShown,
-  VAULT_SETTINGS_AREA_ICON,
-  VAULT_SETTINGS_AREA_I18N,
+  VAULT_SETTINGS_MENU_ICON,
+  VAULT_SETTINGS_MENU_I18N,
   vaultRowControls,
-  vaultSettingsMenuAreas,
+  vaultSettingsMenuEntries,
   type VaultListItem,
   type OsFolderAnswer,
   type VaultSettingsAreaId,
@@ -34,6 +35,8 @@ interface VaultRowActionsProps {
   onOpenNote: (vaultId: string) => void;
   onOpenVaultInfo: (vaultId: string) => void;
   onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => void;
+  /** The Delete vault window, the last entry of the Settings menu. */
+  onOpenDelete: (vaultId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   /** Block cards: stack ⋯ / settings to the right of the title. */
@@ -43,6 +46,8 @@ interface VaultRowActionsProps {
   onLockVault?: (vault: VaultListItem) => void;
   onUnlockVault?: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
+  /** Continue (`now` false) or Delete now (`now` true) for a vault being deleted. */
+  onDeleteWork: (vault: VaultListItem, now: boolean) => void;
 }
 
 export function VaultRowActions({
@@ -52,6 +57,7 @@ export function VaultRowActions({
   onOpenNote,
   onOpenVaultInfo,
   onOpenSettings,
+  onOpenDelete,
   onExportVault,
   onOpenFileManager,
   layout = "row",
@@ -59,6 +65,7 @@ export function VaultRowActions({
   onLockVault,
   onUnlockVault,
   onCloseNow,
+  onDeleteWork,
 }: VaultRowActionsProps) {
   const { t } = useTranslation();
   const { toast, show, dismiss } = useToast();
@@ -82,6 +89,7 @@ export function VaultRowActions({
   const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
   const closeNowOffered = vaultCloseNowOffered(listStatus, vault.id, pipelineListStatus);
+  const deleteNowOffered = vaultDeleteNowOffered(listStatus, vault.id, pipelineListStatus);
 
   const stacked = layout === "column";
   const actionBtnProps = stacked
@@ -110,17 +118,21 @@ export function VaultRowActions({
 
   const settingsItems = useMemo(
     () =>
-      vaultSettingsMenuAreas(vault, pipelineListStatus).map((area) => ({
-        id: area,
-        label: t(VAULT_SETTINGS_AREA_I18N[area]),
-        icon: <Icon name={VAULT_SETTINGS_AREA_ICON[area]} size={18} />,
+      vaultSettingsMenuEntries(vault, pipelineListStatus).map((entry) => ({
+        id: entry,
+        label: t(VAULT_SETTINGS_MENU_I18N[entry]),
+        icon: <Icon name={VAULT_SETTINGS_MENU_ICON[entry]} size={18} />,
+        danger: entry === "delete",
         disabled: controls.settingsGearBlocked,
         onSelect: () => {
           if (controls.settingsGearBlocked) return;
-          window.requestAnimationFrame(() => onOpenSettings(vault.id, area));
+          window.requestAnimationFrame(() => {
+            if (entry === "delete") onOpenDelete(vault.id);
+            else onOpenSettings(vault.id, entry);
+          });
         },
       })),
-    [controls.settingsGearBlocked, onOpenSettings, pipelineListStatus, t, vault],
+    [controls.settingsGearBlocked, onOpenDelete, onOpenSettings, pipelineListStatus, t, vault],
   );
 
   const moreItems = useMemo(
@@ -215,6 +227,18 @@ export function VaultRowActions({
             },
           ]
         : []),
+      ...(deleteNowOffered
+        ? [
+            {
+              id: "delete-now",
+              label: t("action.delete_now"),
+              icon: <Icon name="trash" size={18} />,
+              onSelect: () => {
+                window.requestAnimationFrame(() => onDeleteWork(vault, true));
+              },
+            },
+          ]
+        : []),
       {
         id: "vault-info",
         label: t("action.vault_info"),
@@ -231,10 +255,12 @@ export function VaultRowActions({
       canUnlock,
       canUseOpenWorkspace,
       closeNowOffered,
+      deleteNowOffered,
       showOsFileManager,
       includeLockAction,
       isOpen,
       onCloseNow,
+      onDeleteWork,
       onExportVault,
       onLockVault,
       onOpenBackups,
@@ -269,7 +295,7 @@ export function VaultRowActions({
             <IconButton
               label={t("app.menu.more")}
               {...actionBtnProps}
-              disabled={controls.moreMenuBlocked && !closeNowOffered}
+              disabled={controls.moreMenuBlocked && !closeNowOffered && !deleteNowOffered}
             >
               <Icon name="more-horizontal" size={actionIconSize} />
             </IconButton>

@@ -196,18 +196,32 @@ describe("configEditGateAllows", () => {
 });
 
 describe("vaultConfigEditAllowed", () => {
-  it("allows note while open; blocks quiet and rewrap", () => {
+  it("allows note while open; blocks quiet edits, the changes, and delete", () => {
     const open = vaultRowFixture({ id: "notes", session: "open" });
     expect(vaultConfigEditAllowed("vault.note", open)).toBe(true);
     expect(vaultConfigEditAllowed("vault.display_name", open)).toBe(false);
     expect(vaultConfigEditAllowed("action.change_password", open)).toBe(false);
+    expect(vaultConfigEditAllowed("action.finish_password_change", open)).toBe(false);
+    expect(vaultConfigEditAllowed("action.delete", open)).toBe(false);
   });
 
-  it("recovery allows quiet edits and rename, but not rewrap", () => {
+  it("recovery allows quiet edits, rename, and delete, but not the changes", () => {
     const recovery = vaultRowFixture({ id: "notes", session: "recovery" });
     expect(vaultConfigEditAllowed("storage.mode", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("vault.display_name", recovery)).toBe(true);
+    expect(vaultConfigEditAllowed("action.delete", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_kdf", recovery)).toBe(false);
+    expect(vaultConfigEditAllowed("action.finish_password_change", recovery)).toBe(false);
+  });
+
+  it("allows Finish and delete on a closed vault, and nothing once a delete began", () => {
+    const closed = vaultRowFixture({ id: "notes" });
+    expect(vaultConfigEditAllowed("action.finish_password_change", closed)).toBe(true);
+    expect(vaultConfigEditAllowed("action.delete", closed)).toBe(true);
+    const deleting = vaultRowFixture({ id: "notes", session: "deleting" });
+    expect(vaultConfigEditAllowed("action.delete", deleting)).toBe(false);
+    expect(vaultConfigEditAllowed("vault.display_name", deleting)).toBe(false);
+    expect(vaultConfigEditAllowed("storage.mode", deleting)).toBe(false);
   });
 
   it("creating and queued block rename, not quiet storage", () => {

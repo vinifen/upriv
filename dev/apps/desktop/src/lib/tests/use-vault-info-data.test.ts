@@ -8,8 +8,10 @@ import {
   type VaultBackupListing,
   type VaultDiskUsage,
   type VaultLifecycleService,
+  type VaultKeyStatus,
   type VaultListItem,
   type VaultRootService,
+  type VaultSecurityService,
   type VaultService,
 } from "@upriv/shared";
 import { useVaultInfoData } from "@upriv/shared/react";
@@ -35,10 +37,11 @@ const vault: VaultListItem = {
 
 const backup = backupEntry("20260528120000", { sizeBytes: 10 });
 
-function renderInfo() {
+function renderInfo(shown: VaultListItem = vault) {
   const backups = deferred<VaultBackupListing>();
   const diskUsage = deferred<VaultDiskUsage | null>();
   const unlocked = deferred<UnlockedFolderInfo>();
+  const keys = deferred<VaultKeyStatus | null>();
   const vaultService = {
     getSettings: async () => null,
     diskUsage: () => diskUsage.promise,
@@ -53,9 +56,10 @@ function renderInfo() {
   const folderListService = {
     unlockedFolderInfo: () => unlocked.promise,
   } as unknown as FolderListService;
+  const securityService = { keyStatus: () => keys.promise } as unknown as VaultSecurityService;
   const hook = renderHook(() =>
     useVaultInfoData({
-      vault,
+      vault: shown,
       open: true,
       groups: [],
       locale: "en",
@@ -64,10 +68,11 @@ function renderInfo() {
       lifecycleService,
       vaultRootService,
       folderListService,
+      securityService,
       fallbackVaultRootBase: "/data",
     }),
   );
-  return { ...hook, backups, diskUsage, unlocked };
+  return { ...hook, backups, diskUsage, unlocked, keys };
 }
 
 describe("useVaultInfoData", () => {
@@ -103,5 +108,22 @@ describe("useVaultInfoData", () => {
     expect(result.current.snapshot?.runtime.storeBytes).toBe(2048);
     expect(result.current.snapshot?.runtime.heldBytes).toBe(64);
     expect(result.current.snapshot?.runtime.filesBytes).toBe(1500);
+  });
+
+  it("reads the key status of an open vault only", async () => {
+    const closed = renderInfo();
+    await waitFor(() => expect(closed.result.current.snapshot).not.toBeNull());
+    expect(closed.result.current.snapshot?.keyStatus).toBeNull();
+
+    const open = renderInfo({ ...vault, session: "open" });
+    await waitFor(() => expect(open.result.current.snapshot).not.toBeNull());
+    expect(open.result.current.snapshot?.keyStatus).toBe("reading");
+    const status: VaultKeyStatus = {
+      filesWaiting: 3,
+      keyCopiesDue: true,
+      keyCopiesUpdating: false,
+    };
+    await act(async () => open.keys.resolve(status));
+    expect(open.result.current.snapshot?.keyStatus).toEqual(status);
   });
 });

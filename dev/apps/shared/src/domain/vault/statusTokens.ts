@@ -1,5 +1,10 @@
 import type { I18nKey } from "../../i18n/catalog";
-import type { VaultDeleteHold, VaultDisplayStatus, VaultPipelineListStatus } from "../vault/types";
+import type {
+  VaultDeleteHold,
+  VaultDisplayStatus,
+  VaultPipelineListStatus,
+  VaultRow,
+} from "../vault/types";
 
 /** CSS custom property names — single source for vault row/dot colors (SDD §8.2). */
 export const vaultStatusColorVar = {
@@ -15,6 +20,7 @@ export const vaultStatusColorVar = {
   backing_up: "--vault-status-closed",
   changing_password: "--vault-status-closed",
   changing_kdf: "--vault-status-closed",
+  deleting: "--vault-status-closed",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** i18n keys for status labels — maps display status → catalog key. */
@@ -31,20 +37,46 @@ export const vaultStatusI18nKey = {
   backing_up: "vault.status.backing_up",
   changing_password: "vault.status.changing_password",
   changing_kdf: "vault.status.changing_kdf",
+  deleting: "vault.status.deleting",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
-/** Why Delete waits (`vaultDeleteHold`): the danger zone line and its toast. */
+/** Why Delete waits (`vaultDeleteHold`): the Delete vault window's line and its toast. */
 export const VAULT_DELETE_HOLD_I18N_KEY = {
-  busy: "modal.settings.delete_only_closed",
-  backup_export: "modal.settings.delete_backup_export",
+  busy: "modal.delete_vault.hold.busy",
+  backup_export: "modal.delete_vault.hold.backup_export",
 } as const satisfies Record<VaultDeleteHold, I18nKey>;
 
-/** Row / badge / Info label. A closing vault in its backup phase says so. */
+/**
+ * The line a row shows under its status for a password change: one that did
+ * not finish and waits for the new password (the row is `recovery`), or one
+ * whose files still wait for Finish. `null` for a steady vault.
+ */
+export function vaultPasswordChangeLineKey(row: Pick<VaultRow, "passwordChange">): I18nKey | null {
+  switch (row.passwordChange) {
+    case "pending":
+      return "vault.row.password_change_pending";
+    case "unfinished":
+      return "vault.row.password_change_unfinished";
+    default:
+      return null;
+  }
+}
+
+/** What the row itself says beside its status. */
+export interface VaultStatusRowFlags {
+  autoClosed?: boolean;
+  deleteUnfinished?: boolean;
+}
+
+/**
+ * Row / badge / Info label. A closing vault in its backup phase says so, and
+ * a delete that is not running says it did not finish.
+ */
 export function vaultStatusLabelKey(
   status: VaultDisplayStatus,
   vaultId: string,
   pipeline: VaultPipelineListStatus = {},
-  autoClosed = false,
+  row: VaultStatusRowFlags = {},
 ): I18nKey {
   const work = pipeline.rowWork?.[vaultId];
   if (work?.stop === "stopping") return "vault.status.stopping";
@@ -53,6 +85,13 @@ export function vaultStatusLabelKey(
   if (status === "closing" && pipeline.backingUpVaultIds?.includes(vaultId)) {
     return "vault.status.backing_up";
   }
-  if (status === "closed" && autoClosed) return "vault.status.auto_closed";
+  if (status === "closed" && row.autoClosed === true) return "vault.status.auto_closed";
+  if (
+    status === "deleting" &&
+    row.deleteUnfinished === true &&
+    !pipeline.deletingVaultIds?.includes(vaultId)
+  ) {
+    return "vault.status.delete_unfinished";
+  }
   return vaultStatusI18nKey[status];
 }

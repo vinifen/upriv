@@ -286,6 +286,17 @@ pub(super) fn update_vault_persistence(
     save_vault_persistence(vault_dir, &persistence)
 }
 
+/// The header or index files of the closed vault at `vault_dir` were written
+/// with its content unchanged: an unlock that repaired a twin file, a pass
+/// that sealed its end. The hash they have now is recorded, so the list does
+/// not read the write as a change outside Upriv.
+pub(crate) fn record_store_hash(vault_dir: &Path, vault_id: &str) -> Result<()> {
+    let hash = crate::store::content_hash_hex(vault_dir.join(crate::paths::STORE_DIR_NAME))?;
+    update_vault_persistence(vault_dir, vault_id, |persistence| {
+        persistence.content_hash = Some(hash);
+    })
+}
+
 /// After `store/` was written with no session (a password or unlock-RAM
 /// change, a rebuild): the store's new content `hash` is recorded, so the list
 /// does not read the change as a crash, and every machine's last backup is

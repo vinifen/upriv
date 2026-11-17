@@ -47,6 +47,10 @@ export interface VaultListModalsHandle {
   vaultInfoVaultId: string | null;
   setVaultInfoVaultId: (id: string | null) => void;
   vaultInfoVault: VaultListItem | null;
+  /** The vault whose Delete vault window is open. */
+  deleteVaultId: string | null;
+  setDeleteVaultId: (id: string | null) => void;
+  deleteVault: VaultListItem | null;
   createVaultOpen: boolean;
   setCreateVaultOpen: (open: boolean) => void;
   createVaultInitialDraft: CreateVaultDraft | null;

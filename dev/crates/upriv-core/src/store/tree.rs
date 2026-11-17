@@ -512,15 +512,7 @@ mod tests {
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
         let mut opened = open_store(&dir, PW).unwrap();
         mkdir_logical(&mut opened.index, "docs").unwrap();
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "docs/a.txt",
-            b"hi",
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "docs/a.txt", b"hi").unwrap();
         let renamed = rename_logical_path(&mut opened.index, "docs/a.txt", "b.txt").unwrap();
         assert_eq!(renamed, "docs/b.txt");
         mkdir_logical(&mut opened.index, "other").unwrap();
@@ -560,15 +552,7 @@ mod tests {
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, PW, KdfUnlockPreset::M32).unwrap();
         let mut opened = open_store(&dir, PW).unwrap();
-        write_logical_file(
-            &dir,
-            &opened.header,
-            &opened.content_key,
-            &mut opened.index,
-            "docs/a.txt",
-            b"hi",
-        )
-        .unwrap();
+        write_logical_file(&dir, &opened.keys, &mut opened.index, "docs/a.txt", b"hi").unwrap();
         assert!(opened.index.find("docs").is_none());
         let renamed = rename_logical_path(&mut opened.index, "docs/a.txt", "b.txt").unwrap();
         assert_eq!(renamed, "docs/b.txt");

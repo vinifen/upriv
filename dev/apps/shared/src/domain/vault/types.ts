@@ -1,6 +1,13 @@
 import type { PlainRecord } from "../vault-plain/types";
-/** Runtime session state while the app is running. */
-export type VaultSession = "open" | "closing" | "recovery";
+/**
+ * What `vault_list` says of a vault beside closed: open, closing, in
+ * recovery (a pending password change included), or being deleted (a delete
+ * started, and `config.toml` holds `[deleting]`).
+ */
+export type VaultSession = "open" | "closing" | "recovery" | "deleting";
+
+/** Where a vault's password change stands, as its header says in the clear. */
+export type PasswordChangeState = "none" | "pending" | "unfinished";
 
 /**
  * Storage mode from `config.toml` → `[storage] mode`.
@@ -30,6 +37,7 @@ export function storageModeIsPlaintext(mode: StorageMode): boolean {
  * `queued` = FIFO job waiting; active job uses opening/closing/creating.
  * `exporting` / `backing_up` / `changing_password` / `changing_kdf` are closed-vault work.
  * `recovering` is Remove the folder wiping a leftover plain-text folder.
+ * `deleting` is a delete running, or one that did not finish.
  * The row names that work and open stays refused until it finishes.
  */
 export type VaultDisplayStatus =
@@ -44,7 +52,8 @@ export type VaultDisplayStatus =
   | "exporting"
   | "backing_up"
   | "changing_password"
-  | "changing_kdf";
+  | "changing_kdf"
+  | "deleting";
 
 /**
  * In-flight or queued open / close / create (renderer FIFO, not `vault_list`).
@@ -85,10 +94,14 @@ export type VaultPipelineListStatus = {
    * index is being rebuilt. Displays `recovering`.
    */
   recoveringVaultIds?: readonly string[];
-  /** Closed vault whose password rewrap is in flight. */
+  /** Closed vault whose password change, or its Finish, is in flight. */
   passwordChangeVaultIds?: readonly string[];
-  /** Closed vault whose unlock-RAM rewrap is in flight. */
+  /** Closed vault whose unlock-RAM change is in flight. */
   kdfChangeVaultIds?: readonly string[];
+  /** Vault whose delete runs in this window. Displays `deleting`. */
+  deletingVaultIds?: readonly string[];
+  /** A running delete already told to finish the Delete now way. */
+  deleteNowVaultIds?: readonly string[];
   /**
    * The work behind each busy status, by vault id: its clock and what the
    * row's Stop does. A vault with no entry shows its status alone.
@@ -141,9 +154,6 @@ export function vaultRowWorkClock(work: VaultRowWork | null | undefined): number
   return work.timed ? work.startedAt : null;
 }
 
-/** Password or unlock-RAM rewrap started from vault settings. */
-export type VaultRewrapKind = "password" | "kdf";
-
 export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean {
   return (
     status === "opening" ||
@@ -154,7 +164,8 @@ export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean 
     status === "backing_up" ||
     status === "recovering" ||
     status === "changing_password" ||
-    status === "changing_kdf"
+    status === "changing_kdf" ||
+    status === "deleting"
   );
 }
 
@@ -192,6 +203,18 @@ export function vaultCloseNowOffered(
   return status === "closing" || isVaultCloseQueued(vaultId, pipeline);
 }
 
+/**
+ * Delete now in More options: while a delete runs or waits, and on one that
+ * did not finish, until it was told once.
+ */
+export function vaultDeleteNowOffered(
+  status: VaultDisplayStatus,
+  vaultId: string,
+  pipeline: VaultPipelineListStatus = {},
+): boolean {
+  return status === "deleting" && !pipeline.deleteNowVaultIds?.includes(vaultId);
+}
+
 /** Waiting close. The session is still open until that job starts. */
 export function isVaultCloseQueued(
   vaultId: string,
@@ -226,6 +249,12 @@ export interface VaultRow {
    * a folder this device cannot reach, which keeps the vault from opening.
    */
   plainRecords?: PlainRecord[];
+  /** Keys the header holds: one in a steady vault. */
+  keyCount?: number;
+  /** A password change pending (the row is `recovery`) or not finished. */
+  passwordChange?: PasswordChangeState;
+  /** The row is `deleting` and no delete of it runs: Continue goes on with it. */
+  deleteUnfinished?: boolean;
 }
 
 /**
@@ -233,6 +262,7 @@ export interface VaultRow {
  * UI "Closed" labels must use `resolveVaultListStatus` / `isVaultListClosed`.
  */
 export function resolveVaultDisplayStatus(row: VaultRow): VaultDisplayStatus {
+  if (row.session === "deleting") return "deleting";
   if (row.session === "recovery") return "recovery";
   if (row.session === "closing") return "closing";
   if (row.session === "open") return "open";
@@ -273,15 +303,29 @@ export function listHasLiveVaultSession(
 }
 
 /**
- * Data-folder (vault-root) switch is allowed only for **closed** and **recovery**.
- * Open / opening / closing / creating / queued keep keys or in-flight work on the
- * current root — switching would orphan sessions. No bulk-close helper.
+ * A delete that is not running: the row is `deleting` from `[deleting]` in
+ * its `config.toml`, and no delete of it runs here or in core. Continue goes
+ * on with it.
+ */
+export function isVaultDeleteUnfinished(
+  row: VaultRow,
+  pipeline: VaultPipelineListStatus = {},
+): boolean {
+  return row.deleteUnfinished === true && !pipeline.deletingVaultIds?.includes(row.id);
+}
+
+/**
+ * Data-folder (vault-root) switch is allowed only for **closed** and **recovery**,
+ * and for a delete that is not running. Open / opening / closing / creating /
+ * queued keep keys or in-flight work on the current root — switching would
+ * orphan sessions. No bulk-close helper.
  */
 export function isVaultBlockingDataFolderChange(
   row: VaultRow,
   pipeline: VaultPipelineListStatus = {},
 ): boolean {
   const status = resolveVaultListStatus(row, pipeline);
+  if (status === "deleting") return !isVaultDeleteUnfinished(row, pipeline);
   return status !== "closed" && status !== "recovery";
 }
 
@@ -308,6 +352,7 @@ export function resolveVaultListStatus(
   if (pipeline.recoveringVaultIds?.includes(row.id)) return "recovering";
   if (pipeline.passwordChangeVaultIds?.includes(row.id)) return "changing_password";
   if (pipeline.kdfChangeVaultIds?.includes(row.id)) return "changing_kdf";
+  if (pipeline.deletingVaultIds?.includes(row.id)) return "deleting";
   return resolveVaultDisplayStatus(row);
 }
 
@@ -321,7 +366,8 @@ export function isVaultDisplayStatusQuiet(status: VaultDisplayStatus): boolean {
     status !== "backing_up" &&
     status !== "recovering" &&
     status !== "changing_password" &&
-    status !== "changing_kdf"
+    status !== "changing_kdf" &&
+    status !== "deleting"
   );
 }
 
@@ -335,8 +381,8 @@ export type VaultDeleteHold = "busy" | "backup_export";
 
 /**
  * Delete removes the vault folder. Only a closed vault, or one in recovery,
- * may start it, and not while a backup export copies its backups. `null` when
- * it may start.
+ * may start it (edit-policy `action.delete`), and not while a backup export
+ * copies its backups. `null` when it may start.
  */
 export function vaultDeleteHold(
   row: VaultRow,

@@ -1891,8 +1891,7 @@ mod tests {
                 path,
                 file_id.to_string(),
                 0,
-                Vec::new(),
-                Vec::new(),
+                Default::default(),
                 None,
             )
             .unwrap();

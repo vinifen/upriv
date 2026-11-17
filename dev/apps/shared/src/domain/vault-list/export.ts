@@ -218,9 +218,10 @@ export type VaultExportPipelineStatus = VaultPipelineListStatus;
 
 /**
  * Single-vault export (`.zip` of `store/`, `.7z`, or plain-text `.zip`). This
- * vault must be closed. Opening, closing, creating, queued, recovery, an open session, and
- * an export, backup, or rewrap already running cannot export. Neither can any
- * vault while the data folder is exported. Other vaults may stay open.
+ * vault must be closed. Opening, closing, creating, queued, recovery, an open
+ * session, a delete that runs or did not finish, and an export, backup, or
+ * password or unlock-RAM change already running cannot export. Neither can
+ * any vault while the data folder is exported. Other vaults may stay open.
  */
 export function vaultCanExport(
   vault: Pick<VaultRow, "id" | "session">,
@@ -235,7 +236,13 @@ export function vaultCanExport(
   if (pipeline.backupJobVaultIds?.includes(vault.id)) return false;
   if (pipeline.passwordChangeVaultIds?.includes(vault.id)) return false;
   if (pipeline.kdfChangeVaultIds?.includes(vault.id)) return false;
-  return vault.session !== "open" && vault.session !== "closing" && vault.session !== "recovery";
+  if (pipeline.deletingVaultIds?.includes(vault.id)) return false;
+  return (
+    vault.session !== "open" &&
+    vault.session !== "closing" &&
+    vault.session !== "recovery" &&
+    vault.session !== "deleting"
+  );
 }
 
 /**

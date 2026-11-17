@@ -6,8 +6,10 @@ import type { VaultSecurityService } from "./VaultSecurityService";
 
 /**
  * Expo Go only. Reports success without rewriting `store/`. Live desktop and
- * native factories call `vault_change_password` / `vault_change_kdf` /
- * `vault_rebuild`. A mock vault's index always opens, so a rebuild is refused.
+ * native factories call `vault_change_password`, `vault_password_change_finish`,
+ * `vault_change_kdf`, `vault_key_copies_update`, `vault_key_status`, and
+ * `vault_rebuild`. A mock
+ * vault's header and index always open, so a rebuild is refused.
  */
 const MOCK_WRONG_PASSWORD = "wrong";
 const MOCK_CHANGE_PASSWORD_MS = 700;
@@ -33,11 +35,29 @@ export function createMockVaultSecurityService(
       await delayMs(MOCK_CHANGE_PASSWORD_MS);
       rejectWrongPassword(input.currentPassword);
       hooks?.onPasswordChanged?.(vaultId);
+      return {
+        backup: null,
+        backupSkipped: input.backUpFirst ? "no_room" : "off",
+        unreadable: 0,
+        keyCopies: "done",
+      };
+    },
+    async finishPasswordChange(_vaultId, input) {
+      await delayMs(MOCK_CHANGE_PASSWORD_MS);
+      rejectWrongPassword(input.password);
+      return { unreadable: 0, keyCopies: "done" };
     },
     async changeKdfPreset(vaultId, input) {
       await delayMs(MOCK_CHANGE_KDF_MS);
       rejectWrongPassword(input.currentPassword);
       setMockVaultUnlockPreset(vaultId, input.nextPreset);
+      return { keyCopies: "done" };
+    },
+    async updateKeyCopies() {
+      return "done";
+    },
+    async keyStatus() {
+      return null;
     },
     async rebuildIndex(_vaultId, input) {
       await delayMs(MOCK_REBUILD_MS);

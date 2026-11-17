@@ -13,6 +13,7 @@ const WIRE_ENTRY = {
   sizeBytes: 10,
   saved: true,
   path: "/mnt/usb/upriv-notes-backups/saves/20260528120000-notes Trip.zip",
+  lowerUnlockRam: true,
 };
 
 describe("parseBackupListing", () => {

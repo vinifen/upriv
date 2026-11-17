@@ -53,7 +53,12 @@ fn closed_vault_paths(root: &VaultRoot, vault_id: &str) -> Result<(PathBuf, Path
     if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
-    let _ = load_vault_config(&vault_dir)?;
+    if load_vault_config(&vault_dir)?.deleting.is_some() {
+        return Err(UprivError::VaultDeleting);
+    }
+    if super::closed_store::change_pending(&vault_dir) {
+        return Err(UprivError::PasswordChangeInterrupted);
+    }
     ensure_vault_session_closed(&vault_dir)?;
     refuse_if_held_elsewhere(root, vault_id)?;
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
@@ -111,11 +116,12 @@ fn unlock_closed_store<T>(
                 record_unlock_success(vault_dir);
                 Ok(value)
             }
-            Err(UprivError::WrongPassword) => {
-                let _ = record_unlock_failure(vault_dir);
-                Err(UprivError::WrongPassword)
+            Err(error) => {
+                if crate::session::counts_as_failed_unlock(&error) {
+                    let _ = record_unlock_failure(vault_dir);
+                }
+                Err(error)
             }
-            Err(error) => Err(error),
         }
     })
 }
@@ -260,12 +266,16 @@ fn with_logical_store<T>(
         let opened = unlock_closed_store(&hold.vault_dir, password, || {
             open_store(&hold.store, password)
         })?;
+        if opened.repaired
+            && super::persistence::record_store_hash(&hold.vault_dir, vault_id).is_err()
+        {
+            log_event(LogLevel::Warn, "vault_hash_unrecorded", &[("id", vault_id)]);
+        }
         f(
             &hold.vault_dir,
             LogicalSource {
                 store_dir: &hold.store,
-                header: &opened.header,
-                content_key: &opened.content_key,
+                keys: &opened.keys,
             },
             &opened.index,
         )
@@ -1219,8 +1229,8 @@ mode = "encrypted_dir"
         let (_tmp, root) = notes_root();
         let blob = two_files(&root);
         let mut bytes = crate::host_fs::read(&blob).unwrap();
-        // Past the nonce, inside the blob's one chunk.
-        bytes[30] ^= 0x01;
+        // Past the key copy and the nonce, inside the blob's one chunk.
+        bytes[crate::store::KEY_COPY_LEN as usize + 30] ^= 0x01;
         crate::host_fs::write(&blob, &bytes).unwrap();
 
         let out = tempfile::tempdir().unwrap();
@@ -1256,17 +1266,15 @@ mode = "encrypted_dir"
         let opened = crate::store::open_store(&store, b"pass-word-ok").unwrap();
         let mut index = opened.index.clone();
         let node = index.find("b.txt").unwrap().clone();
-        let (_, size, versions) = node.as_file().unwrap();
+        let (_, size, _) = node.as_file().unwrap();
         let broken = crate::store::VaultNode::file(
             "b.txt",
             "not-a-uuid".into(),
             size,
-            versions.to_vec(),
-            node.chunk_offsets().unwrap().to_vec(),
+            node.chunks().unwrap(),
         );
         index.put(broken);
-        let sealed =
-            crate::store::sealed_index_bytes(&opened.header, &opened.index_key, &index).unwrap();
+        let sealed = crate::store::sealed_index_bytes(&opened.keys, &index).unwrap();
         let index_dir = store.join(crate::store::INDEX_DIR_NAME);
         crate::host_fs::write(index_dir.join(crate::store::INDEX_FILE_NAME), &sealed).unwrap();
         crate::host_fs::write(index_dir.join(crate::store::INDEX_COPY_FILE_NAME), &sealed).unwrap();
@@ -1397,8 +1405,7 @@ mode = "encrypted_dir"
         let written = write_plain_zip(
             LogicalSource {
                 store_dir: &store,
-                header: &opened.header,
-                content_key: &opened.content_key,
+                keys: &opened.keys,
             },
             &opened.index,
             &Package::new("Notes-plain-text", "Notes"),
@@ -1853,8 +1860,7 @@ mode = "encrypted_dir"
         let packed = pack_logical_seven_zip_to_path(
             LogicalSource {
                 store_dir: &store,
-                header: &opened.header,
-                content_key: &opened.content_key,
+                keys: &opened.keys,
             },
             &opened.index,
             b"pass-word-ok",
@@ -1915,8 +1921,7 @@ mode = "encrypted_dir"
                 ) {
                     crate::store::read_file_chunks_keeping(
                         source.store_dir,
-                        source.header,
-                        source.content_key,
+                        source.keys,
                         node,
                         |chunk| {
                             bytes += chunk.len() as u64;

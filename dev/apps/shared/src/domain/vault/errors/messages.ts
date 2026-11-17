@@ -5,6 +5,9 @@ import { isVaultErrorCode, type VaultErrorCode } from "./codes";
 export const VAULT_ERROR_I18N_KEYS = {
   vault_not_found: "error.vault_not_found",
   wrong_password: "error.wrong_password",
+  password_outdated: "error.password_outdated",
+  password_change_interrupted: "error.password_change_interrupted",
+  vault_header_unreadable: "error.vault_header_unreadable",
   vault_already_open: "error.vault_already_open",
   vault_not_open: "error.vault_not_open",
   vault_already_exists: "error.vault_already_exists",
@@ -29,7 +32,8 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_held_not_found: "error.vault_held_not_found",
   vault_index_unreadable: "error.vault_index_unreadable",
   vault_index_readable: "error.vault_index_readable",
-  vault_rebuild_space_short: "error.vault_rebuild_space_short",
+  password_change_space_short: "error.password_change_space_short",
+  vault_deleting: "error.vault_deleting",
   vault_locked: "error.vault_locked",
   vault_mount_failed: "error.vault_mount_failed",
   vault_mount_filesystem: "error.vault_mount_filesystem",
@@ -37,9 +41,8 @@ export const VAULT_ERROR_I18N_KEYS = {
   import_source_unreadable: "error.import_source_unreadable",
   vault_must_be_closed: "error.vault_must_be_closed",
   vault_busy: "error.vault_busy",
-  vault_backup_failed: "error.vault_backup_failed",
-  rewrap_password_unchanged: "vault.change_password.same_as_current",
-  rewrap_kdf_unchanged: "vault.change_kdf.same_as_current",
+  password_unchanged: "vault.change_password.same_as_current",
+  unlock_ram_unchanged: "vault.change_kdf.same_as_current",
   export_destination_reserved: "error.export_destination_reserved",
   backup_exporting: "error.backup_exporting",
   folder_list_invalid: "error.folder_list_invalid",
@@ -70,31 +73,41 @@ export function requireVaultErrorI18nKey(code: VaultErrorCode): VaultErrorI18nKe
 
 const CREDENTIAL_CHALLENGE_KEYS = new Set<I18nKey>([
   VAULT_ERROR_I18N_KEYS.wrong_password,
+  VAULT_ERROR_I18N_KEYS.password_outdated,
+  VAULT_ERROR_I18N_KEYS.password_change_interrupted,
   VAULT_ERROR_I18N_KEYS.vault_unlock_blocked,
   VAULT_ERROR_I18N_KEYS.insufficient_ram,
   VAULT_ERROR_I18N_KEYS.vault_index_unreadable,
+  VAULT_ERROR_I18N_KEYS.vault_header_unreadable,
 ]);
 
 /**
  * Stay on the password dialog — do not dismiss into the pipeline overlay. A
- * lost index stays too: the dialog offers the rebuild with the password typed.
+ * lost index or header stays too: the dialog offers the rebuild with the
+ * password typed.
  */
 export function isVaultCredentialChallengeI18nKey(key: I18nKey): boolean {
   return CREDENTIAL_CHALLENGE_KEYS.has(key);
 }
 
-/** The unlock found the index lost: the dialog offers the rebuild. */
+/** The unlock found the index or the header lost: the dialog offers the rebuild. */
 export function offersVaultRebuild(key: I18nKey | null): boolean {
-  return key === VAULT_ERROR_I18N_KEYS.vault_index_unreadable;
+  return (
+    key === VAULT_ERROR_I18N_KEYS.vault_index_unreadable ||
+    key === VAULT_ERROR_I18N_KEYS.vault_header_unreadable
+  );
 }
 
 /**
- * A refused vault password (wrong, or the unlock limit): mark the password
- * field, not the form. Password and unlock-RAM change, and a `.7z` export.
+ * A refused vault password (wrong, an earlier one, one that cannot settle a
+ * pending change, or the unlock limit): mark the password field, not the
+ * form. Password and unlock-RAM change, Finish, and a `.7z` export.
  */
 export function errorOnPasswordField(key: I18nKey | null): boolean {
   return (
     key === VAULT_ERROR_I18N_KEYS.wrong_password ||
+    key === VAULT_ERROR_I18N_KEYS.password_outdated ||
+    key === VAULT_ERROR_I18N_KEYS.password_change_interrupted ||
     key === VAULT_ERROR_I18N_KEYS.vault_unlock_blocked
   );
 }
