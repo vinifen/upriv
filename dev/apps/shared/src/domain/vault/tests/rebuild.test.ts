@@ -12,6 +12,7 @@ function result(patch: Partial<VaultRebuildResult> = {}): VaultRebuildResult {
     setAside: 0,
     copy: "20261117120000-notes.zip",
     copySkipped: null,
+    storageReset: false,
     ...patch,
   };
 }
@@ -26,6 +27,7 @@ describe("parseVaultRebuildResult", () => {
         setAside: 2,
         copy: null,
         copySkipped: "no_room",
+        storageReset: true,
       }),
     ).toEqual({
       headerRestored: true,
@@ -34,8 +36,10 @@ describe("parseVaultRebuildResult", () => {
       setAside: 2,
       copy: null,
       copySkipped: "no_room",
+      storageReset: true,
     });
     expect(parseVaultRebuildResult({ copySkipped: "later" }).copySkipped).toBeNull();
+    expect(parseVaultRebuildResult({}).storageReset).toBe(false);
   });
 });
 
@@ -59,6 +63,18 @@ describe("vaultRebuiltToast", () => {
     );
     expect(vaultRebuiltToast(result({ copy: null, copySkipped: "failed" }), "Notes", tr)).toBe(
       "toast.vault_rebuilt(Notes,3) toast.vault_rebuild_copy_skipped.failed",
+    );
+  });
+
+  it("ends with plain text turned off when the rebuild turned it off", () => {
+    expect(
+      vaultRebuiltToast(
+        result({ copy: null, copySkipped: "no_room", storageReset: true }),
+        "Notes",
+        tr,
+      ),
+    ).toBe(
+      "toast.vault_rebuilt(Notes,3) toast.vault_rebuild_copy_skipped.no_room toast.vault_rebuild_storage_reset",
     );
   });
 });

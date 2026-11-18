@@ -254,50 +254,48 @@ interface SectionPatchProps<S extends keyof VaultSettingsConfig> {
 }
 
 interface VaultSettingsStorageSectionProps extends SectionPatchProps<"storage"> {
-  storageModeLocked?: boolean;
-  /** `storage.plain_files` needs the vault closed or in recovery. */
-  plainFilesLocked?: boolean;
-  /** Work beside the vault's status that locks fields (`vaultConfigEditHold`). */
-  editHold?: VaultConfigEditHold;
+  /** The choice takes no input: a copied store's value, or a change that runs. */
+  disabled?: boolean;
+  /** Why the choice cannot change, above the options. */
+  disabledLine?: string | null;
+  /** Under the plain-text option: where its files would be written on this device. */
+  plainNote?: ReactNode;
 }
 
+/**
+ * The storage value's two options, in the create wizard and on the Storage
+ * screen. "Only files I choose" and the folder note sit in the plain-text
+ * option's footer, shown always and dimmed until that option is chosen.
+ */
 export function VaultSettingsStorageSection({
   config,
   onChange,
-  storageModeLocked = false,
-  plainFilesLocked = false,
-  editHold,
+  disabled = false,
+  disabledLine = null,
+  plainNote,
 }: VaultSettingsStorageSectionProps) {
   const { t } = useTranslation();
   const storageModeGroup = useId();
 
   return (
     <SettingsFormGrid>
-      <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("modal.settings.section.storage_intro")}
-      </p>
+      <p className="text-xs leading-relaxed text-on-surface-variant">{t("modal.storage.intro")}</p>
 
       <SettingsField
-        label={t("modal.settings.field.storage.mode")}
-        hint={t("modal.settings.field.storage.mode_help")}
+        label={t("modal.storage.field.mode")}
+        hint={t("modal.storage.field.mode_help")}
       >
-        {storageModeLocked ? (
-          <p className="text-xs leading-relaxed text-on-surface-variant">
-            {t(requireVaultConfigEditLockedI18nKey("storage.mode", editHold))}
-          </p>
+        {disabledLine ? (
+          <p className="text-xs leading-relaxed text-on-surface-variant">{disabledLine}</p>
         ) : null}
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.storage.mode")}
-          className="grid gap-2"
-        >
+        <div role="radiogroup" aria-label={t("modal.storage.field.mode")} className="grid gap-2">
           <PolicyRadioOption
             groupName={storageModeGroup}
             value="encrypted_dir"
             checked={config.mode === "encrypted_dir"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.encrypted_dir")}
-            description={t("modal.settings.option.storage.encrypted_dir_desc")}
+            disabled={disabled}
+            title={t("modal.storage.option.encrypted_dir")}
+            description={t("modal.storage.option.encrypted_dir_desc")}
             badge="recommended"
             onSelect={() => onChange({ mode: "encrypted_dir" })}
           />
@@ -305,23 +303,22 @@ export function VaultSettingsStorageSection({
             groupName={storageModeGroup}
             value="upriv_plain"
             checked={config.mode === "upriv_plain"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.upriv_plain")}
-            description={t("modal.settings.option.storage.upriv_plain_desc")}
+            disabled={disabled}
+            title={t("modal.storage.option.upriv_plain")}
+            description={t("modal.storage.option.upriv_plain_desc")}
             badge="not-recommended"
             tone="less-secure"
             footer={
-              <SwitchRow
-                checked={config.plain_files === "chosen"}
-                disabled={plainFilesLocked}
-                onChange={(chosen) => onChange({ plain_files: chosen ? "chosen" : "whole" })}
-                label={t("modal.settings.field.storage.plain_files")}
-                hint={t(
-                  plainFilesLocked
-                    ? requireVaultConfigEditLockedI18nKey("storage.plain_files")
-                    : "modal.settings.field.storage.plain_files_help",
-                )}
-              />
+              <div className="space-y-2">
+                <SwitchRow
+                  checked={config.plain_files === "chosen"}
+                  disabled={disabled}
+                  onChange={(chosen) => onChange({ plain_files: chosen ? "chosen" : "whole" })}
+                  label={t("modal.storage.field.plain_files")}
+                  hint={t("modal.storage.field.plain_files_help")}
+                />
+                {plainNote}
+              </div>
             }
             onSelect={() => onChange({ mode: "upriv_plain" })}
           />

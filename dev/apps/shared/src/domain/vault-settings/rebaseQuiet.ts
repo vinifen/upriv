@@ -7,7 +7,8 @@ import type { VaultSettingsConfig } from "./types";
  * keep baseline values so a preferences save can still persist `anytime`
  * fields without sending stale dirty from before the lock. The lists are
  * saved as change sets, which leave out a group the gate locks
- * (`vaultListChanges`).
+ * (`vaultListChanges`). The storage value is not among them: a save never
+ * changes it.
  */
 export function rebaseQuietLockedVaultSettings(
   draft: VaultSettingsConfig,
@@ -22,22 +23,10 @@ export function rebaseQuietLockedVaultSettings(
       vault: { ...next.vault, display_name: baseline.vault.display_name },
     };
   }
-  if (!vaultConfigEditAllowed("storage.mode", row, pipeline)) {
-    next = {
-      ...next,
-      storage: { ...next.storage, mode: baseline.storage.mode },
-    };
-  }
   if (!vaultConfigEditAllowed("unlocked_folder", row, pipeline)) {
     next = {
       ...next,
       unlocked_folder: { ...next.unlocked_folder, encrypted: baseline.unlocked_folder.encrypted },
-    };
-  }
-  if (!vaultConfigEditAllowed("storage.plain_files", row, pipeline)) {
-    next = {
-      ...next,
-      storage: { ...next.storage, plain_files: baseline.storage.plain_files },
     };
   }
   return next;

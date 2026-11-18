@@ -31,6 +31,7 @@ function security(rebuildIndex: VaultSecurityService["rebuildIndex"]): VaultSecu
     changePassword: vi.fn(),
     finishPasswordChange: vi.fn(),
     changeKdfPreset: vi.fn(),
+    changeStorage: vi.fn(),
     updateKeyCopies: vi.fn(),
     keyStatus: vi.fn(),
     rebuildIndex,
@@ -44,6 +45,7 @@ const REBUILT: VaultRebuildResult = {
   setAside: 1,
   copy: null,
   copySkipped: "no_room",
+  storageReset: false,
 };
 
 function events() {

@@ -1,7 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 import {
   plainRecoveryOffers,
-  storageModeIsPlaintext,
   type PlainLeftover,
   type PlainRecoveryAction,
   type VaultListItem,
@@ -32,8 +31,8 @@ export function VaultRecoveryModal({
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
-  const isPlain = vault ? storageModeIsPlaintext(vault.storageMode) : false;
-  const pending = isPlain && leftover === undefined;
+  // A leftover follows its record, whatever the vault's mode says.
+  const pending = Boolean(vault?.plainLeftover) && leftover === undefined;
   const offers = plainRecoveryOffers(pending ? null : (leftover ?? null));
 
   if (!open || !vault) return null;

@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tempfile::TempDir;
 
-use crate::config::VaultStorageMode;
 use crate::paths::VaultRoot;
+use crate::store::VaultStorageMode;
 
 pub struct VaultSpec {
     pub id: &'static str,

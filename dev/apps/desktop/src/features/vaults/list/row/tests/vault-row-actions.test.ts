@@ -198,12 +198,20 @@ describe("Delete vault in the Settings menu", () => {
       "modal.settings.area.preferences",
       "modal.settings.area.password",
       "modal.settings.area.kdf",
+      "modal.settings.area.storage",
       "modal.settings.area.group",
       "modal.delete_vault.title",
     ]);
     fireEvent.click(menuItem("modal.delete_vault.title")!);
     expect(onOpenDelete).toHaveBeenCalledWith("notes");
     expect(onOpenSettings).not.toHaveBeenCalled();
+  });
+
+  it("is not there while the vault is open", () => {
+    show(OPEN);
+    fireEvent.click(settingsButton());
+    expect(menuItem("modal.settings.area.preferences")).not.toBeNull();
+    expect(menuItem("modal.delete_vault.title")).toBeNull();
   });
 
   it("opens a settings screen from the other entries", () => {

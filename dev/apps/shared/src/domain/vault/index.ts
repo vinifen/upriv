@@ -101,6 +101,11 @@ export {
 } from "./errors/messages";
 export type { VaultErrorI18nKey } from "./errors/messages";
 export { parseVaultRebuildResult, vaultRebuiltToast } from "./rebuild";
+export {
+  parseStorageChangeResult,
+  storageChangeReportLines,
+  type StorageChangeResult,
+} from "./storageChange";
 export { parseVaultDeleteOutcome, type VaultDeleteOutcome } from "./delete";
 export type { VaultRebuildResult } from "./rebuild";
 export {

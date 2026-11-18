@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import {
   AUTO_CLOSE_WHEN_BUSY,
@@ -8,7 +9,7 @@ import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
-  vaultSettingsPreferenceSections,
+  VAULT_SETTINGS_SECTIONS,
   type AppSettingsConfig,
   type DeviceGroups,
   type HereDevice,
@@ -67,8 +68,6 @@ const STORAGE_WARNING: Partial<Record<StorageMode, I18nKey>> = {
 interface VaultSettingsFormProps {
   draft: VaultSettingsConfig;
   patchDraft: PatchDraft;
-  storageModeLocked?: boolean;
-  plainFilesLocked?: boolean;
   displayNameLocked?: boolean;
   /** Why this device's unlocked folder group cannot change now; `null` when it can. */
   unlockedLockedHint?: string | null;
@@ -95,8 +94,6 @@ export interface VaultListsContext {
 export function VaultSettingsForm({
   draft,
   patchDraft,
-  storageModeLocked = false,
-  plainFilesLocked = false,
   displayNameLocked = false,
   unlockedLockedHint = null,
   editHold = {},
@@ -105,8 +102,6 @@ export function VaultSettingsForm({
 }: VaultSettingsFormProps) {
   const { t } = useTranslation();
   const locks = {
-    storageModeLocked,
-    plainFilesLocked,
     displayNameLocked,
     unlockedLockedHint,
     hiddenLocked,
@@ -115,7 +110,7 @@ export function VaultSettingsForm({
 
   return (
     <View style={styles.root}>
-      {vaultSettingsPreferenceSections(draft.storage.mode).map((sectionId) => (
+      {VAULT_SETTINGS_SECTIONS.map((sectionId) => (
         <SettingsAccordionSection
           key={sectionId}
           title={t(`modal.settings.section.${sectionId}` as I18nKey)}
@@ -132,8 +127,6 @@ function renderSection(
   draft: VaultSettingsConfig,
   patchDraft: PatchDraft,
   locks: {
-    storageModeLocked: boolean;
-    plainFilesLocked: boolean;
     displayNameLocked: boolean;
     unlockedLockedHint: string | null;
     hiddenLocked: boolean;
@@ -152,16 +145,6 @@ function renderSection(
           onChange={(patch) => patchDraft("vault", patch)}
           fileManager={draft.file_manager}
           onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
-        />
-      );
-    case "storage":
-      return (
-        <StorageSection
-          config={draft.storage}
-          locked={locks.storageModeLocked}
-          plainFilesLocked={locks.plainFilesLocked}
-          editHold={locks.editHold}
-          onChange={(patch) => patchDraft("storage", patch)}
         />
       );
     case "unlocked_folder":
@@ -276,69 +259,60 @@ function VaultSection({
   );
 }
 
-/** A plain-text vault's choice of what its folder holds. Shown with the plain-text option. */
-export function PlainFilesSwitch({
+/**
+ * The storage value's two options, in the create wizard and on the Storage
+ * screen. "Only files I choose" and the folder note sit in the plain-text
+ * option's footer, shown always and dimmed until that option is chosen.
+ */
+export function VaultSettingsStorageSection({
   config,
-  locked = false,
   onChange,
+  disabled = false,
+  disabledLine = null,
+  plainNote,
 }: {
   config: VaultSettingsConfig["storage"];
-  locked?: boolean;
   onChange: (patch: Partial<VaultSettingsConfig["storage"]>) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <SwitchRow
-      label={t("modal.settings.field.storage.plain_files")}
-      hint={t(
-        locked
-          ? requireVaultConfigEditLockedI18nKey("storage.plain_files")
-          : "modal.settings.field.storage.plain_files_help",
-      )}
-      value={config.plain_files === "chosen"}
-      disabled={locked}
-      onValueChange={(chosen) => onChange({ plain_files: chosen ? "chosen" : "whole" })}
-    />
-  );
-}
-
-function StorageSection({
-  config,
-  locked,
-  plainFilesLocked,
-  editHold,
-  onChange,
-}: {
-  config: VaultSettingsConfig["storage"];
-  locked: boolean;
-  plainFilesLocked: boolean;
-  editHold: VaultConfigEditHold;
-  onChange: (patch: Partial<VaultSettingsConfig["storage"]>) => void;
+  /** The choice takes no input: a copied store's value, or a change that runs. */
+  disabled?: boolean;
+  /** Why the choice cannot change, above the options. */
+  disabledLine?: string | null;
+  /** Under the plain-text option: where its files would be written on this device. */
+  plainNote?: ReactNode;
 }) {
   const { t } = useTranslation();
   const warning = STORAGE_WARNING[config.mode];
   return (
     <View style={styles.fields}>
-      <FieldHint>{t("modal.settings.section.storage_intro")}</FieldHint>
-      <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
-      <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
-      {locked ? (
-        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("storage.mode", editHold))}</FieldHint>
-      ) : null}
+      <FieldHint>{t("modal.storage.intro")}</FieldHint>
+      <FieldLabel disabled={disabled}>{t("modal.storage.field.mode")}</FieldLabel>
+      <FieldHint>{t("modal.storage.field.mode_help")}</FieldHint>
+      {disabledLine ? <FieldHint>{disabledLine}</FieldHint> : null}
       <RadioGroup>
         {STORAGE_RADIOS.map(({ mode, badge, tone }) => (
           <PolicyRadioOption
             key={mode}
             value={mode}
             checked={config.mode === mode}
-            disabled={locked}
-            title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
-            description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
+            disabled={disabled}
+            title={t(`modal.storage.option.${mode}` as I18nKey)}
+            description={t(`modal.storage.option.${mode}_desc` as I18nKey)}
             badge={badge}
             tone={tone}
             footer={
               mode === "upriv_plain" ? (
-                <PlainFilesSwitch config={config} locked={plainFilesLocked} onChange={onChange} />
+                <View style={styles.fields}>
+                  <SwitchRow
+                    label={t("modal.storage.field.plain_files")}
+                    hint={t("modal.storage.field.plain_files_help")}
+                    value={config.plain_files === "chosen"}
+                    disabled={disabled}
+                    onValueChange={(chosen) =>
+                      onChange({ plain_files: chosen ? "chosen" : "whole" })
+                    }
+                  />
+                  {plainNote}
+                </View>
               ) : undefined
             }
             onSelect={() => onChange({ mode })}

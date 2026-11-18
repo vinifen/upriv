@@ -11,8 +11,7 @@ use crate::error::{Result, UprivError};
 pub use types::{
     AutoCloseWhenBusy, VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode,
     VaultBackupSection, VaultConfig, VaultDeletingSection, VaultFileManagerSection,
-    VaultIdentitySection, VaultPlainFiles, VaultSecuritySection, VaultSevenZipSection,
-    VaultStorageMode, VaultStorageSection, VaultWipePattern,
+    VaultIdentitySection, VaultSecuritySection, VaultSevenZipSection, VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -189,6 +188,7 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
+    use crate::store::{VaultPlainFiles, VaultStorage, VaultStorageMode};
     use crate::test_support::{write_vault_dir, VaultSpec};
 
     /// Canonical layout: `<root>/.upriv/vaults/<id>/`.
@@ -275,45 +275,7 @@ display_name = "Case mismatch"
     }
 
     #[test]
-    fn storage_mode_deserializes_all_variants() {
-        use super::VaultStorageMode;
-
-        let cases = [
-            ("encrypted_dir", VaultStorageMode::EncryptedDir),
-            ("upriv_plain", VaultStorageMode::UprivPlain),
-        ];
-
-        for (mode_str, expected) in cases {
-            let section: VaultStorageSection =
-                toml::from_str(&format!("mode = \"{mode_str}\"")).expect("storage section");
-            assert_eq!(section.mode, expected, "mode {mode_str}");
-        }
-    }
-
-    #[test]
-    fn storage_mode_serializes_all_variants_snake_case() {
-        use super::VaultStorageMode;
-
-        let cases = [
-            (VaultStorageMode::EncryptedDir, "encrypted_dir"),
-            (VaultStorageMode::UprivPlain, "upriv_plain"),
-        ];
-
-        for (mode, expected) in cases {
-            let section = VaultStorageSection {
-                mode,
-                ..Default::default()
-            };
-            let raw = toml::to_string(&section).expect("serialize storage");
-            assert!(
-                raw.contains(expected),
-                "expected {expected} in TOML, got: {raw}"
-            );
-        }
-    }
-
-    #[test]
-    fn missing_storage_section_defaults_to_encrypted_dir() {
+    fn a_missing_storage_section_reads_as_encrypted() {
         let cfg: VaultConfig = toml::from_str(
             r#"
 [vault]
@@ -322,18 +284,21 @@ display_name = "X"
 "#,
         )
         .expect("minimal config");
-        assert_eq!(cfg.storage_mode(), VaultStorageMode::EncryptedDir);
+        assert_eq!(cfg.storage, VaultStorage::default());
     }
 
     #[test]
-    fn unknown_storage_mode_is_rejected() {
-        let err = toml::from_str::<VaultStorageSection>("mode = \"future_mode\"")
-            .expect_err("unknown mode must fail");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("future_mode") || msg.contains("unknown") || msg.contains("did not match"),
-            "unexpected error: {msg}"
-        );
+    fn a_storage_value_upriv_does_not_know_reads_as_encrypted_and_the_config_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = write_vault_dir(tmp.path(), &VaultSpec::encrypted("notes", "Notes", 1));
+        crate::host_fs::write(
+            vault_config_path(&dir),
+            "[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\n\n[storage]\nmode = \"future_mode\"\nplain_files = \"whole\"\nlater = 1\n",
+        )
+        .unwrap();
+        let cfg = load_vault_config(&dir).expect("the vault still loads");
+        assert_eq!(cfg.storage.mode, VaultStorageMode::EncryptedDir);
+        assert_eq!(cfg.storage.plain_files, VaultPlainFiles::Whole);
     }
 
     #[test]
@@ -370,8 +335,8 @@ display_name = "X"
 id = "notes"
 display_name = "Notes"
 
-[storage]
-mode = "encrypted_dir"
+[backup]
+enabled = true
 not_a_field = true
 "#;
         crate::host_fs::write(vault_dir.join("config.toml"), original).unwrap();
@@ -561,7 +526,7 @@ path = "relative/backups"
                 hidden: true,
                 password_hint: "".into(),
             },
-            storage: VaultStorageSection::default(),
+            storage: VaultStorage::default(),
             unlocked_folder: crate::folder_list::unlocked::VaultUnlockedFolder {
                 encrypted: crate::folder_list::unlocked::EncryptedSwitch::On,
                 devices: Default::default(),

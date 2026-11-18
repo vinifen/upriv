@@ -17,6 +17,7 @@ import {
   plainFolderClassI18nKey,
   plainPlaceChanges,
   storageModeIsPlaintext,
+  storageResetToastKey,
   BACKUP_CLOSE_TOAST_MS,
   backupCloseFailureToastKey,
   switchesMessage,
@@ -34,6 +35,7 @@ import {
   type VaultClosePrompt,
   type VaultRuntimePatch,
   type VaultUnlockedChoice,
+  type VaultOpened,
   vaultCloseBlocker,
   askCloseToHurry,
   closeNowApplies,
@@ -85,7 +87,7 @@ import {
   rpcVaultConfigGet,
   rpcVaultConfigSave,
   rpcVaultPlainDeletions,
-  rpcVaultPlainDestination,
+  rpcVaultUnlockedDestination,
   rpcVaultPlainHeld,
   rpcVaultPlainLeftover,
   rpcVaultPlainRemove,
@@ -106,6 +108,8 @@ interface UseVaultLifecycleActionsOptions {
   settingsPersistVaultIdsRef?: MutableRefObject<Set<string>>;
   /** Closed-vault work (password / unlock RAM) that must refuse open. */
   blockOpenVaultIdsRef?: MutableRefObject<Set<string>>;
+  /** An open reset the vault's storage value: its row reads encrypted. */
+  onStorageReset?: (vaultId: string) => void;
 }
 
 export function useVaultLifecycleActions({
@@ -118,6 +122,7 @@ export function useVaultLifecycleActions({
   t,
   settingsPersistVaultIdsRef,
   blockOpenVaultIdsRef,
+  onStorageReset,
 }: UseVaultLifecycleActionsOptions) {
   const vaultService = useVaultService();
   const fs = useVaultFileSystemService();
@@ -175,8 +180,8 @@ export function useVaultLifecycleActions({
     null,
   );
   const backupSwitchesRef = useRef<FolderSwitch[]>([]);
-  /** The switches an open made, shown once it lands. */
-  const openSwitchesRef = useRef(new Map<string, FolderSwitch[]>());
+  /** What an open did beyond the unlock (its switches, a storage reset), shown once it lands. */
+  const openedRef = useRef(new Map<string, VaultOpened>());
   /** The attach running for each vault, by job id. */
   const attachJobsRef = useRef(new Map<string, string>());
   /** An encrypted vault whose unlocked folder needs a driver that is not installed. */
@@ -311,8 +316,11 @@ export function useVaultLifecycleActions({
       setRecoveryLeftover(null);
       return;
     }
+    // A leftover is real plain text on the disk whatever the vault's mode:
+    // its record decides, so a vault whose copy says encrypted is offered
+    // Remove the folder too.
     const vault = vaultsRef.current.find((item) => item.id === recoveryVaultId);
-    if (!vault || !storageModeIsPlaintext(vault.storageMode)) {
+    if (!vault?.plainLeftover) {
       setRecoveryLeftover(null);
       return;
     }
@@ -660,10 +668,7 @@ export function useVaultLifecycleActions({
         presentation: "background",
         failureMode: "advance",
         runPipeline: async (id, onStep, job) => {
-          openSwitchesRef.current.set(
-            id,
-            await lifecycleService.runOpeningPipeline(id, onStep, job),
-          );
+          openedRef.current.set(id, await lifecycleService.runOpeningPipeline(id, onStep, job));
         },
         onComplete: () => {
           if (isCredentialVerifying(vaultId)) {
@@ -691,19 +696,25 @@ export function useVaultLifecycleActions({
             lifecycleService.setPasswordInSession(vaultId, retain);
           }
           notifyPipelineComplete(vaultId, "open");
-          const switched = switchesMessage(
-            openSwitchesRef.current.get(vaultId) ?? [],
-            t,
-            vaultName,
-          );
-          openSwitchesRef.current.delete(vaultId);
+          const opened = openedRef.current.get(vaultId);
+          openedRef.current.delete(vaultId);
+          const switched = switchesMessage(opened?.switches ?? [], t, vaultName);
           if (switched) showToast(switched);
-          const opened = vaultsRef.current.find((item) => item.id === vaultId);
-          if (opened && !storageModeIsPlaintext(opened.storageMode)) startAttach(vaultId);
+          if (opened?.storageReset) {
+            // Opened encrypted with no unlocked folder: no attach follows.
+            onStorageReset?.(vaultId);
+            showToast(
+              t(storageResetToastKey(opened.storageReset), { name: vaultName(vaultId) }),
+              10000,
+            );
+          } else {
+            const row = vaultsRef.current.find((item) => item.id === vaultId);
+            if (row && !storageModeIsPlaintext(row.storageMode)) startAttach(vaultId);
+          }
           updateKeyCopies(vaultId);
         },
         onError: (errorI18nKey) => {
-          openSwitchesRef.current.delete(vaultId);
+          openedRef.current.delete(vaultId);
           if (isCredentialVerifying(vaultId)) {
             clearCredentialVerify(vaultId);
             if (lifecycleRequestRef.current?.vaultId === vaultId) {
@@ -762,6 +773,7 @@ export function useVaultLifecycleActions({
       isCredentialVerifying,
       lifecycleService,
       notifyPipelineComplete,
+      onStorageReset,
       openFromVault,
       pipeline,
       setLifecycleRequest,
@@ -1346,24 +1358,30 @@ export function useVaultLifecycleActions({
       }
       if (settingsPersistVaultIdsRef?.current.has(vault.id)) return;
       if (resolveVaultDisplayStatus(vault) === "recovery") {
-        if (storageModeIsPlaintext(vault.storageMode)) setRecoveryLeftover(undefined);
+        if (vault.plainLeftover) setRecoveryLeftover(undefined);
         setRecoveryVaultId(vault.id);
         return;
       }
+      // An encrypted vault's window opens at once and looks its folder up itself.
       if (!storageModeIsPlaintext(vault.storageMode)) {
         setLifecycleRequest({ vaultId: vault.id });
         return;
       }
       void (async () => {
         try {
-          await rpcVaultPlainDestination(vault.id);
-          setLifecycleRequest({ vaultId: vault.id });
-        } catch (error) {
-          if (isRpcError(error) && error.code === VAULT_ERROR_CODES.UNLOCKED_FOLDER_UNSET) {
-            setPlaceWarningClass(null);
-            setPlaceVaultId(vault.id);
-            return;
+          const destination = await rpcVaultUnlockedDestination(vault.id, "upriv_plain");
+          switch (destination.outcome) {
+            case "unset":
+              setPlaceWarningClass(null);
+              setPlaceVaultId(vault.id);
+              return;
+            case "unavailable":
+              showToast(t("error.unlocked_folder_unavailable"));
+              return;
+            default:
+              setLifecycleRequest({ vaultId: vault.id, destination });
           }
+        } catch (error) {
           showError(error, "error.unexpected");
         }
       })();
@@ -1634,8 +1652,8 @@ export function useVaultLifecycleActions({
             unlockedFolder: place.changes,
           });
         }
-        const dest = await rpcVaultPlainDestination(vaultId);
-        if (plainFolderClassI18nKey(dest.class)) {
+        const dest = await rpcVaultUnlockedDestination(vaultId, "upriv_plain");
+        if (dest.outcome === "folder" && dest.class && plainFolderClassI18nKey(dest.class)) {
           setPlaceWarningClass(dest.class);
           return;
         }

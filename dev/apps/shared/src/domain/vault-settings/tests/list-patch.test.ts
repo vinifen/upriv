@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyVaultSettingsListPatch,
+  applyVaultStorageMode,
   applyVaultUnlockPreset,
   remapVaultIdInGroups,
   vaultSettingsIdentityListPatch,
@@ -10,9 +11,9 @@ import { vaultListItemFixture } from "../../vault-list/tests/fixtures";
 import { vaultSettingsFixture } from "./fixtures";
 
 describe("vaultSettingsToListPatch", () => {
-  it("maps list fields from config", () => {
+  it("maps list fields from config, never the storage mode a save cannot change", () => {
     const config = vaultSettingsFixture({
-      storageMode: "encrypted_dir",
+      storageMode: "upriv_plain",
       vault: {
         display_name: "Work Docs",
         order: 5,
@@ -28,8 +29,17 @@ describe("vaultSettingsToListPatch", () => {
       note: "Tax stuff",
       hidden: true,
       passwordHint: "street name",
-      storageMode: "encrypted_dir",
     });
+    const row = vaultListItemFixture({ id: config.vault.id, storageMode: "encrypted_dir" });
+    expect(applyVaultSettingsListPatch(row, vaultSettingsToListPatch(config)).storageMode).toBe(
+      "encrypted_dir",
+    );
+  });
+
+  it("moves the row's mode only through a Storage change", () => {
+    const row = vaultListItemFixture({ id: "notes", storageMode: "encrypted_dir" });
+    expect(applyVaultStorageMode(row, "upriv_plain").storageMode).toBe("upriv_plain");
+    expect(applyVaultStorageMode(row, "encrypted_dir")).toBe(row);
   });
 
   it("carries the effective id after rename without extra flags", () => {

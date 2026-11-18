@@ -214,6 +214,11 @@ pub enum UprivError {
     #[error("the unlock RAM is already this one")]
     UnlockRamUnchanged,
 
+    /// A Storage change was asked for the storage value `config.toml`
+    /// already shows. Refused before the password is checked.
+    #[error("the storage is already this one")]
+    StorageUnchanged,
+
     /// A vault in this data folder is open, closing, or held by other work, so
     /// the data folder cannot be exported now.
     #[error("close every vault and wait for its work to finish before exporting the data folder")]

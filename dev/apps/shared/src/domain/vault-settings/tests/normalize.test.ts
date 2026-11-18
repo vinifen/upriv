@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeVaultSettingsConfig, vaultSettingsSectionsForStorage } from "..";
+import { normalizeVaultSettingsConfig, VAULT_SETTINGS_SECTIONS } from "..";
 import { vaultSettingsFixture } from "./fixtures";
 
 describe("normalizeVaultSettingsConfig", () => {
@@ -22,16 +22,8 @@ describe("normalizeVaultSettingsConfig", () => {
   });
 });
 
-describe("vaultSettingsSectionsForStorage", () => {
-  it("lists config.toml sections for both storage modes", () => {
-    for (const mode of ["encrypted_dir", "upriv_plain"] as const) {
-      expect(vaultSettingsSectionsForStorage(mode)).toEqual([
-        "vault",
-        "storage",
-        "unlocked_folder",
-        "backup",
-        "auto_close",
-      ]);
-    }
+describe("VAULT_SETTINGS_SECTIONS", () => {
+  it("lists the preference sections, with the storage value on a screen of its own", () => {
+    expect(VAULT_SETTINGS_SECTIONS).toEqual(["vault", "unlocked_folder", "backup", "auto_close"]);
   });
 });

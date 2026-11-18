@@ -295,6 +295,7 @@ export function createMobileMockServices(): AppServices {
           const settings = getMockVaultSettings(v.id);
           return {
             ...v,
+            storageMode: settings.storage.mode,
             order: settings.vault.order,
             hidden: settings.vault.hidden,
             unlockPreset: getMockVaultUnlockPreset(v.id),
@@ -343,6 +344,8 @@ export function createMobileMockServices(): AppServices {
         registerMockVaultSettings({
           ...config,
           vault: { ...config.vault, id: vaultId },
+          // As core: a save keeps the storage value; only the Storage change sets it.
+          storage: saved.storage,
           unlocked_folder: {
             ...config.unlocked_folder,
             devices: lists
@@ -598,7 +601,7 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.INSUFFICIENT_RAM);
           }
         });
-        return [];
+        return { switches: [], storageReset: null };
       },
       async runClosingPipeline(vaultId, onStep) {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep);
@@ -629,6 +632,12 @@ export function createMobileMockServices(): AppServices {
             password_changed_at: new Date().toISOString(),
           },
         });
+      },
+      storageOf(vaultId) {
+        return getMockVaultSettings(vaultId).storage;
+      },
+      onStorageChanged(vaultId, storage) {
+        registerMockVaultSettings({ ...getMockVaultSettings(vaultId), storage });
       },
     }),
 

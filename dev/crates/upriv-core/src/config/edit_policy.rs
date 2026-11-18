@@ -27,12 +27,12 @@ use crate::session::{
 /// Targets refused while the vault session is open, mid-close, or Argon2 is in flight.
 /// Keep in sync with `edit-policy.json` → `rustConfigSaveQuietTargets`.
 /// `vault.display_name` / `vault.id` are not listed: they are `VaultConfigInvalid`
-/// (must use `vault_rename`), never `vault_config_busy`.
-pub const CONFIG_SAVE_QUIET_TARGETS: &[&str] = &["unlocked_folder", "storage.mode"];
+/// (must use `vault_rename`), never `vault_config_busy`. `[storage]` is not a
+/// target at all: a save stores the one on disk ([`save_vault_config_checked`]).
+pub const CONFIG_SAVE_QUIET_TARGETS: &[&str] = &["unlocked_folder"];
 
 /// Which quiet targets a save changes: this device's unlocked folder group
-/// or the vault's encrypted switch, and the storage mode. Other devices'
-/// groups change any time.
+/// or the vault's encrypted switch. Other devices' groups change any time.
 pub fn quiet_targets_changed(
     before: &VaultConfig,
     after: &VaultConfig,
@@ -44,9 +44,6 @@ pub fn quiet_targets_changed(
         || lists.unlocked_folder.touches_here(device)
     {
         out.push("unlocked_folder");
-    }
-    if before.storage.mode != after.storage.mode {
-        out.push("storage.mode");
     }
     out
 }
@@ -62,14 +59,6 @@ pub fn refuse_config_save_if_busy(
     after: &VaultConfig,
     lists: &VaultListChanges,
 ) -> Result<()> {
-    // Read at open, so a session never changes it under its own folder.
-    if before.storage.plain_files != after.storage.plain_files
-        && (is_vault_open_at(vault_dir) || is_vault_closing_at(vault_dir))
-    {
-        return Err(UprivError::VaultConfigBusy {
-            target: "storage.plain_files".into(),
-        });
-    }
     if !session_blocks_quiet(vault_dir) {
         return Ok(());
     }
@@ -88,11 +77,13 @@ pub fn refuse_config_save_if_busy(
 /// A preparing vault (open, export, or a password or unlock-RAM change)
 /// returns [`UprivError::VaultBusy`] without waiting on the directory lock. The
 /// settings save budget is 30 seconds; a change can hold that lock for minutes.
-/// `password_changed_at` stays the value already on disk. Only a password
-/// change writes it, so a stale settings form cannot clear it.
+/// `password_changed_at` and `[storage]` stay the values already on disk.
+/// Only a password change writes the first, and only the Storage change, a
+/// reset at open, an import, and the rebuild write the second, so a settings
+/// form never changes or clears them.
 ///
 /// A plaintext folder left by an earlier session blocks a change of this
-/// device's unlocked folder or of the mode.
+/// device's unlocked folder.
 pub fn save_vault_config_checked(
     root: &VaultRoot,
     vault_id: &str,
@@ -135,6 +126,7 @@ pub fn save_vault_config_checked(
         }
         let mut stored = after.clone();
         stored.security.password_changed_at = before.security.password_changed_at.clone();
+        stored.storage = before.storage;
         let leaving = apply_vault_lists(root, &before, &mut stored, lists)?;
         crate::config::save_vault_config(vault_dir, &stored)?;
         Ok(leaving)
@@ -149,37 +141,48 @@ pub fn save_vault_config_checked(
 }
 
 #[cfg(test)]
-mod plain_files_tests {
+mod storage_tests {
     use super::*;
-    use crate::config::vault_config::VaultPlainFiles;
-    use crate::store::KdfUnlockPreset;
-    use crate::test_support::vault_root_with;
+    use crate::store::{KdfUnlockPreset, VaultPlainFiles, VaultStorage, VaultStorageMode};
+    use crate::test_support::{quiet_config, vault_root_with};
     use crate::vault::{close_vault, create_vault, open_vault};
 
-    fn saved_with(root: &VaultRoot, plain_files: VaultPlainFiles) -> Result<()> {
-        let vault_dir = root.vault_dir("notes")?;
-        let mut after = crate::config::load_vault_config(&vault_dir)?;
-        after.storage.plain_files = plain_files;
-        save_vault_config_checked(root, "notes", &after, &VaultListChanges::default()).map(|_| ())
+    const PLAIN_WHOLE: VaultStorage = VaultStorage {
+        mode: VaultStorageMode::UprivPlain,
+        plain_files: VaultPlainFiles::Whole,
+    };
+
+    fn stored_storage(root: &VaultRoot) -> VaultStorage {
+        let vault_dir = root.vault_dir("notes").unwrap();
+        crate::config::load_vault_config(&vault_dir)
+            .unwrap()
+            .storage
     }
 
     #[test]
-    fn the_folder_choice_changes_only_while_the_vault_is_closed() {
+    fn a_save_stores_the_storage_value_on_disk_whatever_it_is_sent() {
         let (_tmp, root) = vault_root_with(&[]);
-        let config: VaultConfig = toml::from_str(
-            "[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n",
+        create_vault(
+            &root,
+            quiet_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
         )
         .unwrap();
-        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
-        open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        let refused = saved_with(&root, VaultPlainFiles::Whole);
-        assert!(matches!(refused, Err(UprivError::VaultConfigBusy { .. })));
-
-        close_vault(&root, "notes").unwrap();
-        saved_with(&root, VaultPlainFiles::Whole).unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
-        let stored = crate::config::load_vault_config(&vault_dir).unwrap();
-        assert_eq!(stored.storage.plain_files, VaultPlainFiles::Whole);
+        let mut after = crate::config::load_vault_config(&vault_dir).unwrap();
+        after.storage = PLAIN_WHOLE;
+        after.vault.note = "kept".into();
+        save_vault_config_checked(&root, "notes", &after, &VaultListChanges::default()).unwrap();
+        assert_eq!(stored_storage(&root), VaultStorage::default());
+        let saved = crate::config::load_vault_config(&vault_dir).unwrap();
+        assert_eq!(saved.vault.note, "kept");
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        save_vault_config_checked(&root, "notes", &after, &VaultListChanges::default())
+            .expect("a save while open is no storage change");
+        assert_eq!(stored_storage(&root), VaultStorage::default());
+        close_vault(&root, "notes").unwrap();
     }
 }
 
@@ -227,7 +230,7 @@ mode = "encrypted_dir"
         let before = sample_config("notes", "Notes");
         let mut after = before.clone();
         after.unlocked_folder.encrypted = crate::folder_list::unlocked::EncryptedSwitch::On;
-        after.storage.mode = crate::config::VaultStorageMode::UprivPlain;
+        after.storage.mode = crate::store::VaultStorageMode::UprivPlain;
         let mut changed =
             quiet_targets_changed(&before, &after, &VaultListChanges::default(), this_device());
         changed.sort_unstable();
@@ -384,7 +387,7 @@ mode = "encrypted_dir"
         let _guard = crate::session::ClosingGuard::enter(&dir);
         let before = sample_config("x", "X");
         let mut after = before.clone();
-        after.storage.mode = crate::config::VaultStorageMode::UprivPlain;
+        after.unlocked_folder.encrypted = crate::folder_list::unlocked::EncryptedSwitch::On;
         let err = refuse_config_save_if_busy(&dir, &before, &after, &VaultListChanges::default())
             .unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
@@ -429,7 +432,7 @@ mode = "encrypted_dir"
             .expect("unlock gate held");
         let before = sample_config("x", "X");
         let mut after = before.clone();
-        after.storage.mode = crate::config::VaultStorageMode::UprivPlain;
+        after.unlocked_folder.encrypted = crate::folder_list::unlocked::EncryptedSwitch::On;
         let err = refuse_config_save_if_busy(&dir, &before, &after, &VaultListChanges::default())
             .unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));

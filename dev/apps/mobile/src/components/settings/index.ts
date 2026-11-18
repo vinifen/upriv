@@ -9,6 +9,7 @@ export {
 export { IntegerInput } from "./IntegerInput";
 export { PolicyRadioOption } from "./PolicyRadioOption";
 export { SettingsAccordionSection } from "./SettingsAccordionSection";
+export { UnlockedFolderLineView } from "./UnlockedFolderLineView";
 export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
 export { VaultChangePasswordFields } from "./VaultChangePasswordFields";
 export { VaultSettingsSevenZipSection } from "./VaultSettingsSevenZipSection";

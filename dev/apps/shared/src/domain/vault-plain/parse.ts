@@ -1,9 +1,7 @@
 import type { I18nKey } from "../../i18n/catalog";
 import { parseDeviceRef } from "../device";
-import { parseSwitches } from "../folder-lists";
 import type {
   PlainCloseSummary,
-  PlainDestination,
   PlainFolderClass,
   PlainHeldStatus,
   PlainLeftover,
@@ -29,14 +27,6 @@ export function parseFolderClass(value: unknown): PlainFolderClass | null {
   return typeof value === "string" && FOLDER_CLASSES.has(value as PlainFolderClass)
     ? (value as PlainFolderClass)
     : null;
-}
-
-export function parsePlainDestination(raw: unknown): PlainDestination | null {
-  const body = record(raw);
-  if (!body) return null;
-  const folderClass = parseFolderClass(body.class);
-  if (typeof body.path !== "string" || body.path.length === 0 || !folderClass) return null;
-  return { path: body.path, class: folderClass, switches: parseSwitches(body.switches) };
 }
 
 /** The plain-text folders on record for a vault row (`plainRecords` of `vault_list`). */

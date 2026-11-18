@@ -9,6 +9,9 @@
 //! different trees, the one with the higher save count is the vault's tree
 //! (the primary on a tie): a seal writes the copy first, so the copy is the
 //! newer one only after a crash between the two writes.
+//!
+//! Beside the tree it holds the vault's storage value ([`VaultStorage`]),
+//! the only value that lets an open write plain text to disk.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -21,6 +24,7 @@ use super::aead::{open_index, seal_index, INDEX_KEY_LEN};
 use super::chunk::validate_logical_path;
 use super::header::index_aad;
 use super::keys::{KeyId, Keyring};
+use super::storage::VaultStorage;
 use super::tree::parent_logical;
 use crate::error::{Result, UprivError};
 use crate::paths;
@@ -58,6 +62,13 @@ pub struct VaultIndex {
     /// header's ([`super::key_copy`]). Written only when true.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub key_copies_due: bool,
+    /// Where the vault's files appear while it is open. An open writes plain
+    /// text to disk only when this and the copy in `config.toml` both say so.
+    /// Every seal carries it as it is; only the Storage change and a reset at
+    /// open set it. Written only when it is not the default; a missing one
+    /// reads as the default.
+    #[serde(skip_serializing_if = "VaultStorage::is_default")]
+    pub storage: VaultStorage,
     /// Every file and folder, in the order they joined the tree. Changed only
     /// through the methods below, which keep `lookup` in step with it.
     nodes: Vec<VaultNode>,
@@ -95,6 +106,8 @@ struct IndexFile {
     #[serde(default)]
     key_copies_due: bool,
     #[serde(default)]
+    storage: VaultStorage,
+    #[serde(default)]
     nodes: Vec<VaultNode>,
     #[serde(default)]
     held: Vec<HeldBlob>,
@@ -111,6 +124,7 @@ impl TryFrom<IndexFile> for VaultIndex {
             format_version: file.format_version,
             saves: file.saves,
             key_copies_due: file.key_copies_due,
+            storage: file.storage,
             nodes: file.nodes,
             held: file.held,
             released: file.released,
@@ -129,6 +143,7 @@ impl PartialEq for VaultIndex {
         self.format_version == other.format_version
             && self.saves == other.saves
             && self.key_copies_due == other.key_copies_due
+            && self.storage == other.storage
             && self.nodes == other.nodes
             && self.held == other.held
             && self.released == other.released
@@ -710,6 +725,7 @@ impl VaultIndex {
             format_version: super::header::FORMAT_VERSION,
             saves: 0,
             key_copies_due: false,
+            storage: VaultStorage::default(),
             nodes: Vec::new(),
             held: Vec::new(),
             released: Vec::new(),
@@ -1715,7 +1731,47 @@ mod tests {
         assert_eq!(versions, [VERSION]);
         assert!(index.find("docs").unwrap().is_dir());
         assert_eq!(index.saves, 12);
+        assert_eq!(index.storage, VaultStorage::default());
         assert_eq!(encode_index(&index).unwrap(), file.as_bytes());
+    }
+
+    #[test]
+    fn the_storage_value_reads_back_and_is_written_only_when_not_the_default() {
+        use super::super::{VaultPlainFiles, VaultStorageMode};
+        let file = concat!(
+            r#"{"format_version":1,"saves":3,"#,
+            r#""storage":{"mode":"upriv_plain","plain_files":"whole"},"nodes":[]}"#,
+        );
+        let mut index = decode_index(file.as_bytes()).unwrap();
+        assert_eq!(index.storage.mode, VaultStorageMode::UprivPlain);
+        assert_eq!(index.storage.plain_files, VaultPlainFiles::Whole);
+        assert_eq!(encode_index(&index).unwrap(), file.as_bytes());
+
+        index.storage = VaultStorage::default();
+        let written = String::from_utf8(encode_index(&index).unwrap()).unwrap();
+        assert!(!written.contains("storage"), "{written}");
+    }
+
+    #[test]
+    fn an_index_without_a_storage_value_opens_as_encrypted() {
+        let index = decode_index(br#"{"format_version":1,"nodes":[]}"#).unwrap();
+        assert_eq!(index.storage, VaultStorage::default());
+        let index =
+            decode_index(br#"{"format_version":1,"storage":{"mode":"later"},"nodes":[]}"#).unwrap();
+        assert_eq!(index.storage, VaultStorage::default());
+    }
+
+    #[test]
+    fn a_seal_carries_the_storage_value_to_the_next_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("store");
+        super::super::create_empty_store(&dir, b"storage-ok", super::super::KdfUnlockPreset::M32)
+            .unwrap();
+        let mut opened = super::super::open_store(&dir, b"storage-ok").unwrap();
+        opened.index.storage.mode = super::super::VaultStorageMode::UprivPlain;
+        save_sealed_index(&dir, &opened.keys, &mut opened.index).unwrap();
+        let again = super::super::open_store(&dir, b"storage-ok").unwrap();
+        assert!(again.index.storage.is_plain());
     }
 
     #[test]

@@ -46,6 +46,9 @@ pub(crate) enum JobKind {
     PasswordChangeFinish,
     /// The unlock-RAM change of a closed vault.
     UnlockRamChange,
+    /// The Storage change of a closed vault: its storage value sealed in the
+    /// index, then copied into `config.toml`.
+    StorageChange,
     /// The pass that makes an open vault's key copies the header's.
     KeyCopies,
     /// A closed vault's header and tree, built again from its blobs.
@@ -78,6 +81,7 @@ impl JobKind {
             Self::PasswordChange => "password_change",
             Self::PasswordChangeFinish => "password_change_finish",
             Self::UnlockRamChange => "unlock_ram_change",
+            Self::StorageChange => "storage_change",
             Self::KeyCopies => "key_copies",
             Self::Rebuild => "rebuild",
             Self::VaultDelete => "vault_delete",

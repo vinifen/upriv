@@ -20,6 +20,7 @@ export const vaultStatusColorVar = {
   backing_up: "--vault-status-closed",
   changing_password: "--vault-status-closed",
   changing_kdf: "--vault-status-closed",
+  changing_storage: "--vault-status-closed",
   deleting: "--vault-status-closed",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
@@ -37,6 +38,7 @@ export const vaultStatusI18nKey = {
   backing_up: "vault.status.backing_up",
   changing_password: "vault.status.changing_password",
   changing_kdf: "vault.status.changing_kdf",
+  changing_storage: "vault.status.changing_storage",
   deleting: "vault.status.deleting",
 } as const satisfies Record<VaultDisplayStatus, string>;
 

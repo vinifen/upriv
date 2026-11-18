@@ -41,10 +41,10 @@ export const nativeVaultLifecycleService: VaultLifecycleService = {
   async runOpeningPipeline(vaultId, onStep, job) {
     onStep(0);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
-    const switches = await rpcVaultOpen(vaultId, password, job);
+    const opened = await rpcVaultOpen(vaultId, password, job);
     // Hooks put the string back after a successful open.
     onStep(1);
-    return switches;
+    return opened;
   },
 
   async runClosingPipeline(vaultId, onStep, reason = "user") {

@@ -74,12 +74,14 @@ import {
   useFileManagerSelector,
   useOperationLimit,
   usePasswordChangeJob,
+  useStorageChangeJob,
   useUnfinishedSweep,
   useUnlockRamChangeJob,
   useVaultBackupJob,
   useVaultDeleteJob,
   useVaultRebuildJob,
   type PasswordChangeOutcome,
+  type StorageChangeOutcome,
   type UnlockRamChangeOutcome,
 } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
@@ -379,6 +381,7 @@ export function useVaultListScreen() {
     setVaultRuntimeState,
     updateVaultSettings,
     updateVaultUnlockPreset,
+    updateVaultStorageMode,
     markVaultsHidden,
     setGroupCollapsed,
     setGroups,
@@ -642,6 +645,28 @@ export function useVaultListScreen() {
     },
     onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
   });
+  const [storageOutcome, setStorageOutcome] = useState<StorageChangeOutcome | null>(null);
+  /** Hand the settings window how a Storage change ended. */
+  const storageEnded = (outcome: Omit<StorageChangeOutcome, "seq">) =>
+    setStorageOutcome({ ...outcome, seq: ++changeSeqRef.current });
+  const storageChange = useStorageChangeJob(securityService, jobs, {
+    onChanged: (result, target) => {
+      updateVaultStorageMode(target.vaultId, result.storage.mode);
+      showToast(t("toast.storage_changed", { name: vaultName(target.vaultId) }));
+      storageEnded({ ...target, result, error: null, stopped: false });
+    },
+    onFailed: (error, target) => {
+      storageEnded({ ...target, result: null, error, stopped: false });
+      if (!settingsShows(target.vaultId, "storage")) {
+        showError(error, "error.settings_save_failed");
+      }
+    },
+    onCancelled: (target) => {
+      storageEnded({ ...target, result: null, error: null, stopped: true });
+      showToast(t("toast.storage_change_stopped", { name: vaultName(target.vaultId) }));
+    },
+    onStopRefused: (error) => showError(error, "error.job_not_stoppable"),
+  });
   /** The lifecycle's open with a password, set once it exists below. */
   const openWithPasswordRef = useRef<(vaultId: string, password: string) => boolean>(() => false);
   const rebuild = useVaultRebuildJob(securityService, jobs, {
@@ -729,6 +754,7 @@ export function useVaultListScreen() {
     [
       passwordChange.job?.vaultId,
       unlockRamChange.job?.vaultId,
+      storageChange.job?.vaultId,
       rebuild.job?.vaultId,
       backupJob.job?.vaultId,
       deleteJob.job?.vaultId,
@@ -749,6 +775,7 @@ export function useVaultListScreen() {
     passwordChange.job,
     rebuild.job,
     setLifecycleRequest,
+    storageChange.job,
     unlockRamChange.job,
   ]);
 
@@ -762,6 +789,7 @@ export function useVaultListScreen() {
     t,
     settingsPersistVaultIdsRef,
     blockOpenVaultIdsRef,
+    onStorageReset: (vaultId) => updateVaultStorageMode(vaultId, "encrypted_dir"),
   });
   openWithPasswordRef.current = lifecycle.openWithPassword;
   // The Export window follows its vault's export while one runs.
@@ -806,6 +834,7 @@ export function useVaultListScreen() {
   );
   const passwordJob = passwordChange.job;
   const unlockRamJob = unlockRamChange.job;
+  const storageJob = storageChange.job;
   const rebuildJob = rebuild.job;
   const backupNowJob = backupJob.job;
   const runningDelete = deleteJob.job;
@@ -813,7 +842,7 @@ export function useVaultListScreen() {
   const pipelineListStatus = useMemo(() => {
     // A close this window started keeps its own row; the quit only adds the rest.
     const rowWork = { ...quitClose.rowWork, ...lifecycle.pipelineListStatus.rowWork };
-    for (const job of [passwordJob, unlockRamJob, rebuildJob, backupNowJob]) {
+    for (const job of [passwordJob, unlockRamJob, storageJob, rebuildJob, backupNowJob]) {
       if (!job) continue;
       rowWork[job.vaultId] = vaultRowJobWork({
         startedAt: job.startedAt,
@@ -850,6 +879,7 @@ export function useVaultListScreen() {
       ],
       passwordChangeVaultIds: passwordJob ? [passwordJob.vaultId] : undefined,
       kdfChangeVaultIds: unlockRamJob ? [unlockRamJob.vaultId] : undefined,
+      storageChangeVaultIds: storageJob ? [storageJob.vaultId] : undefined,
       deletingVaultIds: runningDelete ? [runningDelete.vaultId] : undefined,
       deleteNowVaultIds: deleteNowIds,
       backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
@@ -867,6 +897,7 @@ export function useVaultListScreen() {
     quitClose,
     rebuildJob,
     runningDelete,
+    storageJob,
     unlockRamJob,
   ]);
 
@@ -875,6 +906,7 @@ export function useVaultListScreen() {
     (vaultId: string) => {
       if (passwordJob?.vaultId === vaultId) passwordChange.stop();
       else if (unlockRamJob?.vaultId === vaultId) unlockRamChange.stop();
+      else if (storageJob?.vaultId === vaultId) storageChange.stop();
       else if (rebuildJob?.vaultId === vaultId) rebuild.stop();
       else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
       else lifecycle.stopVaultWork(vaultId);
@@ -887,6 +919,8 @@ export function useVaultListScreen() {
       passwordJob,
       rebuild,
       rebuildJob,
+      storageChange,
+      storageJob,
       unlockRamChange,
       unlockRamJob,
     ],
@@ -1137,9 +1171,6 @@ export function useVaultListScreen() {
         void patchSettings({ app: { last_opened_vault: patch.id } }, { memoryOnly: true });
       }
       recordVaultHiddenIfNeeded(previous?.hidden, patch.hidden);
-      if (previous && previous.storageMode !== patch.storageMode && previous.session === "open") {
-        showToast(t("warning.storage_mode_requires_close"));
-      }
     },
     [
       patchSettings,
@@ -1147,8 +1178,6 @@ export function useVaultListScreen() {
       setSettingsVaultId,
       settings.app.last_opened_vault,
       settingsVaultId,
-      showToast,
-      t,
       updateVaultSettings,
       vaults,
     ],
@@ -1615,6 +1644,10 @@ export function useVaultListScreen() {
           showToast(t("vault.unlock_ram_change.busy"));
           return;
         }
+        if (area === "storage" && storageJob && storageJob.vaultId !== vaultId) {
+          showToast(t("vault.change_storage.busy"));
+          return;
+        }
         modals.setSettingsVaultId(vaultId);
         modals.setSettingsArea(area);
       },
@@ -1660,6 +1693,7 @@ export function useVaultListScreen() {
         : null,
       lifecycleVerifyErrorKey: lifecycle.credentialErrorKey,
       lifecycleFieldPassword: lifecycle.credentialFieldPassword,
+      lifecycleDestination: modals.lifecycleRequest?.destination ?? null,
       onLifecycleClose: () => {
         lifecycle.abandonCredentialVerify();
         modals.setLifecycleRequest(null);
@@ -1804,6 +1838,10 @@ export function useVaultListScreen() {
       unlockRamOutcome,
       onChangeKdf: unlockRamChange.changeKdf,
       onStopUnlockRamChange: unlockRamChange.stop,
+      storageJob,
+      storageOutcome,
+      onChangeStorage: storageChange.changeStorage,
+      onStopStorageChange: storageChange.stop,
       groups,
       onCommitGroupAssignment: async (vaultId: string, assignment: CreateVaultGroupAssignment) => {
         if (assignment.kind === "create") {

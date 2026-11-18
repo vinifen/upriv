@@ -6,7 +6,6 @@ export {
 } from "./place";
 export {
   parsePlainCloseSummary,
-  parsePlainDestination,
   parsePlainHeldStatus,
   parsePlainLeftover,
   parsePlainRecords,
@@ -17,7 +16,6 @@ export {
 } from "./parse";
 export type {
   PlainCloseSummary,
-  PlainDestination,
   PlainFolderClass,
   PlainHeldStatus,
   PlainLeftover,

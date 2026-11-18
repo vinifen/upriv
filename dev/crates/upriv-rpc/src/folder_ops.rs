@@ -1,12 +1,14 @@
-//! Folder list RPCs: the status of a row of any list, an encrypted vault's
-//! unlocked folder after its open, the phone trees this device's rows name,
-//! a plain-text record the person forgets, and a backup's name and folder.
+//! Folder list RPCs: the status of a row of any list, where an unlock would
+//! put a vault's files, an encrypted vault's unlocked folder after its open,
+//! the phone trees this device's rows name, a plain-text record the person
+//! forgets, and a backup's name and folder.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
     attach_unlocked_folder, data_folder_status, device_trees, folder_status, forget_backup_folder,
-    plain_record_forget, rename_backup, unlocked_folder_info, StatusList,
+    plain_record_forget, rename_backup, unlocked_destination, unlocked_folder_info, StatusList,
+    VaultStorageMode,
 };
 
 use super::{err, map_core_err, ok, require_vault_root, RpcResponse};
@@ -90,6 +92,30 @@ pub(super) fn vault_unlocked_folder_attach(params: Value) -> RpcResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultIdParams {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UnlockedDestinationParams {
+    id: String,
+    mode: VaultStorageMode,
+}
+
+/// Where an unlock of the vault in `mode` would put its files on this
+/// device, found before the password with nothing made.
+pub(super) fn vault_unlocked_destination(params: Value) -> RpcResponse {
+    let parsed: UnlockedDestinationParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match unlocked_destination(&root, parsed.id.trim(), parsed.mode) {
+        Ok(answer) => ok(serde_json::to_value(answer).unwrap_or(json!(null))),
+        Err(error) => map_core_err(error),
+    }
 }
 
 /// A vault's unlocked folder on this device, for its Info window.

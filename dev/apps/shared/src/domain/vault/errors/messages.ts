@@ -43,6 +43,7 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_busy: "error.vault_busy",
   password_unchanged: "vault.change_password.same_as_current",
   unlock_ram_unchanged: "vault.change_kdf.same_as_current",
+  storage_unchanged: "vault.change_storage.same_as_current",
   export_destination_reserved: "error.export_destination_reserved",
   backup_exporting: "error.backup_exporting",
   folder_list_invalid: "error.folder_list_invalid",

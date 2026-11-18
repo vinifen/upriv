@@ -7,57 +7,45 @@ const baseline = vaultSettingsFixture({
   vault: { id: "notes", display_name: "Notes" },
 });
 
+function draftWith(displayName: string, note: string) {
+  return {
+    ...baseline,
+    vault: { ...baseline.vault, display_name: displayName, note },
+    unlocked_folder: { ...baseline.unlocked_folder, encrypted: "on" as const },
+  };
+}
+
 describe("rebaseQuietLockedVaultSettings", () => {
   it("keeps quiet dirty when vault is quiet", () => {
     const closed = vaultRowFixture({ id: "notes" });
-    const draft = {
-      ...baseline,
-      vault: { ...baseline.vault, display_name: "Renamed", note: "x" },
-    };
+    const draft = draftWith("Renamed", "x");
     expect(rebaseQuietLockedVaultSettings(draft, baseline, closed)).toEqual(draft);
   });
 
   it("rebases quiet fields to baseline when open, keeps anytime", () => {
     const open = vaultRowFixture({ id: "notes", session: "open" });
-    const draft = {
-      ...baseline,
-      vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
-      storage: { mode: "upriv_plain" as const, plain_files: "whole" as const },
-    };
-    const rebased = rebaseQuietLockedVaultSettings(draft, baseline, open);
+    const rebased = rebaseQuietLockedVaultSettings(draftWith("Renamed", "keep"), baseline, open);
     expect(rebased.vault.display_name).toBe("Notes");
     expect(rebased.vault.note).toBe("keep");
-    expect(rebased.storage.mode).toBe("encrypted_dir");
-    expect(rebased.storage.plain_files).toBe("chosen");
+    expect(rebased.unlocked_folder.encrypted).toBe(baseline.unlocked_folder.encrypted);
   });
 
   it("rebases display_name when creating, keeps vault_quiet dirty", () => {
     const closed = vaultRowFixture({ id: "notes" });
-    const draft = {
-      ...baseline,
-      vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
-      storage: { mode: "upriv_plain" as const, plain_files: "whole" as const },
-    };
-    const rebased = rebaseQuietLockedVaultSettings(draft, baseline, closed, {
+    const rebased = rebaseQuietLockedVaultSettings(draftWith("Renamed", "keep"), baseline, closed, {
       creatingVaultIds: ["notes"],
     });
     expect(rebased.vault.display_name).toBe("Notes");
     expect(rebased.vault.note).toBe("keep");
-    expect(rebased.storage.mode).toBe("upriv_plain");
-    expect(rebased.storage.plain_files).toBe("chosen");
+    expect(rebased.unlocked_folder.encrypted).toBe("on");
   });
 
-  it("keeps the folder choice in recovery, also with a leftover folder", () => {
-    const leftover = vaultRowFixture({
-      id: "notes",
-      session: "recovery",
-      plainLeftover: true,
-    });
+  it("passes the storage value through as it is: a save never changes it", () => {
+    const open = vaultRowFixture({ id: "notes", session: "open" });
     const draft = {
       ...baseline,
-      storage: { ...baseline.storage, plain_files: "whole" as const },
+      storage: { mode: "upriv_plain" as const, plain_files: "whole" as const },
     };
-    const rebased = rebaseQuietLockedVaultSettings(draft, baseline, leftover);
-    expect(rebased.storage.plain_files).toBe("whole");
+    expect(rebaseQuietLockedVaultSettings(draft, baseline, open).storage).toEqual(draft.storage);
   });
 });

@@ -45,7 +45,7 @@ use crate::paths::VaultRoot;
 use crate::session::{with_unlock_lock, Job, JobKind};
 use crate::store::{
     flush_index_parts, key_copy_opens, newest_key_copy, open_index_under, restore_header,
-    save_header, Kek, Keyring, RebuildSources, Unlock, VaultHeader,
+    save_header, Kek, Keyring, RebuildSources, Unlock, VaultHeader, VaultStorage,
 };
 
 use super::backup::{copy_before_rebuild, BackupSkip, CopyBefore};
@@ -72,6 +72,9 @@ pub struct VaultRebuild {
     pub copy: Option<String>,
     /// Why no copy was written before the tree step.
     pub copy_skipped: Option<BackupSkip>,
+    /// The rebuilt tree holds the default storage value, and `config.toml`
+    /// said another: plain text is off until the Storage change turns it on.
+    pub storage_reset: bool,
 }
 
 /// Rebuild the closed vault `vault_id` from its blobs, as the job `job_id`.
@@ -245,6 +248,7 @@ fn finish_header_only(mut store: ClosedStore) -> Result<VaultRebuild> {
         set_aside: 0,
         copy: None,
         copy_skipped: None,
+        storage_reset: false,
     })
 }
 
@@ -302,6 +306,7 @@ fn tree_step(
         flush_index_parts(&store_dir, &tree.keys, &mut rebuilt.index)?;
     }
     record_rebuild(vault_dir, vault_id, super::files_bytes(&rebuilt.index));
+    let storage_reset = reset_storage_copy(vault_dir, vault_id);
     let counts = [
         ("files", rebuilt.placed),
         ("from_backups", rebuilt.from_backups),
@@ -322,7 +327,31 @@ fn tree_step(
         set_aside: (rebuilt.left + rebuilt.unnamed) as u64,
         copy,
         copy_skipped,
+        storage_reset,
     })
+}
+
+/// A rebuilt tree holds the default storage value, so the copy in
+/// `config.toml` follows before the open that comes after: a plain-text
+/// vault opens encrypted until the Storage change turns plain text on again.
+/// True when the copy was not the default. A copy that cannot be written
+/// disagrees with the tree, and that open resets it.
+fn reset_storage_copy(vault_dir: &Path, vault_id: &str) -> bool {
+    let Ok(mut config) = crate::config::load_vault_config(vault_dir) else {
+        return false;
+    };
+    if config.storage.is_default() {
+        return false;
+    }
+    config.storage = VaultStorage::default();
+    if crate::config::save_vault_config(vault_dir, &config).is_err() {
+        log_event(
+            LogLevel::Warn,
+            "vault_storage_copy_kept",
+            &[("id", vault_id)],
+        );
+    }
+    true
 }
 
 /// The store's new hash, so the list does not read the rebuild as a crash,
@@ -505,6 +534,42 @@ mode = "encrypted_dir"
         assert!(!top.iter().any(|child| child.name == "empty"));
         assert!(fs_held_list(&root, "notes").unwrap().is_empty());
         close_vault(&root, "notes").unwrap();
+    }
+
+    /// The rebuilt tree is encrypted; the copy follows it, so the open after
+    /// the rebuild agrees and writes no plain text.
+    #[test]
+    fn a_rebuilt_tree_of_a_plain_text_vault_is_encrypted_and_its_copy_follows() {
+        use crate::store::{VaultPlainFiles, VaultStorageMode};
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.storage = VaultStorage {
+            mode: VaultStorageMode::UprivPlain,
+            plain_files: VaultPlainFiles::Whole,
+        };
+        create_vault(&root, config, PW, KdfUnlockPreset::M32).unwrap();
+        lose_index(&root);
+
+        let rebuilt = rebuild_now(&root, PW).unwrap();
+        assert!(rebuilt.tree_rebuilt);
+        assert!(rebuilt.storage_reset);
+        assert_eq!(
+            open_store(store(&root), PW).unwrap().index.storage,
+            VaultStorage::default()
+        );
+        let dir = root.vault_dir("notes").unwrap();
+        let copy = crate::config::load_vault_config(&dir).unwrap().storage;
+        assert_eq!(copy, VaultStorage::default());
+        let opened = open_vault(&root, "notes", PW).unwrap();
+        assert_eq!(opened.storage_reset, None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_rebuilt_tree_of_an_encrypted_vault_resets_nothing() {
+        let (_tmp, root) = notes_with_a_file();
+        lose_index(&root);
+        assert!(!rebuild_now(&root, PW).unwrap().storage_reset);
     }
 
     #[test]
@@ -804,6 +869,7 @@ mode = "encrypted_dir"
         let rebuilt = rebuild_now(&root, PW).unwrap();
         assert!(rebuilt.header_restored);
         assert!(!rebuilt.tree_rebuilt, "the index opens under it");
+        assert!(!rebuilt.storage_reset);
         let opened = open_store(store(&root), PW).unwrap();
         assert!(opened.header.top.generation > generation);
         assert!(opened.index.key_copies_due);

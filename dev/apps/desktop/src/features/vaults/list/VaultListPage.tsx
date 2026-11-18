@@ -210,6 +210,10 @@ export function VaultListPage() {
         unlockRamOutcome={settings.unlockRamOutcome}
         onChangeKdf={settings.onChangeKdf}
         onStopUnlockRamChange={settings.onStopUnlockRamChange}
+        storageJob={settings.storageJob}
+        storageOutcome={settings.storageOutcome}
+        onChangeStorage={settings.onChangeStorage}
+        onStopStorageChange={settings.onStopStorageChange}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}
       />

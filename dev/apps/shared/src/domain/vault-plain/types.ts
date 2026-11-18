@@ -1,19 +1,9 @@
 import type { DeviceRef } from "../device";
-import type { FolderSwitch } from "../folder-lists";
 
 /** Wire shapes for an open `upriv_plain` folder. Core is the source of these fields. */
 
+/** Where a plain-text folder physically is, as far as the computer can tell. */
 export type PlainFolderClass = "local" | "removable" | "network" | "cloud";
-
-/**
- * `vault_plain_destination`: the folder an unlock would fill after walking
- * the vault's chain, and the switches that walk would make. Nothing is saved.
- */
-export interface PlainDestination {
-  path: string;
-  class: PlainFolderClass;
-  switches: FolderSwitch[];
-}
 
 /** What this device can tell about a recorded plain-text folder. */
 export type PlainRecordState =

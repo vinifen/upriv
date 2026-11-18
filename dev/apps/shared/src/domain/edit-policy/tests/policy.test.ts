@@ -31,17 +31,17 @@ describe("a leftover plaintext folder", () => {
 
   it("does not lock a recovery with no leftover", () => {
     const plain = vaultRowFixture({ session: "recovery" });
-    expect(vaultConfigEditAllowed("storage.mode", plain)).toBe(true);
+    expect(vaultConfigEditAllowed("unlocked_folder", plain)).toBe(true);
     expect(vaultConfigEditAllowed("vault.display_name", plain)).toBe(true);
   });
 
   it("says what to do instead of asking to wait", () => {
-    expect(requireVaultConfigEditLockedI18nKey("storage.mode", vaultConfigEditHold(row))).toBe(
+    expect(requireVaultConfigEditLockedI18nKey("unlocked_folder", vaultConfigEditHold(row))).toBe(
       contract.plainLeftoverLockedI18n,
     );
     expect(en).toHaveProperty([contract.plainLeftoverLockedI18n]);
-    expect(requireVaultConfigEditLockedI18nKey("storage.mode")).toBe(
-      contract.lockedI18n["storage.mode"],
+    expect(requireVaultConfigEditLockedI18nKey("unlocked_folder")).toBe(
+      contract.lockedI18n.unlocked_folder,
     );
   });
 });
@@ -57,10 +57,10 @@ describe("a backup export of the vault's backups", () => {
     expect(vaultConfigEditAllowed("vault.display_name", row)).toBe(true);
   });
 
-  it("leaves the folder, the mode, and the rest editable", () => {
-    expect(vaultConfigEditAllowed("storage.mode", row, exporting)).toBe(true);
+  it("leaves the folder, the changes, and the rest editable", () => {
     expect(vaultConfigEditAllowed("unlocked_folder", row, exporting)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_password", row, exporting)).toBe(true);
+    expect(vaultConfigEditAllowed("action.change_storage", row, exporting)).toBe(true);
   });
 
   it("names the export in the locked hint", () => {
@@ -78,23 +78,20 @@ describe("a backup export of the vault's backups", () => {
   });
 });
 
-describe("the plain-text folder choice", () => {
-  it("changes while the vault is closed or in recovery", () => {
-    expect(vaultConfigEditAllowed("storage.plain_files", vaultRowFixture())).toBe(true);
-    const recovery = vaultRowFixture({ session: "recovery" });
-    expect(vaultConfigEditAllowed("storage.plain_files", recovery)).toBe(true);
-  });
-
-  it("stays editable with a leftover folder, which holds no choice to protect", () => {
+describe("the Storage change", () => {
+  it("runs on a closed vault only, like the password change", () => {
+    expect(vaultConfigEditAllowed("action.change_storage", vaultRowFixture())).toBe(true);
+    for (const session of ["open", "closing", "recovery"] as const) {
+      expect(vaultConfigEditAllowed("action.change_storage", vaultRowFixture({ session }))).toBe(
+        false,
+      );
+    }
     const leftover = vaultRowFixture({ session: "recovery", plainLeftover: true });
-    expect(vaultConfigEditAllowed("storage.plain_files", leftover)).toBe(true);
+    expect(vaultConfigEditAllowed("action.change_storage", leftover)).toBe(false);
   });
 
-  it("locks while the vault is open or closing", () => {
-    const open = vaultRowFixture({ session: "open" });
-    expect(vaultConfigEditAllowed("storage.plain_files", open)).toBe(false);
-    const closing = vaultRowFixture({ session: "closing" });
-    expect(vaultConfigEditAllowed("storage.plain_files", closing)).toBe(false);
+  it("is no target of a settings save", () => {
+    expect(Object.keys(contract.vault).some((target) => target.startsWith("storage"))).toBe(false);
   });
 });
 
@@ -128,8 +125,8 @@ describe("edit-policy.json contract", () => {
       "vault.change_password.vault_open",
     );
     expect(vaultConfigEditLockedI18nKey("action.change_kdf")).toBe("vault.change_kdf.vault_open");
-    expect(requireVaultConfigEditLockedI18nKey("storage.mode")).toBe(
-      "modal.settings.field.storage.mode_locked",
+    expect(vaultConfigEditLockedI18nKey("action.change_storage")).toBe(
+      "vault.change_storage.vault_open",
     );
   });
 
@@ -207,7 +204,7 @@ describe("vaultConfigEditAllowed", () => {
 
   it("recovery allows quiet edits, rename, and delete, but not the changes", () => {
     const recovery = vaultRowFixture({ id: "notes", session: "recovery" });
-    expect(vaultConfigEditAllowed("storage.mode", recovery)).toBe(true);
+    expect(vaultConfigEditAllowed("unlocked_folder", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("vault.display_name", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.delete", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_kdf", recovery)).toBe(false);
@@ -221,21 +218,21 @@ describe("vaultConfigEditAllowed", () => {
     const deleting = vaultRowFixture({ id: "notes", session: "deleting" });
     expect(vaultConfigEditAllowed("action.delete", deleting)).toBe(false);
     expect(vaultConfigEditAllowed("vault.display_name", deleting)).toBe(false);
-    expect(vaultConfigEditAllowed("storage.mode", deleting)).toBe(false);
+    expect(vaultConfigEditAllowed("unlocked_folder", deleting)).toBe(false);
   });
 
-  it("creating and queued block rename, not quiet storage", () => {
+  it("creating and queued block rename, not the quiet unlocked folder", () => {
     const closed = vaultRowFixture({ id: "notes" });
     expect(
       vaultConfigEditAllowed("vault.display_name", closed, { creatingVaultIds: ["notes"] }),
     ).toBe(false);
-    expect(vaultConfigEditAllowed("storage.mode", closed, { creatingVaultIds: ["notes"] })).toBe(
+    expect(vaultConfigEditAllowed("unlocked_folder", closed, { creatingVaultIds: ["notes"] })).toBe(
       true,
     );
     expect(
       vaultConfigEditAllowed("vault.display_name", closed, { queuedVaultIds: ["notes"] }),
     ).toBe(false);
-    expect(vaultConfigEditAllowed("storage.mode", closed, { queuedVaultIds: ["notes"] })).toBe(
+    expect(vaultConfigEditAllowed("unlocked_folder", closed, { queuedVaultIds: ["notes"] })).toBe(
       true,
     );
   });
@@ -243,6 +240,6 @@ describe("vaultConfigEditAllowed", () => {
   it("a queued close on an open session is not quiet", () => {
     const open = vaultRowFixture({ id: "notes", session: "open" });
     const pipeline = { queuedVaultIds: ["notes"], queuedOpenVaultIds: [] as string[] };
-    expect(vaultConfigEditAllowed("storage.mode", open, pipeline)).toBe(false);
+    expect(vaultConfigEditAllowed("unlocked_folder", open, pipeline)).toBe(false);
   });
 });

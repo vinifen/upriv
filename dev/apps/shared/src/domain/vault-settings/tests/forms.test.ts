@@ -5,7 +5,51 @@ import {
   changeKdfFormIsDowngrade,
   changePasswordFormCanSubmit,
   changePasswordFormIsDirty,
+  changeStorageFormCanSubmit,
+  changeStorageFormIsDirty,
 } from "../forms";
+
+const ENCRYPTED = { mode: "encrypted_dir", plain_files: "chosen" } as const;
+const PLAIN = { mode: "upriv_plain", plain_files: "chosen" } as const;
+
+describe("the Storage form", () => {
+  it("is dirty once the password is typed or the choice differs from the copy", () => {
+    expect(changeStorageFormIsDirty({ password: "", storage: ENCRYPTED, current: ENCRYPTED })).toBe(
+      false,
+    );
+    expect(
+      changeStorageFormIsDirty({ password: "x", storage: ENCRYPTED, current: ENCRYPTED }),
+    ).toBe(true);
+    expect(changeStorageFormIsDirty({ password: "", storage: PLAIN, current: ENCRYPTED })).toBe(
+      true,
+    );
+  });
+
+  it("submits a different choice with the password, on a closed vault, once", () => {
+    const form = { password: "secret", storage: PLAIN, current: ENCRYPTED };
+    expect(changeStorageFormCanSubmit({ ...form, vaultListStatus: "closed" })).toBe(true);
+    expect(changeStorageFormCanSubmit({ ...form, password: "", vaultListStatus: "closed" })).toBe(
+      false,
+    );
+    expect(
+      changeStorageFormCanSubmit({ ...form, storage: ENCRYPTED, vaultListStatus: "closed" }),
+    ).toBe(false);
+    expect(
+      changeStorageFormCanSubmit({
+        ...form,
+        storage: { ...PLAIN, plain_files: "whole" },
+        current: PLAIN,
+        vaultListStatus: "closed",
+      }),
+    ).toBe(true);
+    for (const vaultListStatus of ["open", "recovery", "closing"] as const) {
+      expect(changeStorageFormCanSubmit({ ...form, vaultListStatus })).toBe(false);
+    }
+    expect(
+      changeStorageFormCanSubmit({ ...form, vaultListStatus: "closed", submitting: true }),
+    ).toBe(false);
+  });
+});
 
 describe("changeKdfFormIsDirty", () => {
   it("is dirty when the password is filled or the preset changes", () => {

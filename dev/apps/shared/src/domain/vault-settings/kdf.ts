@@ -80,15 +80,16 @@ export function normalizeKdfUnlockPreset(preset: string | undefined): KdfUnlockP
 }
 
 /**
- * Scratch, a documents `.zip`, and `.7z` import wrap a **new** `store/` — user
- * picks unlock RAM. A Upriv `.zip` already has `vault.header` — skip the
- * picker (copy ciphertext; do not rewrite KDF). Create-from-backup copies a
- * frozen `store/` (`importKind: "backup"`) — same skip. A folder named
- * `backups` is not that copy. A `.zip` whose layout is still unknown stays
- * locked so the default preset is not shown as chosen. Extract off stores
- * that `.zip` as one file, so the user does choose a preset.
+ * True when the create makes a **new** `store/`, so the person chooses what
+ * it is sealed with: the unlock RAM and the storage value. Scratch, a
+ * documents `.zip`, and a `.7z` import make one. A Upriv `.zip` and
+ * create-from-backup (`importKind: "backup"`) copy a store as it is, which
+ * keeps the unlock RAM of its header and the storage value of its index, so
+ * both show locked. A folder named `backups` is not that copy. A `.zip` whose
+ * layout is still unknown stays locked, so a default is not shown as chosen.
+ * Extract off stores that `.zip` as one file, in a new store.
  */
-export function createVaultChoosesKdf(draft: {
+export function createVaultChoosesStoreSettings(draft: {
   source: "import" | "scratch" | null;
   importFileName: string;
   /** Present on drafts. A directory named `backups` does not hide the picker. */

@@ -6,7 +6,8 @@ import type {
   VaultKeyStatus,
 } from "../../domain/vault/keyChanges";
 import type { VaultRebuildResult } from "../../domain/vault/rebuild";
-import type { KdfUnlockPreset } from "../../domain/vault-settings";
+import type { StorageChangeResult } from "../../domain/vault/storageChange";
+import type { KdfUnlockPreset, VaultStorage } from "../../domain/vault-settings";
 
 export interface ChangeVaultPasswordInput {
   currentPassword: string;
@@ -30,6 +31,13 @@ export interface ChangeVaultKdfInput {
   job: string;
 }
 
+export interface ChangeVaultStorageInput {
+  password: string;
+  storage: VaultStorage;
+  /** The job the change runs as (`newJobId`), so the person can stop it. */
+  job: string;
+}
+
 export interface RebuildVaultInput {
   password: string;
   /** The job the rebuild runs as (`newJobId`), so the person can stop it. */
@@ -42,8 +50,8 @@ export interface RebuildVaultInput {
  * so callers can map it through `errorDisplayI18nKey`.
  *
  * The changes and Finish need the vault closed. Each is a job: a stop before
- * its last step rejects with `job_cancelled` and leaves the vault's password
- * as it was; in that step `job_cancel` refuses (`job_not_stoppable`). A stop
+ * its last step rejects with `job_cancelled` and leaves the vault as it was;
+ * in that step `job_cancel` refuses (`job_not_stoppable`). A stop
  * during the pass that follows is not a cancel: the answer says the key copies
  * wait (`keyCopies: "waiting"`). Expo Go uses the mock, which does not touch
  * a real `store/`.
@@ -65,6 +73,13 @@ export interface VaultSecurityService {
   ): Promise<PasswordChangeFinishResult>;
   /** A new Argon2id cost and salt for the same password and keys (`vault_change_kdf`). */
   changeKdfPreset(vaultId: string, input: ChangeVaultKdfInput): Promise<UnlockRamChangeResult>;
+  /**
+   * The vault's storage value sealed in its index with the password, then
+   * copied to `config.toml` (`vault_change_storage`). No file is converted.
+   * The value the copy already holds is refused before the password
+   * (`storage_unchanged`).
+   */
+  changeStorage(vaultId: string, input: ChangeVaultStorageInput): Promise<StorageChangeResult>;
   /**
    * The job after each open (`vault_key_copies_update`): every file's key copy
    * made the header's, when one is behind. Answers `done` at once when nothing
