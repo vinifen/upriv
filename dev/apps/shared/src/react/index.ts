@@ -71,6 +71,18 @@ export {
   type StorageChangeTarget,
 } from "./useStorageChangeJob";
 export { useUnlockedDestination, type UnlockedDestinationState } from "./useUnlockedDestination";
+export {
+  useVaultChangeScreens,
+  type PasswordChangeScreen,
+  type PasswordScreenMode,
+  type StorageChangeScreen,
+  type UnlockRamChangeScreen,
+  type UseVaultChangeScreensOptions,
+  type VaultChangeArea,
+  type VaultChangeMade,
+  type VaultChangeScreen,
+  type VaultChangeScreens,
+} from "./useVaultChangeScreens";
 export { useKeyCopiesAfterOpen } from "./useKeyCopiesAfterOpen";
 export {
   useVaultDeleteJob,
