@@ -75,7 +75,9 @@ import {
   parsePathWriteResult,
   parseVaultExportResult,
   parsePlainCloseSummary,
-  parsePlainDestination,
+  parseStorageChangeResult,
+  parseUnlockedDestination,
+  parseVaultOpened,
   parsePlainHeldStatus,
   parsePlainLeftover,
   parseBackupFailure,
@@ -95,11 +97,14 @@ import {
   type VaultKeyStatus,
   type DataFolderApplyRequest,
   type FolderStatusList,
-  type FolderSwitch,
   type JobProgress,
   type JobStopBy,
-  type PlainDestination,
   type PlainHeldStatus,
+  type StorageChangeResult,
+  type StorageMode,
+  type UnlockedDestination,
+  type VaultOpened,
+  type VaultStorage,
   type PlainLeftover,
   type PlainWipe,
   type VaultCloseState,
@@ -523,24 +528,30 @@ export async function rpcVaultCreate(input: CreateVaultInput, job: string): Prom
 
 /**
  * Unlock as the job `job`; a stop leaves the vault closed. Resolves with the
- * unlocked folder switches a plain-text open made.
+ * unlocked folder switches a plain-text open made, and whether the open reset
+ * the vault's storage value.
  */
 export async function rpcVaultOpen(
   id: string,
   password: string,
   job: string,
-): Promise<FolderSwitch[]> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password, job });
-  return parseSwitches((raw as { switches?: unknown } | null)?.switches);
+): Promise<VaultOpened> {
+  return parseVaultOpened(
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password, job }),
+  );
 }
 
-export async function rpcVaultPlainDestination(id: string): Promise<PlainDestination> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_DESTINATION, { id });
-  const dest = parsePlainDestination(raw);
+/** Where an unlock of the vault in `mode` would put its files, found before the password. */
+export async function rpcVaultUnlockedDestination(
+  id: string,
+  mode: StorageMode,
+): Promise<UnlockedDestination> {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_UNLOCKED_DESTINATION, { id, mode });
+  const dest = parseUnlockedDestination(raw);
   if (!dest) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_plain_destination: expected path",
+      "vault_unlocked_destination: expected an outcome",
       raw,
     );
   }
@@ -631,6 +642,31 @@ export async function rpcVaultChangeKdf(
     job,
   });
   return parseUnlockRamChangeResult(raw);
+}
+
+/** Seal a closed vault's storage value with its password, as the job `job`. */
+export async function rpcVaultChangeStorage(
+  id: string,
+  password: string,
+  storage: VaultStorage,
+  job: string,
+): Promise<StorageChangeResult> {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_STORAGE, {
+    id,
+    password,
+    mode: storage.mode,
+    plainFiles: storage.plain_files,
+    job,
+  });
+  const result = parseStorageChangeResult(raw);
+  if (!result) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_change_storage: expected the stored value",
+      raw,
+    );
+  }
+  return result;
 }
 
 /** The job after an open: every key copy made the header's, when one is behind. */

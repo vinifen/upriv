@@ -79,6 +79,11 @@ pub struct OpenSession {
     /// (`vault_key_copies_update`); a close sets it.
     #[zeroize(skip)]
     pub(crate) key_copies: Option<Arc<AtomicBool>>,
+    /// The open found the sealed storage value and its copy in `config.toml`
+    /// disagreeing and reset both: no unlocked folder attaches to this
+    /// session, even when the reset could not be written.
+    #[zeroize(skip)]
+    pub storage_reset: bool,
 }
 
 /// Where the unlocked folder attach of an open encrypted vault stands.
@@ -131,6 +136,7 @@ impl OpenSession {
             deferred: None,
             pending_layout: None,
             key_copies: None,
+            storage_reset: false,
         }
     }
 

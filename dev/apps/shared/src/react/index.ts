@@ -63,6 +63,14 @@ export {
   type UnlockRamChangeOutcome,
   type UnlockRamChangeTarget,
 } from "./useUnlockRamChangeJob";
+export {
+  useStorageChangeJob,
+  type StorageChangeJob,
+  type StorageChangeJobEvents,
+  type StorageChangeOutcome,
+  type StorageChangeTarget,
+} from "./useStorageChangeJob";
+export { useUnlockedDestination, type UnlockedDestinationState } from "./useUnlockedDestination";
 export { useKeyCopiesAfterOpen } from "./useKeyCopiesAfterOpen";
 export {
   useVaultDeleteJob,

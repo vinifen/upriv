@@ -39,7 +39,6 @@ use self::marker::{Marker, MARKER_NAME};
 use self::names::NameRules;
 use self::sweep::Visit;
 use self::sync::Synced;
-use crate::config::vault_config::VaultPlainFiles;
 use crate::config::{load_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::folder_list::{fail_over, Failover, Switch, Try};
@@ -48,10 +47,12 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
 use crate::session::{is_vault_closing_at, with_open_session, Job};
-use crate::store::{from_ui_path, is_reserved_logical, parent_logical, FileTreeNode};
+use crate::store::{
+    from_ui_path, is_reserved_logical, parent_logical, FileTreeNode, VaultPlainFiles,
+};
 use crate::vault::wipe::WipeOptions;
 
-pub use dest::{plain_destination, PlainDestination};
+pub(crate) use dest::plain_destination;
 pub use leftover::{plain_leftover, remove_plain_leftover, PlainLeftover, PlainWipe};
 pub use volume::PlainFolderClass;
 pub use worker::{set_plain_observer, PlainObserver};
@@ -246,16 +247,16 @@ pub(crate) fn require_known_device() -> Result<()> {
     Ok(())
 }
 
-/// Before the unlock: an unknown device, a leftover folder, nothing
-/// selected, or no place of the chain that can take the folder stops the
-/// open before the key is derived.
+/// Before the unlock of a vault whose copy says plain text: an unknown
+/// device, nothing selected, or no place of the chain that can take the
+/// folder stops the open before the key is derived. A leftover folder is
+/// checked for every open, whatever the mode ([`ensure_no_leftover`]).
 pub(crate) fn check_before_unlock(
     root: &VaultRoot,
     vault_id: &str,
     config: &VaultConfig,
 ) -> Result<()> {
     require_known_device()?;
-    leftover::ensure_no_leftover(root, vault_id)?;
     let places = dest::places(root, config)?;
     let display_name = config.vault.display_name.as_str();
     match fail_over(&places.selected, &places.chain, |place| {

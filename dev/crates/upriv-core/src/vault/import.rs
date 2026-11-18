@@ -12,7 +12,7 @@ use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{display_name_to_vault_id, VaultRoot};
 use crate::session::{with_vault_dir_lock, Job, JobKind};
-use crate::store::{content_hash_hex, load_header, INDEX_DIR_NAME};
+use crate::store::{content_hash_hex, load_header, VaultStorage, INDEX_DIR_NAME};
 
 use super::backup::{backup_zip_file, copy_ciphertext_tree, split_backup_locator};
 use super::create::claim_new_vault_dir;
@@ -83,12 +83,19 @@ fn prepare_imported_id(root: &VaultRoot, config: &mut VaultConfig) -> Result<Str
 /// Make the new vault and fill its `store/` with `fill_store` while `job`
 /// runs. A failure or a stop removes the folder; a crash leaves it recorded as
 /// unfinished, and the next launch removes it.
+///
+/// The copied store keeps the storage value sealed in its index, which only
+/// its password could change, so the new `config.toml` holds `carried`, the
+/// copy the source carried beside it, whatever `config` says. A copy that
+/// disagrees with the sealed value meets a reset at the first open.
 fn materialize_imported_store(
     root: &VaultRoot,
     mut config: VaultConfig,
+    carried: VaultStorage,
     job: &Job,
     fill_store: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<String> {
+    config.storage = carried;
     let id = prepare_imported_id(root, &mut config)?;
     let dest = root.vault_dir(&id)?;
     crate::host_fs::create_dir_all(root.vaults_dir())?;
@@ -139,8 +146,9 @@ pub fn import_store_zip(
     job_id: &str,
 ) -> Result<String> {
     let vault_id = config.vault.id.clone();
+    let carried = carried_storage(std::io::Cursor::new(zip_bytes));
     Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
-        materialize_imported_store(root, config, job, |store| {
+        materialize_imported_store(root, config, carried, job, |store| {
             unzip_store_bytes(zip_bytes, store, job)
         })
     })
@@ -156,12 +164,16 @@ fn import_store_zip_path(
     if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }
-    materialize_imported_store(root, config, job, |store| {
+    let file = File::open(zip_path).map_err(|error| map_archive_open_error(zip_path, error))?;
+    let carried = carried_storage(buffered_zip_reader(file)?);
+    materialize_imported_store(root, config, carried, job, |store| {
         unzip_store_path(zip_path, store, job)
     })
 }
 
-/// Create a new vault by copying an existing ciphertext `store/` (or backup) tree.
+/// Create a new vault by copying an existing ciphertext `store/` (or backup)
+/// tree. A folder carries no settings Upriv reads, so its copy of the storage
+/// value is the default.
 fn import_store_tree(
     root: &VaultRoot,
     config: VaultConfig,
@@ -171,9 +183,20 @@ fn import_store_tree(
     if !src.host_is_dir() {
         return Err(UprivError::VaultPathNotFound(src.display().to_string()));
     }
-    materialize_imported_store(root, config, job, |store| {
+    materialize_imported_store(root, config, VaultStorage::default(), job, |store| {
         copy_ciphertext_tree(src, store, job)
     })
+}
+
+/// The storage value the `config.toml` beside a store zip's `store/` holds.
+/// A zip with no settings, or settings that do not read, carries the default.
+fn carried_storage<R: Read + Seek>(reader: R) -> VaultStorage {
+    read_store_zip_config(reader)
+        .ok()
+        .and_then(|(_, config)| config)
+        .and_then(|bytes| parse_embedded_settings(&bytes).ok())
+        .map(|settings| settings.config.storage)
+        .unwrap_or_default()
 }
 
 /// Locator `vaults/<id>/backups/<key>`: the backup a new vault is made from,
@@ -537,9 +560,13 @@ mode = "encrypted_dir"
         let id = test_job_id();
         let job = Job::start(&id).unwrap();
         crate::session::cancel_job(&id).unwrap();
-        let err = materialize_imported_store(&root, sample_config("copy", "Copy"), &job, |store| {
-            unzip_store_bytes(&zip, store, &job)
-        })
+        let err = materialize_imported_store(
+            &root,
+            sample_config("copy", "Copy"),
+            VaultStorage::default(),
+            &job,
+            |store| unzip_store_bytes(&zip, store, &job),
+        )
         .unwrap_err();
         assert!(matches!(
             job.settle::<()>(Err(err)),
@@ -607,5 +634,100 @@ mode = "encrypted_dir"
         .unwrap();
         assert_eq!(new_id, "notes-backup");
         close_vault(&root, "other").unwrap();
+    }
+
+    const PLAIN_WHOLE: VaultStorage = VaultStorage {
+        mode: crate::store::VaultStorageMode::UprivPlain,
+        plain_files: crate::store::VaultPlainFiles::Whole,
+    };
+
+    /// A closed plain-text vault `notes` of every file, and the store zip of it.
+    fn plain_vault_zip(root: &VaultRoot) -> Vec<u8> {
+        let mut config = sample_config("notes", "Notes");
+        config.storage = PLAIN_WHOLE;
+        create_vault(root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let exported =
+            crate::vault::export_store_zip(root, "notes", out.path(), &test_job_id()).unwrap();
+        crate::host_fs::read(&exported.path).unwrap()
+    }
+
+    fn sealed_storage(root: &VaultRoot, vault_id: &str) -> VaultStorage {
+        crate::store::open_store(root.vault_store_dir(vault_id).unwrap(), b"pass-word-ok")
+            .unwrap()
+            .index
+            .storage
+    }
+
+    #[test]
+    fn a_store_zip_copy_keeps_its_sealed_value_and_takes_the_copy_it_carries() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let zip = plain_vault_zip(&root);
+        let asked = sample_config("copy", "Copy");
+        assert_eq!(asked.storage, VaultStorage::default());
+        let id = import_store_zip(&root, asked, &zip, &test_job_id()).unwrap();
+        let config = crate::config::load_vault_config(root.vault_dir(&id).unwrap()).unwrap();
+        assert_eq!(config.storage, PLAIN_WHOLE);
+        assert_eq!(sealed_storage(&root, &id), PLAIN_WHOLE);
+    }
+
+    #[test]
+    fn a_backup_copy_takes_the_copy_its_zip_carries() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.storage = PLAIN_WHOLE;
+        config.backup.enabled = true;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let key = crate::vault::save_backup_now(&root, "notes", &test_job_id())
+            .unwrap()
+            .entry
+            .key;
+        let id = import_from_backup(
+            &root,
+            "notes",
+            &key,
+            sample_config("copy", "Copy"),
+            &Job::untracked(),
+        )
+        .unwrap();
+        let config = crate::config::load_vault_config(root.vault_dir(&id).unwrap()).unwrap();
+        assert_eq!(config.storage, PLAIN_WHOLE);
+        assert_eq!(sealed_storage(&root, &id), PLAIN_WHOLE);
+    }
+
+    #[test]
+    fn a_store_zip_with_no_settings_carries_the_default() {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("store/header/vault.header", Default::default())
+            .unwrap();
+        std::io::Write::write_all(&mut zip, b"header").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        assert_eq!(
+            carried_storage(std::io::Cursor::new(bytes)),
+            VaultStorage::default()
+        );
+        assert_eq!(
+            carried_storage(std::io::Cursor::new(b"not a zip".to_vec())),
+            VaultStorage::default()
+        );
+    }
+
+    #[test]
+    fn a_ciphertext_folder_copy_holds_the_default_copy() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.storage = PLAIN_WHOLE;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let source = root.vault_store_dir("notes").unwrap();
+        let id = import_store_from_archive_path(
+            &root,
+            sample_config("copy", "Copy"),
+            &source.display().to_string(),
+            &test_job_id(),
+        )
+        .unwrap();
+        let config = crate::config::load_vault_config(root.vault_dir(&id).unwrap()).unwrap();
+        assert_eq!(config.storage, VaultStorage::default());
+        assert_eq!(sealed_storage(&root, &id), PLAIN_WHOLE);
     }
 }

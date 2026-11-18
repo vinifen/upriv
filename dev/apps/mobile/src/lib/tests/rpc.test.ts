@@ -264,3 +264,88 @@ describe("job rpc", () => {
     ).rejects.toThrow("backup_export: expected path+size");
   });
 });
+
+describe("storage rpc", () => {
+  beforeEach(() => {
+    native.invoke.mockReset();
+  });
+
+  it("reads an open's storage reset, and none when the open sends none", async () => {
+    native.invoke
+      .mockResolvedValueOnce(
+        JSON.stringify({ ok: true, result: { switches: [], storageReset: "unsaved" } }),
+      )
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, result: { switches: [] } }));
+    const { rpcVaultOpen } = await import("../rpc");
+
+    await expect(rpcVaultOpen("notes", "pw", "job-1")).resolves.toEqual({
+      switches: [],
+      storageReset: "unsaved",
+    });
+    await expect(rpcVaultOpen("notes", "pw", "job-2")).resolves.toEqual({
+      switches: [],
+      storageReset: null,
+    });
+  });
+
+  it("asks where an unlock in a mode puts the files, and refuses an answer without an outcome", async () => {
+    native.invoke
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          ok: true,
+          result: {
+            outcome: "folder",
+            path: "/upriv-saf-tree/k/upriv-unlocked/Notes",
+            switches: [],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, result: {} }));
+    const { rpcVaultUnlockedDestination } = await import("../rpc");
+
+    await expect(rpcVaultUnlockedDestination("notes", "upriv_plain")).resolves.toMatchObject({
+      outcome: "folder",
+      path: "/upriv-saf-tree/k/upriv-unlocked/Notes",
+    });
+    const [method, params] = native.invoke.mock.calls[0];
+    expect(method).toBe("vault_unlocked_destination");
+    expect(JSON.parse(params)).toEqual({ id: "notes", mode: "upriv_plain" });
+    await expect(rpcVaultUnlockedDestination("notes", "upriv_plain")).rejects.toBeInstanceOf(
+      RpcError,
+    );
+  });
+
+  it("sends the password, both storage fields, and the job with a Storage change", async () => {
+    const storage = { mode: "upriv_plain" as const, plain_files: "whole" as const };
+    native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { storage } }));
+    const { rpcVaultChangeStorage } = await import("../rpc");
+
+    await expect(rpcVaultChangeStorage("notes", "pw", storage, "job-3")).resolves.toEqual({
+      storage,
+    });
+    const [method, params] = native.invoke.mock.calls[0];
+    expect(method).toBe("vault_change_storage");
+    expect(JSON.parse(params)).toEqual({
+      id: "notes",
+      password: "pw",
+      mode: "upriv_plain",
+      plainFiles: "whole",
+      job: "job-3",
+    });
+  });
+
+  it("refuses a Storage change answer without a known value", async () => {
+    native.invoke.mockResolvedValueOnce(
+      JSON.stringify({ ok: true, result: { storage: { mode: "sealed", plain_files: "chosen" } } }),
+    );
+    const { rpcVaultChangeStorage } = await import("../rpc");
+    await expect(
+      rpcVaultChangeStorage(
+        "notes",
+        "pw",
+        { mode: "encrypted_dir", plain_files: "chosen" },
+        "job-4",
+      ),
+    ).rejects.toThrow("vault_change_storage: expected the stored value");
+  });
+});

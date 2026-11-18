@@ -6,11 +6,13 @@ import {
   type VaultRuntimePatch,
   type VaultSettingsListPatch,
   type KdfUnlockPreset,
+  type StorageMode,
   type VaultListItem,
   type VaultGroup,
   type VaultListRootRow,
   applyVaultListHierarchySort,
   applyVaultSettingsListPatch,
+  applyVaultStorageMode,
   applyVaultUnlockPreset,
   remapVaultIdInGroups,
   mergeVaultListSnapshot,
@@ -274,6 +276,14 @@ export function useVaultListState(
     );
   }, []);
 
+  const updateVaultStorageMode = useCallback((vaultId: string, storageMode: StorageMode) => {
+    setVaults((current) =>
+      current.map((vault) =>
+        vault.id === vaultId ? applyVaultStorageMode(vault, storageMode) : vault,
+      ),
+    );
+  }, []);
+
   const updateVaultSettings = useCallback((vaultId: string, patch: VaultSettingsListPatch) => {
     const nextId = patch.id || vaultId;
     setVaults((current) => {
@@ -474,6 +484,7 @@ export function useVaultListState(
     setVaultRuntimeState,
     updateVaultSettings,
     updateVaultUnlockPreset,
+    updateVaultStorageMode,
     markVaultsHidden,
     setGroupCollapsed,
     setGroups,

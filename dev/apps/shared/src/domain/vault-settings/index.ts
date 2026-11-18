@@ -10,6 +10,7 @@ export type {
   VaultSettingsConfig,
   VaultSettingsListPatch,
   VaultSettingsSectionId,
+  VaultStorage,
   WipePattern,
 } from "./types";
 export {
@@ -18,7 +19,7 @@ export {
   CONFIG_TOML_KDF_ANNOTATION,
   CONFIG_TOML_GROUPS_ANNOTATION,
   compressionPresetFromSevenZip,
-  createVaultChoosesKdf,
+  createVaultChoosesStoreSettings,
   DEFAULT_KDF_UNLOCK_PRESET,
   DEFAULT_SEVEN_ZIP,
   KDF_UNLOCK_PRESETS,
@@ -28,17 +29,16 @@ export {
   parseKdfUnlockPreset,
   normalizeSevenZipSection,
   normalizeVaultSettingsConfig,
-  patchStorageMode,
   sevenZipPatchFromCompressionPreset,
   VAULT_SETTINGS_SECTIONS,
   vaultSettingsEqual,
   vaultSettingsEqualIgnoringIdentity,
-  vaultSettingsSectionsForStorage,
 } from "./types";
 export {
   vaultSettingsToListPatch,
   vaultSettingsIdentityListPatch,
   applyVaultSettingsListPatch,
+  applyVaultStorageMode,
   applyVaultUnlockPreset,
   remapVaultIdInGroups,
 } from "./listPatch";
@@ -50,7 +50,6 @@ export {
   vaultRowControls,
   vaultSettingsMenuEntries,
   type VaultRowControls,
-  vaultSettingsPreferenceSections,
   type VaultSettingsAreaId,
   type VaultSettingsMenuEntry,
 } from "./areas";
@@ -67,5 +66,11 @@ export {
   changeKdfFormIsDowngrade,
   changePasswordFormCanSubmit,
   changePasswordFormIsDirty,
+  changeStorageFormCanSubmit,
+  changeStorageFormIsDirty,
 } from "./forms";
-export type { ChangeKdfFieldsState, ChangePasswordFieldsState } from "./forms";
+export type {
+  ChangeKdfFieldsState,
+  ChangePasswordFieldsState,
+  ChangeStorageFieldsState,
+} from "./forms";

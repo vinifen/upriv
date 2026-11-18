@@ -7,13 +7,16 @@ import {
   type JobService,
   type PasswordChangeFinishResult,
   type PasswordChangeResult,
+  type StorageChangeResult,
   type UnlockRamChangeResult,
   type VaultSecurityService,
 } from "@upriv/shared";
 import {
   usePasswordChangeJob,
+  useStorageChangeJob,
   useUnlockRamChangeJob,
   type PasswordChangeJobEvents,
+  type StorageChangeJobEvents,
   type UnlockRamChangeJobEvents,
 } from "@upriv/shared/react";
 
@@ -37,6 +40,7 @@ function security(change: Partial<VaultSecurityService>): VaultSecurityService {
     changePassword: vi.fn(),
     finishPasswordChange: vi.fn(),
     changeKdfPreset: vi.fn(),
+    changeStorage: vi.fn(),
     updateKeyCopies: vi.fn(),
     keyStatus: vi.fn(),
     rebuildIndex: vi.fn(),
@@ -209,5 +213,56 @@ describe("useUnlockRamChangeJob", () => {
     await act(async () => run.reject(new RpcError(JOB_ERROR_CODES.CANCELLED, "stopped")));
     await waitFor(() => expect(result.current.job).toBeNull());
     expect(on.onCancelled).toHaveBeenCalledWith({ vaultId: "notes", nextPreset: "64mib" });
+  });
+});
+
+describe("useStorageChangeJob", () => {
+  const PLAIN = { mode: "upriv_plain", plain_files: "whole" } as const;
+
+  function storageEvents() {
+    return {
+      onChanged: vi.fn(),
+      onFailed: vi.fn(),
+      onCancelled: vi.fn(),
+      onStopRefused: vi.fn(),
+    } satisfies StorageChangeJobEvents;
+  }
+
+  it("sends the chosen value and the password as a job and reports what it stored", async () => {
+    const run = deferred<StorageChangeResult>();
+    const service = security({ changeStorage: vi.fn(() => run.promise) });
+    const on = storageEvents();
+    const { result } = renderHook(() => useStorageChangeJob(service, jobs(), on));
+
+    act(() => {
+      expect(result.current.changeStorage("notes", "pw", PLAIN)).toBe(true);
+    });
+    expect(service.changeStorage).toHaveBeenCalledWith("notes", {
+      password: "pw",
+      storage: PLAIN,
+      job: result.current.job?.id,
+    });
+    await act(async () => run.resolve({ storage: PLAIN }));
+    await waitFor(() => expect(result.current.job).toBeNull());
+    expect(on.onChanged).toHaveBeenCalledWith(
+      { storage: PLAIN },
+      { vaultId: "notes", storage: PLAIN },
+    );
+  });
+
+  it("reports a stop during the unlock as a stop", async () => {
+    const run = deferred<StorageChangeResult>();
+    const on = storageEvents();
+    const { result } = renderHook(() =>
+      useStorageChangeJob(security({ changeStorage: vi.fn(() => run.promise) }), jobs(), on),
+    );
+
+    act(() => {
+      result.current.changeStorage("notes", "pw", PLAIN);
+    });
+    act(() => result.current.stop());
+    await act(async () => run.reject(new RpcError(JOB_ERROR_CODES.CANCELLED, "stopped")));
+    await waitFor(() => expect(result.current.job).toBeNull());
+    expect(on.onCancelled).toHaveBeenCalledWith({ vaultId: "notes", storage: PLAIN });
   });
 });

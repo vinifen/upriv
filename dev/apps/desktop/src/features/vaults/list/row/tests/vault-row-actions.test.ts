@@ -198,6 +198,7 @@ describe("Delete vault in the Settings menu", () => {
       "modal.settings.area.preferences",
       "modal.settings.area.password",
       "modal.settings.area.kdf",
+      "modal.settings.area.storage",
       "modal.settings.area.group",
       "modal.delete_vault.title",
     ]);

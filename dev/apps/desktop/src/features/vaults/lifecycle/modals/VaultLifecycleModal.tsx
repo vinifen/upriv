@@ -7,14 +7,18 @@ import {
   offersVaultRebuild,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
+  unlockFolderLine,
   vaultRowWorkClock,
   VAULT_ERROR_CODES,
+  type UnlockedDestination,
   type VaultListItem,
   type VaultRowWork,
 } from "@upriv/shared";
+import { useUnlockedDestination } from "@upriv/shared/react";
+import { rpcVaultUnlockedDestination } from "@/lib/rpc";
 import { useVaultLifecycleService } from "@/platform/services";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
-import { SettingsField } from "@/components/settings";
+import { SettingsField, UnlockedFolderLineView } from "@/components/settings";
 
 const lifecyclePasswordClass =
   "w-full rounded-lg border border-transparent bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none focus:border-[var(--accent)] sm:px-3 sm:py-2.5";
@@ -29,6 +33,11 @@ interface VaultLifecycleModalProps {
   verifyErrorKey?: I18nKey | null;
   /** Prefill after a failed attempt — the field, not the session RAM map. */
   initialPassword?: string;
+  /**
+   * Where the files will appear, when the step before the window looked it
+   * up. Without it the window looks it up itself and fills the line in.
+   */
+  destination?: UnlockedDestination | null;
   onClose: () => void;
   onConfirm: (password: string) => void;
   onStop: () => void;
@@ -43,7 +52,9 @@ interface VaultLifecycleModalProps {
  * Unlock password dialog. Lock starts the close without a dialog. When the
  * vault's index or header is lost, the dialog offers the rebuild from the
  * vault's own data. A password change that did not finish asks for the new
- * password.
+ * password. Before the password it names where the files will appear: a
+ * plain-text vault's folder, or an encrypted vault's mount point while its
+ * folder is on.
  */
 export function VaultLifecycleModal({
   vault,
@@ -53,6 +64,7 @@ export function VaultLifecycleModal({
   work = null,
   verifyErrorKey = null,
   initialPassword,
+  destination = null,
   onClose,
   onConfirm,
   onStop,
@@ -63,6 +75,14 @@ export function VaultLifecycleModal({
   const passwordId = useId();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const mode = vault?.storageMode ?? "encrypted_dir";
+  const lookedUp = useUnlockedDestination(
+    rpcVaultUnlockedDestination,
+    vault?.id ?? null,
+    mode,
+    open && destination === null,
+  );
+  const folderAnswer = destination ?? lookedUp.answer;
 
   useEffect(() => {
     if (!open) {
@@ -139,6 +159,11 @@ export function VaultLifecycleModal({
         {vault.passwordChange === "pending" && error === null ? (
           <p className="text-sm text-on-surface">{t("unlock.password_change_pending")}</p>
         ) : null}
+        <UnlockedFolderLineView
+          checking={destination === null && lookedUp.checking}
+          line={folderAnswer ? unlockFolderLine(folderAnswer, mode) : null}
+          checkingKey="unlock.folder.checking"
+        />
         <div className="space-y-2">
           <SettingsField label={t("unlock.password")} htmlFor={passwordId}>
             <PasswordInput

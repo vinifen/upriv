@@ -56,6 +56,7 @@ export type { DataFolderApplyRequest, VaultRootService } from "./vault-root/Vaul
 export type {
   ChangeVaultKdfInput,
   ChangeVaultPasswordInput,
+  ChangeVaultStorageInput,
   FinishPasswordChangeInput,
   RebuildVaultInput,
   VaultSecurityService,

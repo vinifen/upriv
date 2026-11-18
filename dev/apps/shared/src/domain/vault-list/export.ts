@@ -236,6 +236,7 @@ export function vaultCanExport(
   if (pipeline.backupJobVaultIds?.includes(vault.id)) return false;
   if (pipeline.passwordChangeVaultIds?.includes(vault.id)) return false;
   if (pipeline.kdfChangeVaultIds?.includes(vault.id)) return false;
+  if (pipeline.storageChangeVaultIds?.includes(vault.id)) return false;
   if (pipeline.deletingVaultIds?.includes(vault.id)) return false;
   return (
     vault.session !== "open" &&

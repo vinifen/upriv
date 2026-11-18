@@ -2,6 +2,8 @@ export { VaultSettingsSection } from "./VaultSettingsSection";
 export { IntegerInput } from "./IntegerInput";
 export { VaultChangePasswordFields } from "./VaultChangePasswordFields";
 export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
+export { VaultChangeStorageFields } from "./VaultChangeStorageFields";
+export { UnlockedFolderLineView } from "./UnlockedFolderLineView";
 export { UnlockedFolderDriverNotice, useUnlockedFolderDriver } from "./unlockedFolderDriver";
 export {
   PolicyRadioOption,

@@ -5,6 +5,7 @@ import {
   applyPendingCreateGroupEffect,
   applyVaultListHierarchySort,
   applyVaultSettingsListPatch,
+  applyVaultStorageMode,
   applyVaultUnlockPreset,
   buildCreatingVaultListItem,
   buildPendingCreateGroupEffect,
@@ -64,6 +65,7 @@ import {
   type VaultExportRun,
   type VaultGroup,
   type KdfUnlockPreset,
+  type StorageMode,
   type KeyCopies,
   type VaultListItem,
   type VaultRuntimePatch,
@@ -90,6 +92,7 @@ import {
   useFileManagerSelector,
   useOperationLimit,
   usePasswordChangeJob,
+  useStorageChangeJob,
   useToast,
   useUnfinishedSweep,
   useUnlockRamChangeJob,
@@ -98,6 +101,7 @@ import {
   useVaultExportJob,
   useVaultRebuildJob,
   type PasswordChangeOutcome,
+  type StorageChangeOutcome,
   type UnlockRamChangeOutcome,
 } from "@upriv/shared/react";
 import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens";
@@ -377,6 +381,18 @@ export function useVaultListScreen() {
     [setVaults],
   );
 
+  /** The row follows the storage value a change sealed, or an open reset. */
+  const setVaultStorageMode = useCallback(
+    (vaultId: string, storageMode: StorageMode) => {
+      setVaults((prev) =>
+        prev.map((vault) =>
+          vault.id === vaultId ? applyVaultStorageMode(vault, storageMode) : vault,
+        ),
+      );
+    },
+    [setVaults],
+  );
+
   const lifecycle = useVaultLifecycle({
     vaults,
     setVaultRuntimeState,
@@ -389,6 +405,7 @@ export function useVaultListScreen() {
     onOpenFileManager: openFromVault,
     settingsPersistVaultIdsRef,
     blockOpenVaultIdsRef,
+    onStorageReset: (vaultId) => setVaultStorageMode(vaultId, "encrypted_dir"),
   });
 
   useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch);
@@ -529,7 +546,7 @@ export function useVaultListScreen() {
   };
   const changeSeqRef = useRef(0);
   /** The settings window shows this screen of the vault, so it shows the outcome itself. */
-  const settingsShows = (vaultId: string, area: "password" | "kdf") =>
+  const settingsShows = (vaultId: string, area: "password" | "kdf" | "storage") =>
     modals.settingsVault?.id === vaultId && modals.settingsArea === area;
   /** A change's toast, saying when the key copies of its files wait for the next open. */
   const changedToast = (
@@ -598,6 +615,29 @@ export function useVaultListScreen() {
     onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
   });
   const unlockRamJob = unlockRamChange.job;
+  const [storageOutcome, setStorageOutcome] = useState<StorageChangeOutcome | null>(null);
+  /** Hand the settings window how a Storage change ended. */
+  const storageEnded = (outcome: Omit<StorageChangeOutcome, "seq">) =>
+    setStorageOutcome({ ...outcome, seq: ++changeSeqRef.current });
+  const storageChange = useStorageChangeJob(securityService, jobs, {
+    onChanged: (result, target) => {
+      setVaultStorageMode(target.vaultId, result.storage.mode);
+      show(t("toast.storage_changed", { name: vaultName(target.vaultId) }));
+      storageEnded({ ...target, result, error: null, stopped: false });
+    },
+    onFailed: (error, target) => {
+      storageEnded({ ...target, result: null, error, stopped: false });
+      if (!settingsShows(target.vaultId, "storage")) {
+        show(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
+      }
+    },
+    onCancelled: (target) => {
+      storageEnded({ ...target, result: null, error: null, stopped: true });
+      show(t("toast.storage_change_stopped", { name: vaultName(target.vaultId) }));
+    },
+    onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
+  });
+  const storageJob = storageChange.job;
   const rebuild = useVaultRebuildJob(securityService, jobs, {
     onRebuilt: (result, { vaultId }, password) => {
       // The header and the index are sealed and recorded: the vault is closed, not in recovery.
@@ -675,6 +715,7 @@ export function useVaultListScreen() {
       exportJob?.vaultId,
       passwordJob?.vaultId,
       unlockRamJob?.vaultId,
+      storageJob?.vaultId,
       rebuildJob?.vaultId,
       backupJob.job?.vaultId,
       runningDelete?.vaultId,
@@ -694,6 +735,7 @@ export function useVaultListScreen() {
     rebuildJob,
     runningDelete,
     setLifecycleRequest,
+    storageJob,
     unlockRamJob,
   ]);
 
@@ -718,7 +760,14 @@ export function useVaultListScreen() {
   const backupNowJob = backupJob.job;
   const pipelineStatus = useMemo(() => {
     const rowWork = { ...lifecycle.rowWork };
-    for (const job of [exportJob, passwordJob, unlockRamJob, rebuildJob, backupNowJob]) {
+    for (const job of [
+      exportJob,
+      passwordJob,
+      unlockRamJob,
+      storageJob,
+      rebuildJob,
+      backupNowJob,
+    ]) {
       if (!job) continue;
       rowWork[job.vaultId] = vaultRowJobWork({
         startedAt: job.startedAt,
@@ -747,6 +796,7 @@ export function useVaultListScreen() {
       ),
       passwordChangeVaultIds: passwordJob ? [passwordJob.vaultId] : undefined,
       kdfChangeVaultIds: unlockRamJob ? [unlockRamJob.vaultId] : undefined,
+      storageChangeVaultIds: storageJob ? [storageJob.vaultId] : undefined,
       deletingVaultIds: runningDelete ? [runningDelete.vaultId] : undefined,
       deleteNowVaultIds: deleteNowIds,
       creatingVaultIds: [...lifecycle.creatingVaultIds],
@@ -774,6 +824,7 @@ export function useVaultListScreen() {
     passwordJob,
     rebuildJob,
     runningDelete,
+    storageJob,
     unlockRamJob,
   ]);
 
@@ -784,6 +835,7 @@ export function useVaultListScreen() {
       if (exportJob?.vaultId === vaultId) vaultExport.stop();
       else if (passwordJob?.vaultId === vaultId) passwordChange.stop();
       else if (unlockRamJob?.vaultId === vaultId) unlockRamChange.stop();
+      else if (storageJob?.vaultId === vaultId) storageChange.stop();
       else if (rebuildJob?.vaultId === vaultId) rebuild.stop();
       else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
       else stopVaultWork(vaultId);
@@ -797,6 +849,8 @@ export function useVaultListScreen() {
       rebuild,
       rebuildJob,
       stopVaultWork,
+      storageChange,
+      storageJob,
       unlockRamChange,
       unlockRamJob,
       vaultExport,
@@ -1658,6 +1712,10 @@ export function useVaultListScreen() {
     unlockRamOutcome,
     changeKdf: unlockRamChange.changeKdf,
     stopUnlockRamChange: unlockRamChange.stop,
+    storageJob,
+    storageOutcome,
+    changeStorage: storageChange.changeStorage,
+    stopStorageChange: storageChange.stop,
     deleteVault,
     runningDelete,
     startVaultDelete,

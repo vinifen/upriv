@@ -66,9 +66,9 @@ Differentiators vs. manual 7-Zip use:
 
 **`encrypted_dir` RAM:** decrypted content is served through the virtual mount / session buffers. Open, edit, or close may **fail** if RAM is insufficient — never silently spill plaintext to ordinary disk. UI: `warning.encrypted_dir_ram`. Prefer **`upriv_plain`**, smaller vaults, or more RAM when hardware cannot meet this limit.
 
-The user chooses the mode in `vaults/<id>/config.toml` (`[storage] mode`). UI warnings: `warning.encrypted_dir_ram`, `warning.upriv_plain`.
+The user chooses the mode when creating the vault, and changes it on the vault's **Storage** screen with the vault's password, while the vault is closed (RF-43e). The choice is sealed in the vault's index, where only the password changes it; `vaults/<id>/config.toml` `[storage]` holds a copy for what shows before the password. UI warnings: `warning.encrypted_dir_ram`, `warning.upriv_plain`.
 
-`[storage] plain_files` says what a plaintext folder holds: `chosen` (default, **Only files I choose**) or `whole`. It is a choice inside `upriv_plain`, not a third mode.
+`plain_files` says what a plaintext folder holds: `chosen` (default, **Only files I choose**) or `whole`. It is a choice inside `upriv_plain`, not a third mode, and it is sealed with the mode.
 
 **Helper (shared domain):** `storageModeIsPlaintext` = `upriv_plain`. Both modes keep `store/` at rest and both can export.
 
@@ -118,7 +118,7 @@ encrypted_dir / upriv_plain:
 
 | Step | What |
 |-------|--------|
-| 1 | **Open:** the vault's unlocked folder on this device (asked before the password while nothing is selected; a folder that fails hands over to the next one with a toast). With `plain_files = "chosen"` it starts empty, so opening takes about as long as RAM mode. With `"whole"`, stream `store/` into it. No FUSE/WinFsp. |
+| 1 | **Open:** the vault's unlocked folder on this device, named in the unlock window before the password (asked before the password while nothing is selected; a folder that fails hands over to the next one with a toast). With `plain_files = "chosen"` it starts empty, so opening takes about as long as RAM mode. With `"whole"`, stream `store/` into it. No FUSE/WinFsp. |
 | 2 | **Edit:** what is in the folder is the working copy of those files. `store/` stays the source of truth, and the in-app file manager reads, edits, deletes, and finds every file, sent or not. Outside edits are saved after the folder is quiet, on a two-minute pass, and on close. Deleting a sent file from the folder deletes it from the vault for good, with no extra step. **Remove from folder** wipes the folder's copy and keeps the file. |
 | 3 | **Lock:** the same triggers as RAM mode. Lock starts the close immediately. A clean wipe removes the folder. |
 
@@ -279,9 +279,10 @@ encrypted_dir / upriv_plain:
 | RF-42 | Plaintext close does that overwrite; only Close now (RF-42b) skips it. Pass count is a hidden default of 1, not a screen | P1 |
 | RF-42b | **Close now** closes one open vault with no backup, from More options below Note, on desktop and mobile. `store/` is sealed, the keys dropped, and the mount released. An `upriv_plain` folder gets no closing pass and no overwrite: changes the vault has not saved are lost, and file bytes stay on the disk until it reuses the space. It asks first (global setting, on by default, with Don't ask again); an unsaved editor tab always asks. A close already running or waiting offers it in the same menu: what is left of the final sync, the backup, and the overwrite stops, and the seal finishes. The quit dialog offers the same close for every open vault, limited to 30 s | P1 |
 | RF-43 | Wipe also on recovery **Remove the folder** (`upriv_plain`). The wipe runs on the row as **Recovering…** with its elapsed time and **Stop**, with no time limit; the rest of the app stays usable | P1 |
-| RF-43b | **Only files I choose** (`[storage] plain_files`, default on) on the plain-text option, in create and vault settings, changes only while the vault is closed or in recovery. On: the folder starts empty on every open; **Send to folder** and **Remove from folder** in the file manager move a file or a whole folder in and out, and each explorer row shows what the folder holds. Off: every open writes the whole vault there. Other apps see only what is in the folder. | P1 |
+| RF-43b | **Only files I choose** (`plain_files`, default on) on the plain-text option, in create and on the Storage screen, changes only with the vault closed and its password (RF-43e). On: the folder starts empty on every open; **Send to folder** and **Remove from folder** in the file manager move a file or a whole folder in and out, and each explorer row shows what the folder holds. Off: every open writes the whole vault there. Other apps see only what is in the folder. | P1 |
 | RF-43c | The file manager explorer finds files and folders by name at any depth, in both storage modes, on desktop and mobile. The search button, right after the Explorer label and apart from the other buttons, opens and closes the search bar. The bar starts closed. Each vault's layout remembers the bar and the search text, also across closing and reopening the vault. The search keeps filtering the explorer while the bar is closed, and the button says so. Folders in the results collapse and open for that search only; that is never saved and leaves the vault's expanded folders as they were. | P2 |
 | RF-43d | A file the viewer cannot hold (over the preview cap, or more than free RAM holds) opens from the disk instead on `upriv_plain`: when the person opens it, a vault of chosen files sends it to the folder, and the notice offers **Show in unlocked folder**. A tab restored with the vault writes nothing until the person presses **Send to folder**. An `encrypted_dir` vault never writes plaintext for this; with a mounted folder the notice offers that folder. | P2 |
+| RF-43e | **Storage** screen of vault settings (the row's Settings menu, after Unlock RAM): Encrypted or Plain text, **Only files I choose** under Plain text with a note naming the folder its files would be written to on this device (and the removable, network, or cloud warning), and the vault's password. The vault must be closed; the change is a job with its progress and Stop until its last step, and it converts no file. The mode and Only files I choose are sealed in the vault's index; `config.toml` holds a copy, and editing that copy never turns plain text on: when the two differ, the next open opens the vault encrypted, mounts no unlocked folder, sets both back to Encrypted with the vault's encrypted unlocked folder switch off, and says so in a toast. A missing or unknown value reads as Encrypted and never keeps the vault from listing or opening. The unlock window names the folder before the password: a plain-text vault's always, an encrypted vault's on desktop while its folder is on. A copy of a vault's store (a store `.zip` import, create-from-backup) keeps its mode, shown locked in the wizard; a rebuild of the tree opens encrypted. | P1 |
 | RF-44 | Document limit: SSD/flash **do not** guarantee physical wipe in exception mode | P1 |
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
@@ -473,6 +474,7 @@ Opened by **`action.settings`** on vault row.
 - **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**, optional **`password_hint`**. **Not shown:** `id` (folder slug; migrates when display name normalizes).
 - **`[security]` in UI:** nothing. Change password is the Password area (vault closed). Plaintext close overwrites the open folder; only Close now skips that (RF-42b). **Not shown:** `wipe_passes`, `wipe_pattern`.
 - **`[seven_zip]` in UI:** compression preset (**none / low / medium / high**) + `encrypt_file_names` (`method`/`solid` = defaults; level derived from preset).
+- **`[storage]` in UI:** nothing in the preferences, and a save never changes it. The mode and **Only files I choose** are the **Storage** screen of the row's Settings menu (RF-43e), with the password.
 - **No delete in vault settings.** **Delete vault** is the last entry of the row's Settings menu and opens a window of its own: the person types the **vault ID** to confirm, and the delete (a job) removes the store, the config entries, and the backups in the data folder, overwriting each file's key copy before it goes. A switch, off by default and shown only for a vault with backups outside the data folder, removes those too: the vault goes first, then the zips Upriv wrote, then the folders left empty. A drive that cannot be reached does not stop the delete; a toast says the backups stayed. While it runs the window shows its bar and elapsed time, and **Delete now** in the row's More options ends it with no overwrite after a confirmation. A delete cut short leaves the row `deleting`, with **Continue** as its main button.
 
 ### 3.7.4 Interface requirements (RF-UI)
@@ -512,7 +514,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 
 **Warnings:**
 
-- **RAM capacity:** show **`warning.encrypted_dir_ram`** when `encrypted_dir` (settings + create wizard). Insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
+- **RAM capacity:** show **`warning.encrypted_dir_ram`** when `encrypted_dir` (the Storage screen + create wizard). Insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
 - **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **not recommended**. Lock starts the close immediately and does not ask for the password.
 
 ---
@@ -661,10 +663,10 @@ Upriv = **vault UX** + **universal 7z container**.
 
 Open: **`store` → `session`** (or **`plain`**). Close: flush back to **`store`**.
 
-`storage.mode` in TOML:
+The storage mode (sealed in the index, copied to `[storage] mode` in TOML):
 
-| `storage.mode` | Layers used |
-|----------------|----------------|
+| Mode | Layers used |
+|------|-------------|
 | `encrypted_dir` | `store` + `session` (default) |
 | `upriv_plain` | `store` + `plain` |
 

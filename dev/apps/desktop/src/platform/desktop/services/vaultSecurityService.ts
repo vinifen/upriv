@@ -2,6 +2,7 @@ import type { VaultSecurityService } from "@upriv/shared";
 import {
   rpcVaultChangeKdf,
   rpcVaultChangePassword,
+  rpcVaultChangeStorage,
   rpcVaultKeyCopiesUpdate,
   rpcVaultKeyStatus,
   rpcVaultPasswordChangeFinish,
@@ -10,8 +11,8 @@ import {
 
 /**
  * Desktop → daemon `vault_change_password`, `vault_password_change_finish`,
- * `vault_change_kdf`, `vault_key_copies_update`, `vault_key_status`, and
- * `vault_rebuild`.
+ * `vault_change_kdf`, `vault_change_storage`, `vault_key_copies_update`,
+ * `vault_key_status`, and `vault_rebuild`.
  */
 export const desktopVaultSecurityService: VaultSecurityService = {
   changePassword(vaultId, input) {
@@ -30,6 +31,10 @@ export const desktopVaultSecurityService: VaultSecurityService = {
 
   changeKdfPreset(vaultId, input) {
     return rpcVaultChangeKdf(vaultId, input.currentPassword, input.nextPreset, input.job);
+  },
+
+  changeStorage(vaultId, input) {
+    return rpcVaultChangeStorage(vaultId, input.password, input.storage, input.job);
   },
 
   updateKeyCopies(vaultId, job) {

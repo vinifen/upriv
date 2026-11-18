@@ -16,6 +16,7 @@ import type {
   PlainLeftover,
   PlainPlaceChoice,
   PlainRecoveryAction,
+  UnlockedDestination,
   VaultUnlockedChoice,
 } from "@upriv/shared";
 
@@ -27,6 +28,8 @@ interface VaultLifecycleLayerProps {
   lifecycleWork?: VaultRowWork | null;
   lifecycleVerifyErrorKey?: I18nKey | null;
   lifecycleFieldPassword?: string;
+  /** Where the files will appear, when the step before the window looked it up. */
+  lifecycleDestination?: UnlockedDestination | null;
   onLifecycleClose: () => void;
   onLifecycleConfirm: (password: string) => void;
   onLifecycleStop: () => void;
@@ -85,6 +88,7 @@ export function VaultLifecycleLayer({
   lifecycleWork = null,
   lifecycleVerifyErrorKey = null,
   lifecycleFieldPassword,
+  lifecycleDestination = null,
   onLifecycleClose,
   onLifecycleConfirm,
   onLifecycleStop,
@@ -139,6 +143,7 @@ export function VaultLifecycleLayer({
         work={lifecycleWork}
         verifyErrorKey={lifecycleVerifyErrorKey}
         initialPassword={lifecycleFieldPassword}
+        destination={lifecycleDestination}
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
         onStop={onLifecycleStop}

@@ -20,17 +20,18 @@ use upriv_core::logging::{
     vault_root_was_ready, LogLevel, Logger,
 };
 use upriv_core::{
-    change_vault_kdf, change_vault_password, close_state, close_vault, close_vault_auto,
-    close_vault_now, create_vault_as_job, create_vault_group_with_sort, data_folder_lost,
-    delete_vault_group, discover_bootstrap_root, finish_import_session, finish_password_change,
-    hurry_close, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
-    load_vault_groups, open_import_session, rebuild_vault, rename_vault,
+    change_vault_kdf, change_vault_password, change_vault_storage, close_state, close_vault,
+    close_vault_auto, close_vault_now, create_vault_as_job, create_vault_group_with_sort,
+    data_folder_lost, delete_vault_group, discover_bootstrap_root, finish_import_session,
+    finish_password_change, hurry_close, known_vault_ids, list_vaults, load_app_settings,
+    load_vault_config, load_vault_groups, open_import_session, rebuild_vault, rename_vault,
     reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session, suggested_vault_root, update_key_copies,
     update_vault_group, vault_disk_usage, vault_key_status, vault_list_item, AppSettings,
     CloseState, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
     ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup, VaultListItem,
-    VaultRootBootstrapPrefs, VaultRootDirStatus, VaultStorageMode, VaultWelcome,
+    VaultPlainFiles, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultStorage, VaultStorageMode,
+    VaultWelcome,
 };
 
 mod data_folder_ops;
@@ -125,7 +126,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_list" => vault_list(),
         "vault_create" => vault_create(req.params),
         "vault_open" => plain_ops::vault_open(req.params),
-        "vault_plain_destination" => plain_ops::vault_plain_destination(req.params),
+        "vault_unlocked_destination" => folder_ops::vault_unlocked_destination(req.params),
         "vault_plain_leftover" => plain_ops::vault_plain_leftover(req.params),
         "vault_plain_remove" => plain_ops::vault_plain_remove(req.params),
         "vault_plain_sync" => plain_ops::vault_plain_sync(req.params),
@@ -140,6 +141,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_change_password" => vault_change_password(req.params),
         "vault_password_change_finish" => vault_password_change_finish(req.params),
         "vault_change_kdf" => vault_change_kdf(req.params),
+        "vault_change_storage" => vault_change_storage(req.params),
         "vault_key_copies_update" => vault_key_copies_update(req.params),
         "vault_rebuild" => vault_rebuild(req.params),
         "vault_close_phase" => vault_close_phase(req.params),
@@ -928,13 +930,6 @@ fn vault_group_repair() -> RpcResponse {
     }
 }
 
-fn storage_mode_wire(mode: VaultStorageMode) -> &'static str {
-    match mode {
-        VaultStorageMode::EncryptedDir => "encrypted_dir",
-        VaultStorageMode::UprivPlain => "upriv_plain",
-    }
-}
-
 fn vault_list_item_json(item: &VaultListItem) -> Value {
     let unlock_preset = item
         .unlock_preset
@@ -943,7 +938,7 @@ fn vault_list_item_json(item: &VaultListItem) -> Value {
         "id": item.id,
         "displayName": item.display_name,
         "session": item.session,
-        "storageMode": storage_mode_wire(item.storage_mode),
+        "storageMode": item.storage_mode.as_str(),
         "order": item.order,
         "passwordHint": item.password_hint,
         "hidden": item.hidden,
@@ -1178,6 +1173,45 @@ fn vault_change_kdf(params: Value) -> RpcResponse {
         parsed.id.trim(),
         parsed.current_password.as_bytes(),
         parsed.unlock_preset,
+        &parsed.job,
+    ) {
+        Ok(changed) => ok(json!(changed)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// The two fields are read strictly here, unlike a stored value: a request
+/// with a value Upriv does not know is refused, never read as encrypted.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultChangeStorageParams {
+    id: String,
+    password: SecretString,
+    mode: VaultStorageMode,
+    plain_files: VaultPlainFiles,
+    job: String,
+}
+
+/// Seal a closed vault's storage value with its password, then copy it into
+/// `config.toml`.
+fn vault_change_storage(params: Value) -> RpcResponse {
+    let parsed: VaultChangeStorageParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let storage = VaultStorage {
+        mode: parsed.mode,
+        plain_files: parsed.plain_files,
+    };
+    match change_vault_storage(
+        &root,
+        parsed.id.trim(),
+        parsed.password.as_bytes(),
+        storage,
         &parsed.job,
     ) {
         Ok(changed) => ok(json!(changed)),
@@ -1668,6 +1702,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultBusy => ("vault_busy", None),
         upriv_core::UprivError::PasswordUnchanged => ("password_unchanged", None),
         upriv_core::UprivError::UnlockRamUnchanged => ("unlock_ram_unchanged", None),
+        upriv_core::UprivError::StorageUnchanged => ("storage_unchanged", None),
         upriv_core::UprivError::JobCancelled => ("job_cancelled", None),
         upriv_core::UprivError::JobIdInvalid => ("invalid_request", None),
         upriv_core::UprivError::JobNotStoppable => ("job_not_stoppable", None),
@@ -1704,6 +1739,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             | "vault_unlock_blocked"
             | "password_unchanged"
             | "unlock_ram_unchanged"
+            | "storage_unchanged"
             | "job_cancelled"
             | "job_not_stoppable" => LogLevel::Warn,
             _ => LogLevel::Error,
@@ -1914,7 +1950,7 @@ mod contract_tests {
         "vault_list",
         "vault_create",
         "vault_open",
-        "vault_plain_destination",
+        "vault_unlocked_destination",
         "vault_plain_leftover",
         "vault_plain_remove",
         "vault_plain_sync",
@@ -1929,6 +1965,7 @@ mod contract_tests {
         "vault_change_password",
         "vault_password_change_finish",
         "vault_change_kdf",
+        "vault_change_storage",
         "vault_key_copies_update",
         "vault_rebuild",
         "vault_close_phase",
@@ -2321,7 +2358,7 @@ mod contract_tests {
                 hidden: false,
                 password_hint: String::new(),
             },
-            storage: upriv_core::VaultStorageSection::default(),
+            storage: upriv_core::VaultStorage::default(),
             unlocked_folder: Default::default(),
             backup: Default::default(),
             security: Default::default(),

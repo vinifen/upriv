@@ -4,9 +4,8 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    open_vault_as_job, plain_deletions, plain_destination, plain_leftover, plain_send,
-    plain_status, plain_sync, plain_unsend, remove_plain_leftover, vault_held_elsewhere,
-    wait_for_previous_app,
+    open_vault_as_job, plain_deletions, plain_leftover, plain_send, plain_status, plain_sync,
+    plain_unsend, remove_plain_leftover, vault_held_elsewhere, wait_for_previous_app,
 };
 
 use super::secret::SecretString;
@@ -88,21 +87,6 @@ pub(super) fn vault_open(params: Value) -> RpcResponse {
     };
     match open_vault_as_job(&root, parsed.id.trim(), password, &parsed.job) {
         Ok(opened) => ok(serde_json::to_value(opened).unwrap_or(json!(null))),
-        Err(error) => map_core_err(error),
-    }
-}
-
-pub(super) fn vault_plain_destination(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match plain_destination(&root, parsed.id.trim()) {
-        Ok(dest) => ok(serde_json::to_value(dest).unwrap_or(json!(null))),
         Err(error) => map_core_err(error),
     }
 }

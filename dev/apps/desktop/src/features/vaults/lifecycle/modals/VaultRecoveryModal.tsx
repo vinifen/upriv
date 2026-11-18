@@ -2,7 +2,6 @@ import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   plainRecoveryOffers,
-  storageModeIsPlaintext,
   type PlainLeftover,
   type PlainRecoveryAction,
   type VaultListItem,
@@ -30,8 +29,8 @@ export function VaultRecoveryModal({
   onAction,
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
-  const isPlain = vault ? storageModeIsPlaintext(vault.storageMode) : false;
-  const pending = isPlain && leftover === undefined;
+  // A leftover follows its record, whatever the vault's mode says.
+  const pending = Boolean(vault?.plainLeftover) && leftover === undefined;
   const offers = plainRecoveryOffers(pending ? null : (leftover ?? null));
 
   if (!open || !vault) return null;

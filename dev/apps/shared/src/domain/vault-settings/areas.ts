@@ -3,18 +3,23 @@ import { vaultConfigEditAllowed } from "../edit-policy";
 import type { IconName } from "../icons";
 import {
   resolveVaultListStatus,
-  type StorageMode,
   type VaultDisplayStatus,
   type VaultPipelineListStatus,
   type VaultRow,
 } from "../vault/types";
-import { vaultSettingsSectionsForStorage, type VaultSettingsSectionId } from "./types";
 
 /**
  * Screens of the vault settings window. Each has its own footer action: Save,
- * Change password (or Finish), or Change unlock RAM.
+ * Change password (or Finish), Change unlock RAM, or Change storage.
  */
-const VAULT_SETTINGS_AREAS = ["preferences", "password", "kdf", "group"] as const;
+const VAULT_SETTINGS_AREAS = ["preferences", "password", "kdf", "storage", "group"] as const;
+
+/** The screens whose change takes the vault's password and runs as a job on a closed vault. */
+const CLOSED_VAULT_CHANGES = [
+  "password",
+  "kdf",
+  "storage",
+] as const satisfies readonly VaultSettingsAreaId[];
 
 export type VaultSettingsAreaId = (typeof VAULT_SETTINGS_AREAS)[number];
 
@@ -28,6 +33,7 @@ export const VAULT_SETTINGS_MENU_I18N = {
   preferences: "modal.settings.area.preferences",
   password: "modal.settings.area.password",
   kdf: "modal.settings.area.kdf",
+  storage: "modal.settings.area.storage",
   group: "modal.settings.area.group",
   delete: "modal.delete_vault.title",
 } as const satisfies Record<VaultSettingsMenuEntry, I18nKey>;
@@ -37,10 +43,10 @@ export function vaultSettingsAreaTitleKey(area: VaultSettingsAreaId): I18nKey {
 }
 
 /**
- * The Settings menu of a vault row. Password and unlock RAM need a closed
- * vault (`action.change_password` / `action.change_kdf`). Open, recovery, and
- * a pipeline omit those two entries. The mode does not: both storage modes
- * unlock `store/` with the same password and unlock RAM.
+ * The Settings menu of a vault row. Password, unlock RAM, and Storage need a
+ * closed vault (`action.change_password` / `action.change_kdf` /
+ * `action.change_storage`). Open, recovery, and a pipeline omit those three
+ * entries, whatever the vault's mode.
  * The change already running stays in the menu so that screen can reopen
  * and show its progress. Delete vault is always last; its window says when a
  * delete must wait. A vault being deleted offers that window alone, so it can
@@ -53,14 +59,19 @@ export function vaultSettingsMenuEntries(
   if (resolveVaultListStatus(vault, pipeline) === "deleting") return ["delete"];
   const changesAllowed =
     vaultConfigEditAllowed("action.change_password", vault, pipeline) &&
-    vaultConfigEditAllowed("action.change_kdf", vault, pipeline);
+    vaultConfigEditAllowed("action.change_kdf", vault, pipeline) &&
+    vaultConfigEditAllowed("action.change_storage", vault, pipeline);
   const inFlight = pipeline.passwordChangeVaultIds?.includes(vault.id)
     ? "password"
     : pipeline.kdfChangeVaultIds?.includes(vault.id)
       ? "kdf"
-      : null;
+      : pipeline.storageChangeVaultIds?.includes(vault.id)
+        ? "storage"
+        : null;
+  const closedChange = (area: VaultSettingsAreaId) =>
+    (CLOSED_VAULT_CHANGES as readonly VaultSettingsAreaId[]).includes(area);
   const areas = VAULT_SETTINGS_AREAS.filter(
-    (area) => changesAllowed || (area !== "password" && area !== "kdf") || area === inFlight,
+    (area) => changesAllowed || !closedChange(area) || area === inFlight,
   );
   return [...areas, "delete"];
 }
@@ -102,9 +113,9 @@ const SETTINGS_GEAR_BLOCKED = new Set<VaultDisplayStatus>([
 
 /**
  * `vault_config_save` returns `vault_busy` while export, a backup, or a
- * password or unlock-RAM change holds the vault, and `vault_deleting` once a
- * delete began. Removing a leftover folder ends with the folder gone, so its
- * folder and mode wait too.
+ * password, unlock-RAM, or Storage change holds the vault, and
+ * `vault_deleting` once a delete began. Removing a leftover folder ends with
+ * the folder gone, so its folder waits too.
  */
 const CONFIG_WRITE_BLOCKED = new Set<VaultDisplayStatus>([
   "exporting",
@@ -112,6 +123,7 @@ const CONFIG_WRITE_BLOCKED = new Set<VaultDisplayStatus>([
   "recovering",
   "changing_password",
   "changing_kdf",
+  "changing_storage",
   "deleting",
 ]);
 
@@ -139,13 +151,7 @@ export const VAULT_SETTINGS_MENU_ICON = {
   preferences: "settings",
   password: "lock",
   kdf: "cpu",
+  storage: "encrypted",
   group: "layers",
   delete: "trash",
 } as const satisfies Record<VaultSettingsMenuEntry, IconName>;
-
-/** Config-only sections grouped under Preferences. */
-export function vaultSettingsPreferenceSections(
-  mode: StorageMode,
-): readonly VaultSettingsSectionId[] {
-  return vaultSettingsSectionsForStorage(mode);
-}

@@ -7,7 +7,7 @@ import {
 import { uniqueDisplayName } from "../vault/displayName";
 import { AUTO_CLOSE_WHEN_BUSY, parseKdfUnlockPreset } from "../vault-settings";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
-import { createVaultChoosesKdf } from "../vault-settings/kdf";
+import { createVaultChoosesStoreSettings } from "../vault-settings/kdf";
 import type { CreateVaultDraft } from "./types";
 
 /** Settings read from a store zip, a backup zip, a `.7z`, or a plain-text `.zip`. */
@@ -81,7 +81,7 @@ export function applyEmbeddedVaultSettings(
     file_manager: unchanged(draft.file_manager, snapshot.file_manager, { ...source.file_manager }),
     archiveUnlockPreset: embedded.unlockPreset,
   };
-  if (embedded.unlockPreset && createVaultChoosesKdf(next)) {
+  if (embedded.unlockPreset && createVaultChoosesStoreSettings(next)) {
     next.kdf = unchanged(draft.kdf, snapshot.kdf, { unlock_preset: embedded.unlockPreset });
   }
   return next;

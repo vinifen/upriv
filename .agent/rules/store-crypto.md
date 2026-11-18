@@ -24,7 +24,8 @@ Never claim “more secure than 7-Zip” or “the same security as VeraCrypt.�
 - Delete vault is a job: `[deleting]` in `config.toml` first, each blob's key copy overwritten before it goes, `config.toml` last, so a crash leaves a `deleting` row with Continue; Delete now (`vault_delete_hurry`) removes what is left with no overwrite.
 - Lock = close, the only lock action. Close now is that close with no backup and, on `upriv_plain`, no closing pass and no overwrite; it still seals the index and drops the keys. A close already running can be told the same (`vault_close_hurry`), and the seal still finishes. Persistence on disk is `closed` only.
 - Surface anti-brute-force: in **`upriv-core` session RAM** — serialize `open`; **5** failures / **60 s** → **60 s** block. Resets when the process exits. **No** JSON attempt counter. Does not stop offline guessing.
-- Plaintext vault bytes on ordinary disk **only** for `upriv_plain` while open (the files sent to its folder, or every file with `plain_files = "whole"`), and as the plain-text `.zip` a person chose to export. Import/export/backup/password/recovery must not stage a decrypted tree (including “temp for 7zz”).
+- Plaintext vault bytes on ordinary disk **only** for `upriv_plain` while open (the files sent to its folder, or every file with `plain_files = "whole"`), and as the plain-text `.zip` a person chose to export.
+- The storage value (mode and `plain_files`) is sealed in the index; `[storage]` in `config.toml` is its copy. An open writes plain text only when both say `upriv_plain`; when they differ it opens encrypted with no unlocked folder and resets both to the default (copy first, the sealed value once that landed), and never refuses. A missing or unknown value, in either, reads as the default (`encrypted_dir`, `chosen`). Only the Storage change (`vault_change_storage`: closed vault, the password, index then copy) moves it; a settings save never changes `[storage]`. Store-zip and backup copies keep the sealed value they carry, with the carried copy; the rebuild of the tree seals the default. Import/export/backup/password/recovery must not stage a decrypted tree (including “temp for 7zz”).
 
 ## Do not
 
@@ -32,6 +33,7 @@ Never claim “more secure than 7-Zip” or “the same security as VeraCrypt.�
 - Use raw Argon2 output as every layer’s key (use HKDF domain separation).
 - Pack `.enc` blobs into `.7z`; put a zip password on a store zip or a backup zip.
 - Add a lock action other than close, or a storage mode besides `encrypted_dir` and `upriv_plain`.
+- Let `config.toml` alone decide the mode, or let any change of the storage value skip the password (a reset and the rebuild, which only turn plain text off, are the exceptions).
 - Claim in-app unlock backoff “prevents brute force,” or implement that backoff only in TypeScript.
 - Implement crypto in TypeScript / Electron / Expo.
 - Reorder AAD struct fields or “canonicalize” AAD JSON without a `format_version` bump.

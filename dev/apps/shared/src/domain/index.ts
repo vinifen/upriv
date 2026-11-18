@@ -26,6 +26,7 @@ export * from "./logs";
 export * from "./password-weakness";
 export * from "./vault";
 export * from "./vault-plain";
+export * from "./vault-unlocked";
 export * from "./vault-create";
 export * from "./vault-groups";
 export * from "./vault-lifecycle";

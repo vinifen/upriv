@@ -5,7 +5,7 @@ import type { VaultPipelineListStatus } from "../../vault/types";
 
 describe("vaultSettingsMenuEntries", () => {
   it("lists every settings screen, then Delete vault, for a closed vault of either mode", () => {
-    const areas = ["preferences", "password", "kdf", "group", "delete"] as const;
+    const areas = ["preferences", "password", "kdf", "storage", "group", "delete"] as const;
     expect(vaultSettingsMenuEntries(vaultRowFixture())).toEqual(areas);
     expect(vaultSettingsMenuEntries(vaultRowFixture({ storageMode: "upriv_plain" }))).toEqual(
       areas,
@@ -19,7 +19,7 @@ describe("vaultSettingsMenuEntries", () => {
     ]);
   });
 
-  it("omits password and unlock RAM when the vault is not strictly closed", () => {
+  it("omits password, unlock RAM, and Storage when the vault is not strictly closed", () => {
     const preferencesAndGroup = ["preferences", "group", "delete"];
     expect(vaultSettingsMenuEntries(vaultRowFixture({ session: "open" }))).toEqual(
       preferencesAndGroup,
@@ -38,7 +38,10 @@ describe("vaultSettingsMenuEntries", () => {
     );
   });
 
-  it("keeps the in-progress password or unlock RAM entry so that screen can reopen", () => {
+  it("keeps the change in progress in the menu so that screen can reopen", () => {
+    expect(
+      vaultSettingsMenuEntries(vaultRowFixture(), { storageChangeVaultIds: ["demo"] }),
+    ).toEqual(["preferences", "storage", "group", "delete"]);
     expect(
       vaultSettingsMenuEntries(vaultRowFixture(), { passwordChangeVaultIds: ["demo"] }),
     ).toEqual(["preferences", "password", "group", "delete"]);
@@ -122,6 +125,7 @@ describe("vaultRowControls", () => {
     };
     expect(controls({ passwordChangeVaultIds: ["demo"] })).toEqual(working);
     expect(controls({ kdfChangeVaultIds: ["demo"] })).toEqual(working);
+    expect(controls({ storageChangeVaultIds: ["demo"] })).toEqual(working);
     expect(controls({ deletingVaultIds: ["demo"] })).toEqual(working);
   });
 });

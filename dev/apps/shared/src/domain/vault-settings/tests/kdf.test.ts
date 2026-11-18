@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  createVaultChoosesKdf,
+  createVaultChoosesStoreSettings,
   DEFAULT_KDF_UNLOCK_PRESET,
   kdfParamsFromPreset,
   kdfPresetIsDowngrade,
@@ -63,34 +63,38 @@ describe("normalizeKdfUnlockPreset", () => {
   });
 });
 
-describe("createVaultChoosesKdf", () => {
-  it("lets scratch, a documents .zip, and .7z import pick unlock RAM", () => {
-    expect(createVaultChoosesKdf({ source: "scratch", importFileName: "" })).toBe(true);
+describe("createVaultChoosesStoreSettings", () => {
+  it("lets scratch, a documents .zip, and .7z import choose what a new store is sealed with", () => {
+    expect(createVaultChoosesStoreSettings({ source: "scratch", importFileName: "" })).toBe(true);
     expect(
-      createVaultChoosesKdf({
+      createVaultChoosesStoreSettings({
         source: "import",
         importFileName: "Notes.zip",
         zipLayout: "files",
       }),
     ).toBe(true);
-    expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.7z" })).toBe(true);
-    expect(createVaultChoosesKdf({ source: "import", importFileName: "" })).toBe(true);
+    expect(createVaultChoosesStoreSettings({ source: "import", importFileName: "Notes.7z" })).toBe(
+      true,
+    );
+    expect(createVaultChoosesStoreSettings({ source: "import", importFileName: "" })).toBe(true);
   });
 
-  it("skips the picker for a Upriv .zip (header already has KDF)", () => {
+  it("keeps what a Upriv .zip's store already holds, and waits while a .zip is read", () => {
     expect(
-      createVaultChoosesKdf({
+      createVaultChoosesStoreSettings({
         source: "import",
         importFileName: "Notes.upriv.zip",
         zipLayout: "store",
       }),
     ).toBe(false);
-    expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.zip" })).toBe(false);
+    expect(createVaultChoosesStoreSettings({ source: "import", importFileName: "Notes.zip" })).toBe(
+      false,
+    );
   });
 
-  it("skips the picker for create-from-backup, not for a file that merely lives under backups/", () => {
+  it("keeps a backup's store as it is, not a file that merely lives under backups/", () => {
     expect(
-      createVaultChoosesKdf({
+      createVaultChoosesStoreSettings({
         source: "import",
         importKind: "backup",
         importFileName: "20260528120000-cold-storage.zip",
@@ -98,21 +102,21 @@ describe("createVaultChoosesKdf", () => {
       }),
     ).toBe(false);
     expect(
-      createVaultChoosesKdf({
+      createVaultChoosesStoreSettings({
         source: "import",
         importFileName: "Notes.7z",
         importFilePath: "vaults/cold-storage/backups/Notes.7z",
       }),
     ).toBe(true);
     expect(
-      createVaultChoosesKdf({
+      createVaultChoosesStoreSettings({
         source: "import",
         importFileName: "Notes.7z",
         importFilePath: "vaults/notes/backups/Notes.7z",
       }),
     ).toBe(true);
     expect(
-      createVaultChoosesKdf({
+      createVaultChoosesStoreSettings({
         source: "import",
         importFileName: "Notes.zip",
         importFilePath: "vaults/notes/backups/Notes.zip",

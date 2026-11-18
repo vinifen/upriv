@@ -36,8 +36,10 @@ mod rebuild;
 mod rename;
 mod seven_zip;
 mod seven_zip_pack;
+mod storage_change;
 mod unfinished;
 mod unlock_ram_change;
+mod unlocked_destination;
 mod unlocked_folder;
 mod welcome;
 pub(crate) mod wipe;
@@ -46,12 +48,14 @@ mod zip_io;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::config::vault_config::{load_vault_config, VaultConfig, VaultStorageMode};
+use crate::config::vault_config::{load_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
 use crate::session::{is_vault_closing_at, is_vault_open_at};
-use crate::store::{content_hash_hex, probe_header, KdfUnlockPreset, PasswordChangeState};
+use crate::store::{
+    content_hash_hex, probe_header, KdfUnlockPreset, PasswordChangeState, VaultStorageMode,
+};
 
 pub(crate) use backup::reuse_selected_backup_folder;
 pub use backup::{
@@ -94,7 +98,7 @@ pub use lost_sessions::{data_folder_entered, end_lost_sessions, leave_lost_data_
 pub use open_close::{
     close_all_vaults, close_all_vaults_now, close_state, close_vault, close_vault_auto,
     close_vault_now, hurry_close, hurry_quit, open_vault, open_vault_as_job, wait_for_previous_app,
-    CloseState, CloseVaultOutcome, VaultOpened,
+    CloseState, CloseVaultOutcome, StorageReset, VaultOpened,
 };
 pub use os_import::{
     abort_import_vault, finish_import_session, import_logical_os_path, ingest_import_directory,
@@ -108,11 +112,10 @@ pub(crate) use persistence::forget_backup_devices;
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub(crate) use plain::{ensure_no_leftover, PlainSession};
 pub use plain::{
-    plain_deletions, plain_destination, plain_leftover, plain_record_forget, plain_send,
-    plain_status, plain_sync, plain_unsend, remove_plain_leftover, set_plain_observer,
-    PlainCloseSummary, PlainDestination, PlainFolderClass, PlainLeftover, PlainObserver,
-    PlainRecordState, PlainRecordView, PlainStatus, PlainSyncReport, PlainTotals, PlainUnsend,
-    PlainWipe,
+    plain_deletions, plain_leftover, plain_record_forget, plain_send, plain_status, plain_sync,
+    plain_unsend, remove_plain_leftover, set_plain_observer, PlainCloseSummary, PlainFolderClass,
+    PlainLeftover, PlainObserver, PlainRecordState, PlainRecordView, PlainStatus, PlainSyncReport,
+    PlainTotals, PlainUnsend, PlainWipe,
 };
 pub use rebuild::{rebuild_vault, VaultRebuild};
 pub use rename::{rename_vault, VaultRenameResult};
@@ -121,8 +124,10 @@ pub use seven_zip::{
     probe_logical_seven_zip_path, SevenZipProbe,
 };
 pub use seven_zip_pack::seven_zip_export_available;
+pub use storage_change::{change_vault_storage, StorageChangeResult};
 pub use unfinished::sweep_unfinished;
 pub use unlock_ram_change::{change_vault_kdf, UnlockRamChangeResult};
+pub use unlocked_destination::{unlocked_destination, UnlockedDestination};
 pub use unlocked_folder::{
     attach_unlocked_folder, unlocked_folder_info, AttachAnswer, UnlockedFolderInfo,
 };
@@ -586,24 +591,26 @@ mod tests {
     }
 
     #[test]
-    fn list_skips_invalid_storage_mode_vaults() {
+    fn an_unknown_storage_value_lists_the_vault_as_encrypted() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("good", "Good", 1)]);
-        let bad = root.vault_dir("bad-demo").unwrap();
-        crate::host_fs::create_dir_all(&bad).unwrap();
+        let other = root.vault_dir("other").unwrap();
+        crate::host_fs::create_dir_all(&other).unwrap();
         crate::host_fs::write(
-            bad.join("config.toml"),
+            other.join("config.toml"),
             r#"
 [vault]
-id = "bad-demo"
-display_name = "Bad"
+id = "other"
+display_name = "Other"
+order = 2
 [storage]
 mode = "not_a_mode"
 "#,
         )
         .unwrap();
         let entries = list_vault_entries(&root).expect("list");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "good");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].id, "other");
+        assert_eq!(entries[1].storage_mode, VaultStorageMode::EncryptedDir);
     }
 
     #[test]

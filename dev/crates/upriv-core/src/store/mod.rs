@@ -3,8 +3,10 @@
 //! The header holds the vault's keys as a keyring ([`keys`]); every blob
 //! starts with a copy of the header block it was written under
 //! ([`key_copy`]), holds its file's chunks, and ends with recovery records
-//! ([`record`]), so any blob plus the password opens its file. Create writes
-//! a non-secret seed file so wrap + index + chunk AEAD can be validated.
+//! ([`record`]), so any blob plus the password opens its file. The index also
+//! holds the storage value ([`storage`]), the only thing that lets an open
+//! write plain text to disk. Create writes a non-secret seed file so wrap +
+//! index + chunk AEAD can be validated.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -18,6 +20,7 @@ mod key_copy;
 mod keys;
 mod pass;
 mod record;
+mod storage;
 mod tree;
 mod unlock;
 
@@ -68,6 +71,7 @@ pub(crate) use record::read_record;
 pub(crate) use record::{
     append_record, list_blobs, rebuild_tree, record_made_blob, RebuildSources, Records,
 };
+pub use storage::{VaultPlainFiles, VaultStorage, VaultStorageMode};
 pub use tree::{
     build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
     ensure_folder, file_name, from_ui_path, is_export_config, is_plain_internal,
@@ -138,7 +142,8 @@ pub fn create_empty_store(
     Ok(header)
 }
 
-/// Create `store/` plus a non-secret seed chunk (`upriv-seed.txt` in the index).
+/// Create `store/` plus a non-secret seed chunk (`upriv-seed.txt` in the index),
+/// with `storage` sealed in the first index.
 ///
 /// `initial_files` are `(logical_path, plaintext)` pairs sealed beside the seed
 /// before the first index write — plaintext never leaves RAM.
@@ -146,11 +151,13 @@ pub fn create_seeded_store(
     store_dir: impl AsRef<Path>,
     password: &[u8],
     preset: KdfUnlockPreset,
+    storage: VaultStorage,
     initial_files: &[(&str, &[u8])],
 ) -> Result<VaultHeader> {
     let store_dir = store_dir.as_ref();
     let (header, keys) = create_store_core(store_dir, password, preset)?;
     let mut index = Index::empty();
+    index.storage = storage;
     let seed = seed_plaintext(header.content_identity);
     let files =
         std::iter::once((SEED_LOGICAL_PATH, seed.as_slice())).chain(initial_files.iter().copied());
@@ -663,13 +670,35 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         let password = b"seed-round-trip-ok";
-        create_seeded_store(&dir, password, KdfUnlockPreset::M32, &[]).expect("create");
+        create_seeded_store(
+            &dir,
+            password,
+            KdfUnlockPreset::M32,
+            VaultStorage::default(),
+            &[],
+        )
+        .expect("create");
         let opened = open_store(&dir, password).expect("open");
         let expected = seed_plaintext(opened.header.content_identity);
         let got =
             read_logical_file(&dir, &opened.keys, &opened.index, SEED_LOGICAL_PATH).expect("seed");
         assert_eq!(got, expected);
         assert_eq!(opened.index.nodes().len(), 1);
+        assert_eq!(opened.index.storage, VaultStorage::default());
+    }
+
+    #[test]
+    fn create_seals_the_storage_value_it_is_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
+        let storage = VaultStorage {
+            mode: VaultStorageMode::UprivPlain,
+            plain_files: VaultPlainFiles::Whole,
+        };
+        create_seeded_store(&dir, b"seed-plain-ok", KdfUnlockPreset::M32, storage, &[])
+            .expect("create");
+        let opened = open_store(&dir, b"seed-plain-ok").expect("open");
+        assert_eq!(opened.index.storage, storage);
     }
 
     #[test]
@@ -681,6 +710,7 @@ mod tests {
             &dir,
             password,
             KdfUnlockPreset::M32,
+            VaultStorage::default(),
             &[("README.md", b"# Hello\n")],
         )
         .expect("create");
