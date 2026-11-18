@@ -207,6 +207,13 @@ describe("Delete vault in the Settings menu", () => {
     expect(onOpenSettings).not.toHaveBeenCalled();
   });
 
+  it("is not there while the vault is open", () => {
+    show(OPEN);
+    fireEvent.click(settingsButton());
+    expect(menuItem("modal.settings.area.preferences")).not.toBeNull();
+    expect(menuItem("modal.delete_vault.title")).toBeNull();
+  });
+
   it("opens a settings screen from the other entries", () => {
     const { onOpenDelete, onOpenSettings } = show(CLOSED);
     fireEvent.click(settingsButton());

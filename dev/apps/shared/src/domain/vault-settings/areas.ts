@@ -48,9 +48,10 @@ export function vaultSettingsAreaTitleKey(area: VaultSettingsAreaId): I18nKey {
  * `action.change_storage`). Open, recovery, and a pipeline omit those three
  * entries, whatever the vault's mode.
  * The change already running stays in the menu so that screen can reopen
- * and show its progress. Delete vault is always last; its window says when a
- * delete must wait. A vault being deleted offers that window alone, so it can
- * reopen with its progress or Continue.
+ * and show its progress. Delete vault is last, and only while a delete can
+ * start (`action.delete`: closed or in recovery), so an open vault has none.
+ * A vault being deleted offers that window alone, so it can reopen with its
+ * progress or Continue.
  */
 export function vaultSettingsMenuEntries(
   vault: VaultRow,
@@ -73,7 +74,7 @@ export function vaultSettingsMenuEntries(
   const areas = VAULT_SETTINGS_AREAS.filter(
     (area) => changesAllowed || !closedChange(area) || area === inFlight,
   );
-  return [...areas, "delete"];
+  return vaultConfigEditAllowed("action.delete", vault, pipeline) ? [...areas, "delete"] : areas;
 }
 
 /** Which row controls are closed for this vault's list status. */
