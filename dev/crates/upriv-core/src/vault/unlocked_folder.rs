@@ -9,12 +9,14 @@
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use super::unlocked_destination::UnlockedDestination;
 use crate::config::list_saves::save_unlocked_switch;
-use crate::config::{load_app_settings_at, load_vault_config, VaultStorageMode};
+use crate::config::{load_app_settings_at, load_vault_config, VaultConfig};
 use crate::device::{this_device, DeviceSystem};
 use crate::error::{Result, UprivError};
 use crate::folder_list::unlocked::{
@@ -32,6 +34,7 @@ use crate::session::{
     is_vault_closing_at, open_session_ids, with_open_session, with_vault_dir_lock, AttachState,
     Job, JobKind,
 };
+use crate::store::VaultStorageMode;
 
 /// What [`attach_unlocked_folder`] did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -107,6 +110,11 @@ fn begin(vault_dir: &Path, job: &Job) -> Result<Option<String>> {
 }
 
 fn attach(root: &VaultRoot, vault_id: &str, vault_dir: &Path, job: &Job) -> Result<AttachAnswer> {
+    // A session whose open reset its storage value gets no folder, whatever
+    // the files say: they are what something changed outside Upriv.
+    if with_open_session(vault_dir, |session| Ok(session.storage_reset))? {
+        return Ok(AttachAnswer::Off);
+    }
     let config = load_vault_config(vault_dir)?;
     if config.storage_mode() != VaultStorageMode::EncryptedDir
         || !DeviceSystem::current().mounts_folders()
@@ -163,6 +171,62 @@ fn attach(root: &VaultRoot, vault_id: &str, vault_dir: &Path, job: &Job) -> Resu
             })
         }
     }
+}
+
+/// The encrypted half of [`crate::vault::unlocked_destination`]: the folder
+/// the attach would mount, each place of the chain checked the way the
+/// attach checks it, with nothing made.
+pub(crate) fn mount_destination(
+    root: &VaultRoot,
+    vault_id: &str,
+    config: &VaultConfig,
+) -> Result<UnlockedDestination> {
+    if !DeviceSystem::current().mounts_folders() {
+        return Ok(UnlockedDestination::Off);
+    }
+    let app = load_app_settings_at(root.root())?.settings.unlocked_folders;
+    let vault = &config.unlocked_folder;
+    if !encrypted_folder_on(&app, vault) {
+        return Ok(UnlockedDestination::Off);
+    }
+    let device = this_device();
+    let Some(selected) = unlocked::selected_place(&app, vault, device) else {
+        return Ok(UnlockedDestination::Unset);
+    };
+    let chain = unlocked::chain(&app, vault, device);
+    let display_name = config.vault.display_name.as_str();
+    let outcome = fail_over(&selected, &chain, |place| {
+        let state = check_place(root, place, FOLDER_SWITCH_CHECK_LIMIT, false);
+        if state.is_ok() {
+            Try::<PathBuf, Infallible>::Works(place.vault_folder(root.root(), display_name))
+        } else {
+            Try::Fails(state)
+        }
+    });
+    let (path, switches) = match outcome {
+        Failover::Kept(path) => (path, Vec::new()),
+        Failover::Switched {
+            link,
+            value,
+            reason,
+        } => {
+            let taking = unlocked::selections_taking(&app, vault, device, link);
+            let switches = unlocked::switches(&app, vault, device, vault_id, taking, reason);
+            (value, switches)
+        }
+        Failover::Stopped(never) => match never {},
+        Failover::Unavailable(reason) => {
+            return Ok(UnlockedDestination::Unavailable {
+                path: selected.container(root.root()).display().to_string(),
+                reason,
+            })
+        }
+    };
+    Ok(UnlockedDestination::Folder {
+        path: path.display().to_string(),
+        class: None,
+        switches,
+    })
 }
 
 /// Whether `place` can hold an unlocked folder now: its folder answers and

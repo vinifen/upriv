@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::{load_vault_config, VaultStorageMode};
+use crate::config::{load_vault_config, save_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
+use crate::folder_list::unlocked::EncryptedSwitch;
 use crate::folder_list::{Switch, UNLOCKED_CONTAINER};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -25,6 +26,7 @@ use crate::session::{
 use crate::store::{
     content_hash_hex, content_hash_with_index, flush_index_parts, index_logical_hash,
     pack_blob_waste, BlobPackMode, ChunkBlobMutation, OpenedStore, RecordsDue, Sealed, Unlock,
+    VaultStorage,
 };
 
 use super::backup::{
@@ -114,6 +116,60 @@ fn vault_dir_or_not_found(root: &VaultRoot, vault_id: &str) -> Result<std::path:
 pub struct VaultOpened {
     /// Selections a plain-text vault's open switched because a folder failed.
     pub switches: Vec<Switch>,
+    /// The sealed storage value and its copy disagreed: the vault opened
+    /// encrypted with no unlocked folder, and both values went back to the
+    /// default ([`StorageReset`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_reset: Option<StorageReset>,
+}
+
+/// Whether a reset at open reached the disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageReset {
+    /// The sealed value is the default, and `config.toml` holds the default
+    /// with the vault's unlocked folder switch off.
+    Saved,
+    /// A write failed: the next unlock finds the same disagreement and
+    /// writes the reset then.
+    Unsaved,
+}
+
+/// Put the sealed storage value and its copy back to the default, with the
+/// vault's unlocked folder switch off: the open found them disagreeing,
+/// something changed one of them outside Upriv, and the vault opens
+/// encrypted with no folder. The caller holds the vault's directory lock.
+///
+/// The copy is written first, and the sealed value changes only once the
+/// copy is on disk: a copy that did not reach the disk leaves the sealed
+/// value as it was, in RAM too, so no seal of the session can make the two
+/// agree with the folder switch still on, and the next unlock finds the same
+/// disagreement. A sealed value whose seal fails reaches the disk with the
+/// session's next seal.
+fn reset_storage(
+    vault_dir: &Path,
+    store: &mut ClosedStore,
+    config: &mut VaultConfig,
+) -> StorageReset {
+    config.storage = VaultStorage::default();
+    config.unlocked_folder.encrypted = EncryptedSwitch::Off;
+    let saved = save_vault_config(vault_dir, config).is_ok() && {
+        store.index.storage = VaultStorage::default();
+        store.seal(Vec::new()).is_ok()
+    };
+    log_event(
+        LogLevel::Warn,
+        "vault_storage_reset",
+        &[
+            ("id", store.vault_id.as_str()),
+            ("saved", if saved { "true" } else { "false" }),
+        ],
+    );
+    if saved {
+        StorageReset::Saved
+    } else {
+        StorageReset::Unsaved
+    }
 }
 
 /// Unlock into a RAM session. A plaintext vault fills its unlocked folder on
@@ -206,18 +262,21 @@ fn open_unlocked_session(
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
-        let config = load_vault_config(&vault_dir)?;
+        let mut config = load_vault_config(&vault_dir)?;
         if config.deleting.is_some() {
             return Err(UprivError::VaultDeleting);
         }
         let user = kind == OpenKind::User;
-        let plain = user && config.storage_mode() == VaultStorageMode::UprivPlain;
         // A vault another process holds is not a leftover: the lock below
-        // refuses it with the right error.
-        if plain && !crate::runtime_state::vault_is_live(root, vault_id) {
-            super::plain::check_before_unlock(root, vault_id, &config)?;
+        // refuses it with the right error. A leftover plain-text folder
+        // blocks every open, whatever the copy says.
+        if !crate::runtime_state::vault_is_live(root, vault_id) {
+            super::plain::ensure_no_leftover(root, vault_id)?;
+            if user && config.storage.is_plain() {
+                super::plain::check_before_unlock(root, vault_id, &config)?;
+            }
         }
-        with_unlock_lock(|| {
+        let (plain, storage_reset) = with_unlock_lock(|| {
             check_unlock_allowed(&vault_dir)?;
             if is_vault_open_at(&vault_dir) {
                 return Err(UprivError::VaultAlreadyOpen(vault_id.to_string()));
@@ -235,6 +294,10 @@ fn open_unlocked_session(
             let mut store = unlock_counted(&vault_dir, password, |unlocked| {
                 opened_store(&vault_dir, vault_id, unlocked)
             })?;
+            // The sealed value decides. Plain text goes to disk only when its
+            // copy, which the list and the unlock window showed, says the same.
+            let agree = store.index.storage == config.storage;
+            let plain = user && agree && config.storage.is_plain();
             // Argon2id cannot be cut short; a stop that came meanwhile drops
             // the keys here, before any session exists. An encrypted vault has
             // nothing left to stop once its session is in.
@@ -252,6 +315,8 @@ fn open_unlocked_session(
                     &[("id", vault_id)],
                 );
             }
+            let storage_reset =
+                (!agree).then(|| reset_storage(&vault_dir, &mut store, &mut config));
             drop_unused_keys(&mut store);
             let opened = OpenedStore {
                 header: store.header,
@@ -271,16 +336,20 @@ fn open_unlocked_session(
                 config.backup.enabled && config.backup.skip_unchanged;
             session.lock = Some(lock);
             session.skip_close_backup = !user;
+            session.storage_reset = storage_reset.is_some();
             insert_session(session)?;
             if let Err(error) = mark_session_open(root, vault_id, None) {
                 let _ = take_session(&vault_dir);
                 return Err(error);
             }
-            Ok(())
+            Ok((plain, storage_reset))
         })?;
         // Outside the unlock lock: filling a folder can take minutes, and
         // other vaults must still open meanwhile.
-        let mut opened = VaultOpened::default();
+        let mut opened = VaultOpened {
+            storage_reset,
+            ..VaultOpened::default()
+        };
         if plain {
             match super::plain::activate(root, vault_id, &vault_dir, job) {
                 Ok(switches) => opened.switches = switches,
@@ -2079,5 +2148,160 @@ mode = "encrypted_dir"
         assert_eq!(std::fs::read(&index).unwrap(), original);
         close_vault(&root, "notes").unwrap();
         assert_eq!(listed_session(&root, "notes"), None);
+    }
+}
+
+/// The open trusts the sealed storage value, never its copy alone.
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    use crate::session::with_open_session;
+    use crate::store::{open_store, KdfUnlockPreset, VaultPlainFiles, VaultStorageMode};
+    use crate::test_support::{quiet_config, unlocked_rows, vault_root_with};
+    use crate::vault::create_vault;
+
+    const PW: &[u8] = b"pass-word-ok";
+
+    const PLAIN_WHOLE: VaultStorage = VaultStorage {
+        mode: VaultStorageMode::UprivPlain,
+        plain_files: VaultPlainFiles::Whole,
+    };
+
+    /// A closed vault `notes` sealed with `sealed`, whose unlocked folder row
+    /// on this device is `<tmp>/places`. Its copy says `sealed` too.
+    fn vault_sealed(sealed: VaultStorage) -> (tempfile::TempDir, VaultRoot, PathBuf) {
+        let (tmp, root) = vault_root_with(&[]);
+        let places = tmp.path().join("places");
+        crate::host_fs::create_dir_all(&places).unwrap();
+        let mut config = quiet_config("notes", "Notes");
+        config.storage = sealed;
+        unlocked_rows(&mut config, &[&places]);
+        create_vault(&root, config, PW, KdfUnlockPreset::M32).unwrap();
+        let folder = places.join(UNLOCKED_CONTAINER).join("Notes");
+        (tmp, root, folder)
+    }
+
+    fn edit_copy(root: &VaultRoot, edit: impl FnOnce(&mut VaultConfig)) {
+        let dir = root.vault_dir("notes").unwrap();
+        let mut config = load_vault_config(&dir).unwrap();
+        edit(&mut config);
+        save_vault_config(&dir, &config).unwrap();
+    }
+
+    fn copy(root: &VaultRoot) -> VaultConfig {
+        load_vault_config(root.vault_dir("notes").unwrap()).unwrap()
+    }
+
+    fn sealed(root: &VaultRoot) -> VaultStorage {
+        open_store(root.vault_store_dir("notes").unwrap(), PW)
+            .unwrap()
+            .index
+            .storage
+    }
+
+    fn assert_reset(root: &VaultRoot, opened: &VaultOpened, folder: &Path) {
+        assert_eq!(opened.storage_reset, Some(StorageReset::Saved));
+        assert!(!folder.host_exists(), "no plain text was written");
+        let dir = root.vault_dir("notes").unwrap();
+        assert!(with_open_session(&dir, |session| Ok(session.plain.is_none())).unwrap());
+        let config = copy(root);
+        assert_eq!(config.storage, VaultStorage::default());
+        assert_eq!(config.unlocked_folder.encrypted, EncryptedSwitch::Off);
+        close_vault(root, "notes").unwrap();
+        assert_eq!(sealed(root), VaultStorage::default());
+    }
+
+    #[test]
+    fn both_values_plain_fill_the_folder_and_both_encrypted_fill_none() {
+        let (_tmp, root, folder) = vault_sealed(PLAIN_WHOLE);
+        let opened = open_vault(&root, "notes", PW).unwrap();
+        assert_eq!(opened.storage_reset, None);
+        assert!(folder.host_is_dir());
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(copy(&root).storage, PLAIN_WHOLE);
+        assert_eq!(sealed(&root), PLAIN_WHOLE);
+
+        let (_tmp, root, folder) = vault_sealed(VaultStorage::default());
+        let opened = open_vault(&root, "notes", PW).unwrap();
+        assert_eq!(opened.storage_reset, None);
+        assert!(!folder.host_exists());
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_copy_saying_plain_over_a_sealed_encrypted_value_opens_encrypted_and_resets_both() {
+        let (_tmp, root, folder) = vault_sealed(VaultStorage::default());
+        edit_copy(&root, |config| config.storage = PLAIN_WHOLE);
+        let opened = open_vault(&root, "notes", PW).unwrap();
+        assert_reset(&root, &opened, &folder);
+    }
+
+    #[test]
+    fn a_sealed_plain_value_under_an_encrypted_copy_opens_encrypted_and_resets_both() {
+        let (_tmp, root, folder) = vault_sealed(PLAIN_WHOLE);
+        edit_copy(&root, |config| config.storage = VaultStorage::default());
+        let opened = open_vault(&root, "notes", PW).unwrap();
+        assert_reset(&root, &opened, &folder);
+    }
+
+    #[test]
+    fn a_difference_in_the_files_choice_alone_is_a_reset() {
+        let (_tmp, root, folder) = vault_sealed(VaultStorage {
+            mode: VaultStorageMode::UprivPlain,
+            plain_files: VaultPlainFiles::Chosen,
+        });
+        edit_copy(&root, |config| {
+            config.storage.plain_files = VaultPlainFiles::Whole
+        });
+        let opened = open_vault(&root, "notes", PW).unwrap();
+        assert_reset(&root, &opened, &folder);
+    }
+
+    #[test]
+    fn the_open_after_a_reset_agrees_and_resets_nothing() {
+        let (_tmp, root, _folder) = vault_sealed(PLAIN_WHOLE);
+        edit_copy(&root, |config| config.storage = VaultStorage::default());
+        open_vault(&root, "notes", PW).unwrap();
+        close_vault(&root, "notes").unwrap();
+        let again = open_vault(&root, "notes", PW).unwrap();
+        assert_eq!(again.storage_reset, None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    /// The copy cannot be written: the sealed value stays as it was, the
+    /// session still gets no folder although the switch on disk says on, and
+    /// the next unlock writes the reset.
+    #[cfg(unix)]
+    #[test]
+    fn a_reset_that_cannot_write_the_copy_keeps_the_folder_off_and_waits_for_the_next_open() {
+        use crate::test_support::test_job_id;
+        use crate::vault::{attach_unlocked_folder, AttachAnswer};
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: `geteuid` has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let (_tmp, root, folder) = vault_sealed(PLAIN_WHOLE);
+        edit_copy(&root, |config| {
+            config.storage = VaultStorage::default();
+            config.unlocked_folder.encrypted = EncryptedSwitch::On;
+        });
+        let dir = root.vault_dir("notes").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let opened = open_vault(&root, "notes", PW);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opened = opened.unwrap();
+        assert_eq!(opened.storage_reset, Some(StorageReset::Unsaved));
+        assert!(!folder.host_exists());
+        assert_eq!(copy(&root).unlocked_folder.encrypted, EncryptedSwitch::On);
+        assert_eq!(
+            attach_unlocked_folder(&root, "notes", &test_job_id()).unwrap(),
+            AttachAnswer::Off
+        );
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(sealed(&root), PLAIN_WHOLE);
+
+        let again = open_vault(&root, "notes", PW).unwrap();
+        assert_reset(&root, &again, &folder);
     }
 }

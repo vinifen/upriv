@@ -9,7 +9,7 @@ import {
   SwitchRow,
 } from "@/components/ui";
 import {
-  createVaultChoosesKdf,
+  createVaultChoosesStoreSettings,
   createVaultErrorsForField,
   createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
@@ -600,7 +600,7 @@ function CreateVaultGeneralStep({
         <SettingsLockedFields draft={draft}>
           <VaultSettingsKdfSection
             config={draft.kdf}
-            choosesPreset={createVaultChoosesKdf(draft)}
+            choosesPreset={createVaultChoosesStoreSettings(draft)}
             archivePreset={draft.archiveUnlockPreset}
             onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
           />
@@ -681,6 +681,8 @@ function CreateVaultAdvancedStep({
   const orderId = useId();
   const hiddenId = useId();
   const hiddenLocked = draft.groupMode === "existing" && isHiddenGroup(groups, draft.groupId);
+  /** A copied store keeps the storage value sealed in it. */
+  const choosesStoreSettings = createVaultChoosesStoreSettings(draft);
 
   return (
     <div className="space-y-1.5 sm:space-y-2">
@@ -726,6 +728,8 @@ function CreateVaultAdvancedStep({
         <SettingsLockedFields draft={draft}>
           <VaultSettingsStorageSection
             config={draft.storage}
+            disabled={!choosesStoreSettings}
+            disabledLine={choosesStoreSettings ? null : t("vault.create.storage_copied")}
             onChange={(patch) => onChange({ storage: { ...draft.storage, ...patch } })}
           />
         </SettingsLockedFields>

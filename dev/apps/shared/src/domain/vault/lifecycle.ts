@@ -1,3 +1,4 @@
+import type { UnlockedDestination } from "../vault-unlocked/types";
 import type { VaultRow } from "./types";
 import { resolveVaultDisplayStatus } from "./types";
 
@@ -9,6 +10,11 @@ export type VaultLifecycleIntent = "unlock" | "close";
  */
 export interface VaultLifecycleRequest {
   vaultId: string;
+  /**
+   * Where the files will appear, when the step before the window already
+   * looked it up (a plain-text vault's). Absent, the window looks it up.
+   */
+  destination?: UnlockedDestination;
 }
 
 /**

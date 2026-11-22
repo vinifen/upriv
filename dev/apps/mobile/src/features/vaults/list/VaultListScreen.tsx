@@ -324,6 +324,10 @@ export function VaultListScreen() {
     unlockRamOutcome,
     changeKdf,
     stopUnlockRamChange,
+    storageJob,
+    storageOutcome,
+    changeStorage,
+    stopStorageChange,
     deleteVault,
     runningDelete,
     startVaultDelete,
@@ -664,6 +668,10 @@ export function VaultListScreen() {
           }
           if (area === "kdf" && unlockRamJob && unlockRamJob.vaultId !== rowVault.id) {
             show(t("vault.unlock_ram_change.busy"));
+            return;
+          }
+          if (area === "storage" && storageJob && storageJob.vaultId !== rowVault.id) {
+            show(t("vault.change_storage.busy"));
             return;
           }
           setSettingsVault(rowVault);
@@ -1402,6 +1410,7 @@ export function VaultListScreen() {
         }
         verifyErrorKey={lifecycle.credentialErrorKey}
         initialPassword={lifecycle.credentialFieldPassword}
+        destination={lifecycleRequest?.destination ?? null}
         onClose={lifecycle.cancelLifecycle}
         onConfirm={lifecycle.confirmLifecycle}
         onStop={() => {
@@ -1457,6 +1466,10 @@ export function VaultListScreen() {
         unlockRamOutcome={unlockRamOutcome}
         onChangeKdf={changeKdf}
         onStopUnlockRamChange={stopUnlockRamChange}
+        storageJob={storageJob}
+        storageOutcome={storageOutcome}
+        onChangeStorage={changeStorage}
+        onStopStorageChange={stopStorageChange}
         groups={groups}
         onCommitGroupAssignment={handleCommitGroupAssignment}
         onPersistBusyChange={handlePersistBusyChange}

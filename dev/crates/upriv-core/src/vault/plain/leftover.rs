@@ -901,7 +901,7 @@ mod tests {
         ))
         .expect("config");
         unlocked_rows(&mut config, &[parent]);
-        config.storage.plain_files = crate::config::vault_config::VaultPlainFiles::Whole;
+        config.storage.plain_files = crate::store::VaultPlainFiles::Whole;
         config
     }
 
@@ -989,7 +989,7 @@ mod tests {
         let parent = tmp.path().join("places");
         std::fs::create_dir_all(&parent).unwrap();
         let mut config = own_folder_config("notes", "Notes", &parent, true);
-        config.storage.plain_files = crate::config::vault_config::VaultPlainFiles::Chosen;
+        config.storage.plain_files = crate::store::VaultPlainFiles::Chosen;
         crate::create_vault(root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         let folder = vault_folder(&parent);
         crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
@@ -1406,5 +1406,31 @@ mod tests {
         assert!(!parent.join(UNLOCKED_CONTAINER).exists());
         crate::close_vault(&root, "notes").unwrap();
         assert!(!parent.join(UNLOCKED_CONTAINER).exists());
+    }
+
+    /// A leftover is real plain text on the disk, whatever `config.toml`
+    /// says the vault is: an open whose copy says encrypted is refused too,
+    /// and Remove the folder lets it through.
+    #[test]
+    fn a_leftover_blocks_an_open_whose_copy_says_encrypted() {
+        let (tmp, root) = vault_root_with(&[]);
+        crate::create_vault(
+            &root,
+            crate::test_support::quiet_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let (folder, id) = notes_folder(&tmp);
+        leftover(&folder, "notes", "t1");
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1", &id)).unwrap();
+
+        assert!(matches!(
+            crate::open_vault(&root, "notes", b"pass-word-ok"),
+            Err(UprivError::PlainLeftover)
+        ));
+        assert_eq!(remove_leftover(&root).unwrap().kept, 0);
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::close_vault(&root, "notes").unwrap();
     }
 }

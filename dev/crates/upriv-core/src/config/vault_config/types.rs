@@ -5,32 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::folder_list::backup::VaultBackupChoice;
 use crate::folder_list::unlocked::VaultUnlockedFolder;
 use crate::folder_list::DeviceGroups;
-
-/// Storage mode from `[storage] mode` (TS `StorageMode`).
-///
-/// - `encrypted_dir` — default. Rest = `store/`. While open: decrypt in RAM
-///   (FUSE/WinFsp on desktop; in-app file manager on mobile).
-/// - `upriv_plain` — rest = `store/`. While open: plaintext in the vault's
-///   unlocked folder on this device (wiped on close).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VaultStorageMode {
-    #[default]
-    EncryptedDir,
-    UprivPlain,
-}
-
-/// `[storage] plain_files` (TS `PlainFiles`): what an `upriv_plain` vault puts
-/// in its folder while open. The in-app file manager always holds every file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VaultPlainFiles {
-    /// Only what the person sends from the file manager. The folder starts empty.
-    #[default]
-    Chosen,
-    /// Every file, written at open.
-    Whole,
-}
+use crate::store::{VaultStorage, VaultStorageMode};
 
 /// `[backup] mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -73,15 +48,6 @@ pub struct VaultIdentitySection {
     pub hidden: bool,
     #[serde(default)]
     pub password_hint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct VaultStorageSection {
-    #[serde(default)]
-    pub mode: VaultStorageMode,
-    #[serde(default)]
-    pub plain_files: VaultPlainFiles,
 }
 
 /// `[backup]`.
@@ -246,8 +212,12 @@ fn default_idle_minutes() -> u32 {
 #[serde(deny_unknown_fields)]
 pub struct VaultConfig {
     pub vault: VaultIdentitySection,
+    /// The copy of the sealed storage value ([`VaultStorage`]): it shows the
+    /// mode before the password and decides nothing alone. Only the create,
+    /// an import, the Storage change, a reset at open, and the rebuild write
+    /// it; a missing or unknown `[storage]` reads as the default.
     #[serde(default)]
-    pub storage: VaultStorageSection,
+    pub storage: VaultStorage,
     #[serde(default)]
     pub unlocked_folder: VaultUnlockedFolder,
     #[serde(default)]

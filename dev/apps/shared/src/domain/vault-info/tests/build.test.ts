@@ -97,7 +97,7 @@ describe("buildVaultInfoSections", () => {
       "config",
       "backups",
     ]);
-    expect(field(sections, "storage_mode")).toBe("modal.settings.option.storage.encrypted_dir");
+    expect(field(sections, "storage_mode")).toBe("modal.storage.option.encrypted_dir");
     expect(sections.flatMap((section) => section.fields).map((entry) => entry.id)).not.toContain(
       "plain_files",
     );

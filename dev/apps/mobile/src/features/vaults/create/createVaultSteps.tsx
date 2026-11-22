@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
-  createVaultChoosesKdf,
+  createVaultChoosesStoreSettings,
   createVaultErrorI18nKey,
   createVaultErrorsForField,
   createVaultImportNeedsArchivePassword,
@@ -58,9 +58,9 @@ import {
 } from "@/components/settings/settingsFields";
 import {
   KdfSection,
-  PlainFilesSwitch,
   VaultSettingsAutoCloseSection,
   VaultSettingsBackupSection,
+  VaultSettingsStorageSection,
   type VaultListsContext,
 } from "@/features/vaults/settings/vaultSettingsForm";
 import { VaultUnlockedFolderSection } from "@/components/settings";
@@ -637,7 +637,7 @@ function CreateVaultGeneralStep({
         <SettingsLockedFields draft={draft}>
           <KdfSection
             config={draft.kdf}
-            choosesPreset={createVaultChoosesKdf(draft)}
+            choosesPreset={createVaultChoosesStoreSettings(draft)}
             archivePreset={draft.archiveUnlockPreset}
             onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
           />
@@ -726,6 +726,8 @@ function CreateVaultAdvancedStep({
   const { t } = useTranslation();
   const { typography } = useTheme();
   const hiddenLocked = draft.groupMode === "existing" && isHiddenGroup(groups, draft.groupId);
+  /** A copied store keeps the storage value sealed in it. */
+  const choosesStoreSettings = createVaultChoosesStoreSettings(draft);
 
   const patchStorage = (patch: Partial<CreateVaultDraft["storage"]>) => {
     onChange({ storage: { ...draft.storage, ...patch } });
@@ -761,38 +763,12 @@ function CreateVaultAdvancedStep({
       <SettingsAccordionSection title={t("modal.settings.section.storage")}>
         <SettingsLockedFields draft={draft}>
           <View style={styles.fields}>
-            <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
-            <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
-            <RadioGroup>
-              {(
-                [
-                  ["encrypted_dir", "recommended", "default"],
-                  ["upriv_plain", "not-recommended", "less-secure"],
-                ] as const
-              ).map(([mode, badge, tone]) => (
-                <PolicyRadioOption
-                  key={mode}
-                  value={mode}
-                  checked={draft.storage.mode === mode}
-                  title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
-                  description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
-                  badge={badge}
-                  tone={tone}
-                  footer={
-                    mode === "upriv_plain" ? (
-                      <PlainFilesSwitch config={draft.storage} onChange={patchStorage} />
-                    ) : undefined
-                  }
-                  onSelect={() => patchStorage({ mode })}
-                />
-              ))}
-            </RadioGroup>
-            {draft.storage.mode === "encrypted_dir" ? (
-              <FieldHint>{t("warning.encrypted_dir_ram")}</FieldHint>
-            ) : null}
-            {draft.storage.mode === "upriv_plain" ? (
-              <FieldHint>{t("warning.upriv_plain")}</FieldHint>
-            ) : null}
+            <VaultSettingsStorageSection
+              config={draft.storage}
+              disabled={!choosesStoreSettings}
+              disabledLine={choosesStoreSettings ? null : t("vault.create.storage_copied")}
+              onChange={patchStorage}
+            />
             <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
           </View>
         </SettingsLockedFields>

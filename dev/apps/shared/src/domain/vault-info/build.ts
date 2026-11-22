@@ -37,8 +37,8 @@ function keyCopiesValue(status: VaultKeyStatus, t: InfoTranslate): string {
 }
 
 const STORAGE_KEYS = {
-  encrypted_dir: "modal.settings.option.storage.encrypted_dir",
-  upriv_plain: "modal.settings.option.storage.upriv_plain",
+  encrypted_dir: "modal.storage.option.encrypted_dir",
+  upriv_plain: "modal.storage.option.upriv_plain",
 } as const;
 
 function yesNo(t: InfoTranslate, value: boolean): string {

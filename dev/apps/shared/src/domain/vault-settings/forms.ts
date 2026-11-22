@@ -1,6 +1,7 @@
 import { configEditGateAllows } from "../edit-policy/policy";
 import type { VaultDisplayStatus } from "../vault/types";
 import { kdfPresetIsDowngrade, type KdfUnlockPreset } from "./kdf";
+import type { VaultStorage } from "./types";
 
 export interface ChangePasswordFieldsState {
   currentPassword: string;
@@ -77,6 +78,39 @@ export function changeKdfFormCanSubmit(fields: {
   }
   if (fields.password.length === 0) return false;
   return fields.nextPreset !== fields.currentPreset;
+}
+
+export interface ChangeStorageFieldsState {
+  password: string;
+  storage: VaultStorage;
+}
+
+function sameStorage(a: VaultStorage, b: VaultStorage): boolean {
+  return a.mode === b.mode && a.plain_files === b.plain_files;
+}
+
+/** The Storage screen starts from `config.toml`'s copy, the value the vault list shows. */
+export function changeStorageFormIsDirty(fields: {
+  password: string;
+  storage: VaultStorage;
+  current: VaultStorage;
+}): boolean {
+  return fields.password.length > 0 || !sameStorage(fields.storage, fields.current);
+}
+
+export function changeStorageFormCanSubmit(fields: {
+  password: string;
+  storage: VaultStorage;
+  current: VaultStorage;
+  /** A Storage change requires `vault_closed`. */
+  vaultListStatus: VaultDisplayStatus;
+  submitting?: boolean;
+}): boolean {
+  if (fields.submitting) return false;
+  if (!configEditGateAllows("vault_closed", { vaultStatus: fields.vaultListStatus })) {
+    return false;
+  }
+  return fields.password.length > 0 && !sameStorage(fields.storage, fields.current);
 }
 
 export function changeKdfFormIsDowngrade(

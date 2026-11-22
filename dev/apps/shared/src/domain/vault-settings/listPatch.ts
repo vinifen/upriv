@@ -1,3 +1,4 @@
+import type { StorageMode } from "../vault/types";
 import type { VaultGroup } from "../vault-groups/types";
 import type { VaultListItem } from "../vault-list/types";
 import type { KdfUnlockPreset } from "./kdf";
@@ -13,7 +14,6 @@ export function vaultSettingsToListPatch(config: VaultSettingsConfig): VaultSett
     note: config.vault.note,
     hidden: config.vault.hidden,
     passwordHint: passwordHint || undefined,
-    storageMode: config.storage.mode,
   };
 }
 
@@ -38,6 +38,19 @@ export function applyVaultUnlockPreset(
   return { ...vault, unlockPreset };
 }
 
+/**
+ * List row after a Storage change, or an open that reset the storage value.
+ * A settings save never changes the mode, so these and the list refresh are
+ * the only ways the row's mode moves.
+ */
+export function applyVaultStorageMode(
+  vault: VaultListItem,
+  storageMode: StorageMode,
+): VaultListItem {
+  if (vault.storageMode === storageMode) return vault;
+  return { ...vault, storageMode };
+}
+
 /** Apply settings save patch onto one list row (`fromId` → `patch.id` when renamed). */
 export function applyVaultSettingsListPatch(
   vault: VaultListItem,
@@ -51,7 +64,6 @@ export function applyVaultSettingsListPatch(
     note: patch.note,
     hidden: patch.hidden,
     passwordHint: patch.passwordHint,
-    storageMode: patch.storageMode,
     unlockPreset: patch.unlockPreset ?? vault.unlockPreset,
   };
 }

@@ -21,12 +21,19 @@ export interface VaultRebuildResult {
   copy: string | null;
   /** Why no copy was written before the list was built. */
   copySkipped: BackupSkip | null;
+  /**
+   * The rebuilt list holds the default storage, encrypted, and the vault's
+   * settings said plain text: plain text is off until the Storage screen
+   * turns it on.
+   */
+  storageReset: boolean;
 }
 
 /**
  * The toast once a rebuild lands: what it put back (the files placed and
  * those set aside, or the header alone), then why it ran without a copy of
- * the vault from before when it did.
+ * the vault from before when it did, then that plain text is off when the
+ * rebuild turned it off.
  */
 export function vaultRebuiltToast(
   result: VaultRebuildResult,
@@ -40,8 +47,12 @@ export function vaultRebuiltToast(
       ? tr("toast.vault_rebuilt_set_aside", { name, files, count: String(result.setAside) })
       : tr("toast.vault_rebuilt", { name, files });
   const skipped = result.copySkipped;
-  if (skipped !== "no_room" && skipped !== "failed") return placed;
-  return `${placed} ${tr(`toast.vault_rebuild_copy_skipped.${skipped}`)}`;
+  const lines = [placed];
+  if (skipped === "no_room" || skipped === "failed") {
+    lines.push(tr(`toast.vault_rebuild_copy_skipped.${skipped}`));
+  }
+  if (result.storageReset) lines.push(tr("toast.vault_rebuild_storage_reset"));
+  return lines.join(" ");
 }
 
 /** A `vault_rebuild` answer, from the wire. */
@@ -56,5 +67,6 @@ export function parseVaultRebuildResult(raw: unknown): VaultRebuildResult {
     setAside: count(body.setAside),
     copy: typeof body.copy === "string" ? body.copy : null,
     copySkipped: parseBackupSkip(body.copySkipped),
+    storageReset: body.storageReset === true,
   };
 }

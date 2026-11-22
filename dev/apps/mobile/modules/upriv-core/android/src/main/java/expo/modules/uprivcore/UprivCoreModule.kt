@@ -336,7 +336,7 @@ private object CoreLanes {
     "vault_close", "vault_discard_import", "vault_plain_sync",
     "vault_plain_deletions", "vault_plain_send", "vault_plain_unsend" -> lifecycle
     "vault_change_password", "vault_password_change_finish", "vault_change_kdf",
-    "vault_rebuild" -> keys
+    "vault_change_storage", "vault_rebuild" -> keys
     "vault_delete" -> delete
     "vault_key_copies_update" -> keyCopies
     "vault_fs_import_os_file", "vault_import_probe" -> importFiles
@@ -350,7 +350,8 @@ private object CoreLanes {
     "backup_save",
     "backup_export" -> pack
     "data_folder_export" -> dataFolder
-    "folder_status", "data_folder_search", "vault_unlocked_folder_attach", "backup_list",
+    "folder_status", "data_folder_search", "vault_unlocked_destination",
+    "vault_unlocked_folder_attach", "backup_list",
     "backup_delete", "backup_promote", "backup_rename", "backup_folder_forget" -> folder
     else -> light
   }

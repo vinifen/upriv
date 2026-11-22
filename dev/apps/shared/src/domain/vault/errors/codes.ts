@@ -86,6 +86,8 @@ export const VAULT_ERROR_CODES = {
   PASSWORD_UNCHANGED: "password_unchanged",
   /** Unlock RAM preset matches the header. Not a broken vault header. */
   UNLOCK_RAM_UNCHANGED: "unlock_ram_unchanged",
+  /** A Storage change asked for the value `config.toml` already shows; refused before the password. */
+  STORAGE_UNCHANGED: "storage_unchanged",
   /** A vault export or the data-folder export chose a folder inside a `.upriv`. */
   EXPORT_DESTINATION_RESERVED: "export_destination_reserved",
   /** Delete or pin of a backup a backup export is reading. */

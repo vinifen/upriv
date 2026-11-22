@@ -35,7 +35,8 @@ export function storageModeIsPlaintext(mode: StorageMode): boolean {
  * `creating` / `opening` / `closing` / `queued` are list/runtime badges (row +
  * unlock/lock modal hints), not a full-screen pipeline overlay.
  * `queued` = FIFO job waiting; active job uses opening/closing/creating.
- * `exporting` / `backing_up` / `changing_password` / `changing_kdf` are closed-vault work.
+ * `exporting` / `backing_up` / `changing_password` / `changing_kdf` / `changing_storage` are
+ * closed-vault work.
  * `recovering` is Remove the folder wiping a leftover plain-text folder.
  * `deleting` is a delete running, or one that did not finish.
  * The row names that work and open stays refused until it finishes.
@@ -53,6 +54,7 @@ export type VaultDisplayStatus =
   | "backing_up"
   | "changing_password"
   | "changing_kdf"
+  | "changing_storage"
   | "deleting";
 
 /**
@@ -98,6 +100,8 @@ export type VaultPipelineListStatus = {
   passwordChangeVaultIds?: readonly string[];
   /** Closed vault whose unlock-RAM change is in flight. */
   kdfChangeVaultIds?: readonly string[];
+  /** Closed vault whose Storage change is in flight. */
+  storageChangeVaultIds?: readonly string[];
   /** Vault whose delete runs in this window. Displays `deleting`. */
   deletingVaultIds?: readonly string[];
   /** A running delete already told to finish the Delete now way. */
@@ -165,6 +169,7 @@ export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean 
     status === "recovering" ||
     status === "changing_password" ||
     status === "changing_kdf" ||
+    status === "changing_storage" ||
     status === "deleting"
   );
 }
@@ -352,6 +357,7 @@ export function resolveVaultListStatus(
   if (pipeline.recoveringVaultIds?.includes(row.id)) return "recovering";
   if (pipeline.passwordChangeVaultIds?.includes(row.id)) return "changing_password";
   if (pipeline.kdfChangeVaultIds?.includes(row.id)) return "changing_kdf";
+  if (pipeline.storageChangeVaultIds?.includes(row.id)) return "changing_storage";
   if (pipeline.deletingVaultIds?.includes(row.id)) return "deleting";
   return resolveVaultDisplayStatus(row);
 }
@@ -367,6 +373,7 @@ export function isVaultDisplayStatusQuiet(status: VaultDisplayStatus): boolean {
     status !== "recovering" &&
     status !== "changing_password" &&
     status !== "changing_kdf" &&
+    status !== "changing_storage" &&
     status !== "deleting"
   );
 }

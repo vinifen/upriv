@@ -1,4 +1,4 @@
-import { createVaultChoosesKdf, normalizeVaultSettingsConfig } from "../vault-settings";
+import { createVaultChoosesStoreSettings, normalizeVaultSettingsConfig } from "../vault-settings";
 import { normalizeStoredName } from "../format/storedName";
 import { displayNameToVaultId } from "../vault/displayName";
 import type { CreateVaultDraft, CreateVaultGroupAssignment, CreateVaultResult } from "./types";
@@ -51,7 +51,7 @@ export function buildCreateVaultResult(
     order: draft.order,
     storageMode: settings.storage.mode,
     settings,
-    unlockPreset: createVaultChoosesKdf(draft) ? draft.kdf.unlock_preset : undefined,
+    unlockPreset: createVaultChoosesStoreSettings(draft) ? draft.kdf.unlock_preset : undefined,
     groupAssignment: resolveCreateVaultGroupAssignment(draft),
     source: draft.source ?? "scratch",
     importKind: draft.importKind,

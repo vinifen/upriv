@@ -58,8 +58,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_LIST: "vault_list",
   VAULT_CREATE: "vault_create",
   VAULT_OPEN: "vault_open",
-  /** The folder an unlock would write, and what kind of place it is. */
-  VAULT_PLAIN_DESTINATION: "vault_plain_destination",
+  /** Where an unlock would put a vault's files on this device, found before the password. */
+  VAULT_UNLOCKED_DESTINATION: "vault_unlocked_destination",
   /** Leftover plaintext folder for recovery, or null. */
   VAULT_PLAIN_LEFTOVER: "vault_plain_leftover",
   /** Wipe a leftover plaintext folder (recovery Remove). */
@@ -80,6 +80,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_PASSWORD_CHANGE_FINISH: "vault_password_change_finish",
   /** A job: a new Argon2id unlock cost for the closed vault. The password and keys stay. */
   VAULT_CHANGE_KDF: "vault_change_kdf",
+  /** A job: the closed vault's storage value sealed with its password, then copied to `config.toml`. */
+  VAULT_CHANGE_STORAGE: "vault_change_storage",
   /** A job after each open: every blob's key copy made the header's. Core decides whether any is due. */
   VAULT_KEY_COPIES_UPDATE: "vault_key_copies_update",
   /** A job: the header from the blobs' key copies, the tree from their records and the backups. */

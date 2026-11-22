@@ -68,9 +68,10 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
     )
 }
 
-/// The work that changes a closed vault's keys or header: the password
-/// change and its Finish, the unlock-RAM change, and the rebuild. Own
-/// worker: rewriting every file must not sit ahead of another vault's close.
+/// The work that unlocks a closed vault to change it: the password change
+/// and its Finish, the unlock-RAM change, the Storage change, and the
+/// rebuild. Own worker: rewriting every file must not sit ahead of another
+/// vault's close, and two changes of one vault never run side by side.
 /// Argon2 inside the call still takes `with_unlock_lock` only for the derive.
 pub fn is_keys_io_method(method: &str) -> bool {
     matches!(
@@ -78,6 +79,7 @@ pub fn is_keys_io_method(method: &str) -> bool {
         "vault_change_password"
             | "vault_password_change_finish"
             | "vault_change_kdf"
+            | "vault_change_storage"
             | "vault_rebuild"
     )
 }
@@ -115,8 +117,9 @@ pub fn is_pack_io_method(method: &str) -> bool {
 }
 
 /// The calls that reach a folder of a list: the status of a row, the search
-/// for a data folder that answers, an encrypted vault's unlocked folder
-/// after its open, and listing, deleting, pinning, naming, and forgetting
+/// for a data folder that answers, where an unlock would put a vault's files,
+/// an encrypted vault's unlocked folder after its open, and listing,
+/// deleting, pinning, naming, and forgetting
 /// backups. A folder can be a sleeping or dead drive, so they stay off stdin,
 /// where a stop and Close now arrive, on a lane of several threads, so the
 /// rows of a list check side by side. The backups themselves run on the
@@ -126,6 +129,7 @@ pub fn is_folder_method(method: &str) -> bool {
         method,
         "folder_status"
             | "data_folder_search"
+            | "vault_unlocked_destination"
             | "vault_unlocked_folder_attach"
             | "backup_list"
             | "backup_delete"
@@ -263,6 +267,7 @@ mod tests {
             "vault_change_password",
             "vault_password_change_finish",
             "vault_change_kdf",
+            "vault_change_storage",
             "vault_rebuild",
         ] {
             assert!(!is_lifecycle_io_method(method), "{method}");
@@ -311,6 +316,7 @@ mod tests {
         for method in [
             "folder_status",
             "data_folder_search",
+            "vault_unlocked_destination",
             "vault_unlocked_folder_attach",
             "backup_list",
             "backup_delete",
@@ -403,6 +409,7 @@ mod tests {
             "folder_status",
             "vault_change_kdf",
             "vault_change_password",
+            "vault_change_storage",
             "vault_close",
             "vault_create",
             "vault_delete",
@@ -425,6 +432,7 @@ mod tests {
             "vault_plain_unsend",
             "vault_rebuild",
             "vault_unfinished_sweep",
+            "vault_unlocked_destination",
             "vault_unlocked_folder_attach",
         ];
         let expected: std::collections::BTreeSet<_> = expected

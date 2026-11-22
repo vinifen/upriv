@@ -4,24 +4,24 @@
 //! The folder is the vault's unlocked folder on this device:
 //! `{row}/upriv-unlocked/{vault name}` for a row of its chain, or
 //! `{data folder}/upriv-unlocked/{vault name}` beside the data folder. The
-//! settings name it; nothing sealed in the vault confirms it.
+//! settings name it; nothing sealed in the vault confirms it, so the unlock
+//! window shows it before the password ([`plain_destination`]).
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Serialize;
-
 use super::marker;
-use super::volume::{self, PlainFolderClass};
-use crate::config::{load_app_settings_at, load_vault_config, VaultConfig};
+use super::volume;
+use crate::config::{load_app_settings_at, VaultConfig};
 use crate::device::this_device;
 use crate::error::{PlainDestinationReason, Result, UprivError};
 use crate::folder_list::unlocked::{self, AppUnlockedFolders, UnlockedPlace};
-use crate::folder_list::{fail_over, Failover, Switch, Try};
+use crate::folder_list::{fail_over, Failover, Try};
 use crate::folder_probe::{FolderState, FOLDER_SWITCH_CHECK_LIMIT};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use crate::paths::{is_inside_upriv_of, path_is_under_reserved_upriv_tree, VaultRoot};
+use crate::vault::unlocked_destination::UnlockedDestination;
 use crate::vault::unlocked_folder::check_place;
 
 /// A vault's folder in one place of its chain.
@@ -47,17 +47,6 @@ impl Destination {
     }
 }
 
-/// `vault_plain_destination`: the folder an unlock would write, after the
-/// walk the open makes, without saving anything.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlainDestination {
-    pub path: String,
-    pub class: PlainFolderClass,
-    /// The selections the open would switch because the selected folder fails.
-    pub switches: Vec<Switch>,
-}
-
 /// The lists that decide a vault's place on this device.
 pub(super) struct Places {
     pub app: AppUnlockedFolders,
@@ -80,14 +69,22 @@ pub(super) fn places(root: &VaultRoot, config: &VaultConfig) -> Result<Places> {
     })
 }
 
-/// The folder the open would fill, checked the way the open checks it before
-/// the password: the walk down the chain stops at the first place that
-/// answers and whose vault folder is free.
-pub fn plain_destination(root: &VaultRoot, vault_id: &str) -> Result<PlainDestination> {
+/// The plain-text half of [`crate::vault::unlocked_destination`]: the
+/// folder the open would fill, checked the way the open checks it before
+/// the password, with nothing made. The walk down the chain stops at the
+/// first place that answers and whose vault folder is free; a leftover or an
+/// occupied folder is the open's error.
+pub(crate) fn plain_destination(
+    root: &VaultRoot,
+    vault_id: &str,
+    config: &VaultConfig,
+) -> Result<UnlockedDestination> {
     super::require_known_device()?;
-    let vault_dir = root.vault_dir(vault_id)?;
-    let config = load_vault_config(&vault_dir)?;
-    let places = places(root, &config)?;
+    let places = match places(root, config) {
+        Ok(places) => places,
+        Err(UprivError::UnlockedFolderUnset) => return Ok(UnlockedDestination::Unset),
+        Err(error) => return Err(error),
+    };
     let display_name = config.vault.display_name.as_str();
     let outcome = fail_over(&places.selected, &places.chain, |place| {
         try_place(root, vault_id, place, display_name, false)
@@ -113,15 +110,16 @@ pub fn plain_destination(root: &VaultRoot, vault_id: &str) -> Result<PlainDestin
             (value, switches)
         }
         Failover::Stopped(error) => return Err(error),
-        Failover::Unavailable(_) => {
-            return Err(UprivError::UnlockedFolderUnavailable(
-                places.selected.container(root.root()),
-            ))
+        Failover::Unavailable(reason) => {
+            return Ok(UnlockedDestination::Unavailable {
+                path: places.selected.container(root.root()).display().to_string(),
+                reason,
+            })
         }
     };
-    Ok(PlainDestination {
+    Ok(UnlockedDestination::Folder {
         path: dest.folder.display().to_string(),
-        class: volume::inspect(&dest.folder).class,
+        class: Some(volume::inspect(&dest.folder).class),
         switches,
     })
 }

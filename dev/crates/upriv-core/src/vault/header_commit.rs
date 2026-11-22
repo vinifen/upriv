@@ -256,7 +256,14 @@ mod tests {
     fn every_step_of_the_commit_opens_and_reads() {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
-        create_seeded_store(&store, OLD, KdfUnlockPreset::M32, &[]).unwrap();
+        create_seeded_store(
+            &store,
+            OLD,
+            KdfUnlockPreset::M32,
+            crate::store::VaultStorage::default(),
+            &[],
+        )
+        .unwrap();
         let mut opened = open_store(&store, OLD).unwrap();
         let kdf = HeaderKdf::fresh(KdfUnlockPreset::M64);
         let kek = kdf.derive_kek(OLD).unwrap();

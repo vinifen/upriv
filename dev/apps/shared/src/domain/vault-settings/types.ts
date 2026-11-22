@@ -15,7 +15,7 @@ export type { KdfParams, KdfUnlockPreset } from "./kdf";
 export {
   CONFIG_TOML_KDF_ANNOTATION,
   CONFIG_TOML_GROUPS_ANNOTATION,
-  createVaultChoosesKdf,
+  createVaultChoosesStoreSettings,
   DEFAULT_KDF_UNLOCK_PRESET,
   KDF_UNLOCK_PRESETS,
   kdfParamsFromPreset,
@@ -25,25 +25,18 @@ export {
 } from "./kdf";
 
 /**
- * Preference screens in vault settings, Backup before Auto-close as the
- * create window lists them. Lock is always close.
+ * Preference sections of vault settings, Backup before Auto-close as the
+ * create window lists them. Lock is always close. The storage value has its
+ * own screen (Storage), which takes the password.
  */
 export const VAULT_SETTINGS_SECTIONS = [
   "vault",
-  "storage",
   "unlocked_folder",
   "backup",
   "auto_close",
 ] as const;
 
 export type VaultSettingsSectionId = (typeof VAULT_SETTINGS_SECTIONS)[number];
-
-/** Both modes export; compression is chosen at export, not here. */
-export function vaultSettingsSectionsForStorage(
-  _mode: StorageMode,
-): readonly VaultSettingsSectionId[] {
-  return VAULT_SETTINGS_SECTIONS;
-}
 export type BackupMode = "keep_last" | "keep_all";
 export type ArchiveMode = "compress_encrypt" | "encrypt_only";
 /**
@@ -125,19 +118,18 @@ export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): Vault
   };
 }
 
-/** Apply storage mode change. */
-export function patchStorageMode(
-  config: VaultSettingsConfig,
-  mode: StorageMode,
-): VaultSettingsConfig {
-  return normalizeVaultSettingsConfig({
-    ...config,
-    storage: { ...config.storage, mode },
-  });
-}
-
 /** What a plain-text vault puts in its folder while open. The file manager holds everything. */
 export type PlainFiles = "chosen" | "whole";
+
+/**
+ * A vault's storage value (core `VaultStorage`). The vault's sealed index
+ * holds it and decides; `config.toml` holds this copy for what runs before
+ * the password. Only the Storage screen changes it, with the password.
+ */
+export interface VaultStorage {
+  mode: StorageMode;
+  plain_files: PlainFiles;
+}
 
 export type WipePattern = "random" | "zeros";
 
@@ -164,7 +156,7 @@ export interface VaultSectionConfig {
 
 export interface VaultSettingsConfig {
   vault: VaultSectionConfig;
-  storage: { mode: StorageMode; plain_files: PlainFiles };
+  storage: VaultStorage;
   /** `[unlocked_folder]`: the encrypted switch, and the vault's list per device. */
   unlocked_folder: VaultUnlockedFolder;
   backup: {
@@ -233,7 +225,6 @@ export interface VaultSettingsListPatch {
   note: string;
   hidden: boolean;
   passwordHint?: string;
-  storageMode: StorageMode;
   /** Set after an unlock-RAM change. Omitted saves leave the list row's preset. */
   unlockPreset?: KdfUnlockPreset;
 }

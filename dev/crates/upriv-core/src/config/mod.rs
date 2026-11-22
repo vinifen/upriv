@@ -30,8 +30,8 @@ pub use edit_policy::{
 pub use list_saves::{AppListChanges, ListsSaved, VaultListChanges};
 pub use vault_config::{
     load_vault_config, save_vault_config, serialize_vault_config_toml, set_vault_hidden,
-    vault_config_path, VaultBackupMode, VaultConfig, VaultIdentitySection, VaultStorageMode,
-    VaultStorageSection, VAULT_CONFIG_TOML_GROUPS_NOTE,
+    vault_config_path, VaultBackupMode, VaultConfig, VaultIdentitySection,
+    VAULT_CONFIG_TOML_GROUPS_NOTE,
 };
 pub use vault_groups::{
     create_vault_group_with_sort, delete_vault_group, known_vault_ids, load_vault_groups,

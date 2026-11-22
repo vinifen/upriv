@@ -89,7 +89,9 @@ pub(super) fn create_vault_with_welcome(
             save_vault_config(&dest, &config)?;
             let store = dest.join(crate::paths::STORE_DIR_NAME);
             // Same process-wide Argon2 gate as `open_vault` — never two KDFs at once.
-            with_unlock_lock(|| create_seeded_store(&store, password, preset, &initial_files))?;
+            with_unlock_lock(|| {
+                create_seeded_store(&store, password, preset, config.storage, &initial_files)
+            })?;
             crate::host_fs::create_dir_all(dest.join("backups"))?;
             let hash = content_hash_hex(&store)?;
             let mut persistence =

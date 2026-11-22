@@ -1,6 +1,7 @@
 import type { AttachAnswer, FolderSwitch } from "../../domain/folder-lists";
 import type { PlainCloseSummary } from "../../domain/vault-plain";
 import type {
+  VaultOpened,
   VaultPipelineError,
   VaultPipelineErrorCode,
   VaultPipelineKind,
@@ -53,13 +54,14 @@ export interface VaultLifecycleService {
   /**
    * Unlock as the job `job`. A stop rejects with `job_cancelled` and leaves the
    * vault closed (a plaintext folder already being filled is wiped). Resolves
-   * with the unlocked folder selections a plain-text open switched.
+   * with the unlocked folder selections a plain-text open switched, and
+   * whether the open reset the vault's storage value.
    */
   runOpeningPipeline(
     vaultId: string,
     onStep: (stepIndex: number) => void,
     job: string,
-  ): Promise<FolderSwitch[]>;
+  ): Promise<VaultOpened>;
   /** A close has no time limit; Close now (`hurryClose`) is its stop. */
   runClosingPipeline(
     vaultId: string,
