@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ImportBlockedModal } from "@/components/ImportBlockedModal";
 import { Button, Modal, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
@@ -152,6 +153,12 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
       </Modal>
 
       <HeldFilesDialog fm={fm} open={promptsOpen} />
+
+      <ImportBlockedModal
+        {...fm.importBlocked}
+        report={promptsOpen ? fm.importBlocked.report : null}
+        rootClassName="z-[120]"
+      />
 
       <Toast toast={fm.toast} onDismiss={fm.dismissToast} className="bottom-20 z-[130]" />
     </>

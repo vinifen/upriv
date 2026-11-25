@@ -40,7 +40,7 @@ pub fn settings_archive_bytes(config_toml: &str, preset: Option<KdfUnlockPreset>
         out.push('\n');
     }
     if let Some(preset) = preset {
-        out.push_str(&format!("# {PRESET_MARK} {}\n", preset_id(preset)));
+        out.push_str(&format!("# {PRESET_MARK} {}\n", preset.as_str()));
     }
     out.into_bytes()
 }
@@ -95,29 +95,6 @@ pub fn parse_embedded_settings(bytes: &[u8]) -> Result<EmbeddedVaultSettings> {
     })
 }
 
-fn preset_id(preset: KdfUnlockPreset) -> &'static str {
-    match preset {
-        KdfUnlockPreset::M32 => "32mib",
-        KdfUnlockPreset::M64 => "64mib",
-        KdfUnlockPreset::M128 => "128mib",
-        KdfUnlockPreset::M256 => "256mib",
-        KdfUnlockPreset::G1 => "1gib",
-        KdfUnlockPreset::G2 => "2gib",
-    }
-}
-
-fn preset_from_id(id: &str) -> Option<KdfUnlockPreset> {
-    Some(match id {
-        "32mib" => KdfUnlockPreset::M32,
-        "64mib" => KdfUnlockPreset::M64,
-        "128mib" => KdfUnlockPreset::M128,
-        "256mib" => KdfUnlockPreset::M256,
-        "1gib" => KdfUnlockPreset::G1,
-        "2gib" => KdfUnlockPreset::G2,
-        _ => return None,
-    })
-}
-
 fn unlock_preset_comment(text: &str) -> Option<KdfUnlockPreset> {
     let mut found = None;
     for line in text.lines() {
@@ -127,7 +104,7 @@ fn unlock_preset_comment(text: &str) -> Option<KdfUnlockPreset> {
         let Some(id) = rest.trim().strip_prefix(PRESET_MARK) else {
             continue;
         };
-        if let Some(preset) = preset_from_id(id.trim()) {
+        if let Some(preset) = KdfUnlockPreset::from_id(id.trim()) {
             found = Some(preset);
         }
     }

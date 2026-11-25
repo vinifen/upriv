@@ -92,6 +92,7 @@ impl Drop for EnvGuard {
 /// Marker file that identifies a Upriv vault-root directory.
 pub const VAULT_ROOT_SETTINGS_REL: &str = ".upriv/settings.toml";
 
+const UPRIV_DIR_REL: &str = ".upriv";
 const SETTINGS_REL: &str = VAULT_ROOT_SETTINGS_REL;
 const VAULTS_DIR_REL: &str = ".upriv/vaults";
 const STATE_FILE_REL: &str = ".upriv/state.json";
@@ -469,6 +470,11 @@ impl VaultRoot {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The data folder's `.upriv`: everything Upriv keeps there.
+    pub fn upriv_dir(&self) -> PathBuf {
+        self.root.join(UPRIV_DIR_REL)
     }
 
     pub fn settings_path(&self) -> PathBuf {

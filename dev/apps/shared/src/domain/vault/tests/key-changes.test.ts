@@ -36,6 +36,10 @@ describe("passwordChangeReportLines", () => {
     expect(
       keys(passwordChangeReportLines({ kind: "change", result: noRoom, stopped: false })),
     ).toEqual(["vault.change_password.success", "vault.change_password.backup_skipped.no_room"]);
+    const stopped = changed({ backup: null, backupSkipped: "stopped" });
+    expect(
+      keys(passwordChangeReportLines({ kind: "change", result: stopped, stopped: false })),
+    ).toEqual(["vault.change_password.success", "vault.change_password.backup_skipped.stopped"]);
     const off = changed({ backup: null, backupSkipped: "off" });
     expect(
       keys(passwordChangeReportLines({ kind: "change", result: off, stopped: false })),
@@ -107,6 +111,7 @@ describe("key change results", () => {
         keyCopies: "waiting",
       }),
     ).toEqual({ backup: "a.zip", backupSkipped: null, unreadable: 0, keyCopies: "waiting" });
+    expect(parsePasswordChangeResult({ backupSkipped: "stopped" }).backupSkipped).toBe("stopped");
     expect(parsePasswordChangeResult(null)).toEqual({
       backup: null,
       backupSkipped: null,

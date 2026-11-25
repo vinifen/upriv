@@ -36,16 +36,25 @@ function foundRoot(rootPath = "/data"): VaultRootResolveResult {
   return { status: "found", rootPath, source: "default" };
 }
 
-const DATA_FOLDERS: DataFolderListView = { groups: {}, defaultFolder: "/home", explicit: null };
+const DATA_FOLDERS: DataFolderListView = {
+  groups: {},
+  osNames: {},
+  defaultFolder: "/home",
+  explicit: null,
+};
 
-/** A data folder service that answers `resolve` and the list; Info calls nothing else. */
-function rootService(resolve: VaultRootService["resolve"]): VaultRootService {
+/** A data folder service that answers `resolve`, the list, and its size; Info calls nothing else. */
+function rootService(
+  resolve: VaultRootService["resolve"],
+  size: VaultRootService["size"] = async () => 1024,
+): VaultRootService {
   const unused = async (): Promise<never> => {
     throw new Error("Info does not call this");
   };
   return {
     resolve,
     list: async () => DATA_FOLDERS,
+    size,
     status: unused,
     apply: unused,
     search: unused,
@@ -62,7 +71,7 @@ describe("useSystemInfoData", () => {
     versionOffline: true,
   });
   const deviceService: DeviceService = {
-    info: async () => ({ id: "a".repeat(32), system: "linux" }),
+    info: async () => ({ id: "a".repeat(32), system: "linux", os: "Ubuntu 24.04.5 LTS" }),
   };
 
   it("does not refetch when vaults is a new array with the same inventory counts", async () => {
@@ -81,36 +90,148 @@ describe("useSystemInfoData", () => {
           settings,
           vaultRootService,
           deviceService,
+          osNames: {},
           getVersion,
         }),
       { initialProps: { vaults: [vaultItem("a")] } },
     );
 
     await waitFor(() => {
-      expect(result.current.snapshot?.inventory.vaultsTotal).toBe(1);
+      expect(result.current.snapshot?.dataFolders?.defaultFolder).toBe("/home");
     });
     expect(resolveCount).toBe(1);
-    expect(result.current.snapshot?.paths.appHome).toBe("/home");
-    expect(result.current.snapshot?.paths.logsDir).toBe("/data/.upriv/logs");
+    expect(result.current.snapshot?.root).toEqual(foundRoot());
 
     rerender({ vaults: [{ ...vaultItem("a"), note: "touched" }] });
     await act(async () => {
       await Promise.resolve();
     });
     expect(resolveCount).toBe(1);
-    expect(result.current.loading).toBe(false);
     expect(result.current.snapshot?.inventory.vaultsTotal).toBe(1);
   });
 
-  it("keeps the previous snapshot while a later load is in flight", async () => {
-    const second = deferred<VaultRootResolveResult>();
+  it("shows the version and the device before the data folder answers", async () => {
+    const root = deferred<VaultRootResolveResult>();
+    const vaultRootService = rootService(() => root.promise);
+
+    const { result } = renderHook(() =>
+      useSystemInfoData({
+        open: true,
+        vaults: [vaultItem("a")],
+        groups: [],
+        settings,
+        vaultRootService,
+        deviceService,
+        osNames: {},
+        getVersion,
+      }),
+    );
+
+    // The list and the settings show at once; each read fills its part.
+    expect(result.current.snapshot?.inventory.vaultsTotal).toBe(1);
+    await waitFor(() => {
+      expect(result.current.snapshot?.app?.version).toBe("0.1.0-beta");
+      expect(result.current.snapshot?.device?.system).toBe("linux");
+    });
+    expect(result.current.snapshot?.root).toBeNull();
+
+    await act(async () => {
+      root.resolve(foundRoot());
+    });
+    await waitFor(() => {
+      expect(result.current.snapshot?.root).toEqual(foundRoot());
+    });
+  });
+
+  /** Info open or closed on `service`, as the window drives it. */
+  function infoOn(service: VaultRootService) {
+    return renderHook(
+      ({ open }: { open: boolean }) =>
+        useSystemInfoData({
+          open,
+          vaults: [vaultItem("a")],
+          groups: [],
+          settings,
+          vaultRootService: service,
+          deviceService,
+          osNames: {},
+          getVersion,
+        }),
+      { initialProps: { open: true } },
+    );
+  }
+
+  it("measures the data folder on its own: a slow walk holds back its row alone", async () => {
+    const walk = deferred<number>();
+    const { result } = infoOn(
+      rootService(
+        async () => foundRoot(),
+        () => walk.promise,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(result.current.snapshot?.root).toEqual(foundRoot());
+      expect(result.current.snapshot?.dataFolders).toEqual(DATA_FOLDERS);
+    });
+    expect(result.current.snapshot?.dataFolderBytes).toBe("measuring");
+
+    await act(async () => {
+      walk.resolve(5 * 1024 * 1024 * 1024);
+    });
+    await waitFor(() => {
+      expect(result.current.snapshot?.dataFolderBytes).toBe(5 * 1024 * 1024 * 1024);
+    });
+  });
+
+  it("joins the walk still running when the window opens again", async () => {
+    const walk = deferred<number>();
+    let walks = 0;
+    const { result, rerender } = infoOn(
+      rootService(
+        async () => foundRoot(),
+        () => {
+          walks += 1;
+          return walk.promise;
+        },
+      ),
+    );
+    rerender({ open: false });
+    rerender({ open: true });
+    await waitFor(() => {
+      expect(result.current.snapshot?.root).toEqual(foundRoot());
+    });
+    expect(walks).toBe(1);
+
+    await act(async () => {
+      walk.resolve(2048);
+    });
+    await waitFor(() => {
+      expect(result.current.snapshot?.dataFolderBytes).toBe(2048);
+    });
+  });
+
+  it("shows a measure that failed as a dash, and fails nothing else", async () => {
+    const { result } = infoOn(
+      rootService(
+        async () => foundRoot(),
+        async () => {
+          throw new RpcError("io_error", "unreadable");
+        },
+      ),
+    );
+    await waitFor(() => {
+      expect(result.current.snapshot?.dataFolderBytes).toBeNull();
+    });
+    expect(result.current.loadError).toBe(false);
+    expect(result.current.snapshot?.root).toEqual(foundRoot());
+  });
+
+  it("follows the list at once, with no new read", async () => {
     let resolveCount = 0;
-    const vaultRootService = rootService(() => {
+    const vaultRootService = rootService(async () => {
       resolveCount += 1;
-      if (resolveCount === 1) {
-        return Promise.resolve(foundRoot());
-      }
-      return second.promise;
+      return foundRoot();
     });
 
     const { result, rerender } = renderHook(
@@ -122,28 +243,20 @@ describe("useSystemInfoData", () => {
           settings,
           vaultRootService,
           deviceService,
+          osNames: {},
           getVersion,
         }),
       { initialProps: { vaults: [vaultItem("a")] } },
     );
 
     await waitFor(() => {
-      expect(result.current.snapshot).not.toBeNull();
-    });
-
-    rerender({ vaults: [vaultItem("a", "open")] });
-    await waitFor(() => {
-      expect(result.current.loading).toBe(true);
+      expect(result.current.snapshot?.root).not.toBeNull();
     });
     expect(result.current.snapshot?.inventory.vaultsOpen).toBe(0);
 
-    await act(async () => {
-      second.resolve(foundRoot());
-    });
-    await waitFor(() => {
-      expect(result.current.snapshot?.inventory.vaultsOpen).toBe(1);
-      expect(result.current.loading).toBe(false);
-    });
+    rerender({ vaults: [vaultItem("a", "open")] });
+    expect(result.current.snapshot?.inventory.vaultsOpen).toBe(1);
+    expect(resolveCount).toBe(1);
   });
 
   it("excludes hidden vaults from vaultsOpen and lastOpenedVault when show-hidden is off", async () => {
@@ -165,6 +278,7 @@ describe("useSystemInfoData", () => {
           settings: settingsWithLast,
           vaultRootService,
           deviceService,
+          osNames: {},
           getVersion,
           showHiddenVaults,
         }),
@@ -195,25 +309,24 @@ describe("useSystemInfoData", () => {
       return Promise.reject(new RpcError("vault_root_not_found", "gone"));
     });
 
-    const { result, rerender } = renderHook(
-      ({ vaults }: { vaults: VaultListItem[] }) =>
-        useSystemInfoData({
-          open: true,
-          vaults,
-          groups: [],
-          settings,
-          vaultRootService,
-          deviceService,
-          getVersion,
-        }),
-      { initialProps: { vaults: [vaultItem("a")] } },
+    const { result } = renderHook(() =>
+      useSystemInfoData({
+        open: true,
+        vaults: [vaultItem("a")],
+        groups: [],
+        settings,
+        vaultRootService,
+        deviceService,
+        osNames: {},
+        getVersion,
+      }),
     );
 
     await waitFor(() => {
-      expect(result.current.snapshot?.root.status).toBe("found");
+      expect(result.current.snapshot?.root?.status).toBe("found");
     });
 
-    rerender({ vaults: [vaultItem("a", "open")] });
+    act(() => result.current.retryLoad());
     await waitFor(() => {
       expect(result.current.loadError).toBe(true);
     });
@@ -234,6 +347,7 @@ describe("useSystemInfoData", () => {
         settings,
         vaultRootService,
         deviceService,
+        osNames: {},
         getVersion,
       }),
     );
@@ -261,6 +375,7 @@ describe("useSystemInfoData", () => {
         settings,
         vaultRootService,
         deviceService,
+        osNames: {},
         getVersion,
       }),
     );
@@ -288,6 +403,7 @@ describe("useSystemInfoData", () => {
           settings: nextSettings,
           vaultRootService,
           deviceService,
+          osNames: {},
           getVersion,
         }),
       { initialProps: { nextSettings: settings } },
@@ -310,6 +426,5 @@ describe("useSystemInfoData", () => {
       await Promise.resolve();
     });
     expect(resolveCount).toBe(1);
-    expect(result.current.loading).toBe(false);
   });
 });

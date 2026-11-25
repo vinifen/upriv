@@ -52,17 +52,33 @@ export function parseDaemonStdoutLine(line: string): unknown | null {
   }
 }
 
+/** A daemon answer that failed: its `code: message` text, and the details core sent. */
+export class DaemonRpcError extends Error {
+  readonly details: unknown;
+
+  constructor(body: RpcErrorBody | undefined, fallback: string) {
+    super(formatRpcError(body, fallback));
+    this.name = "DaemonRpcError";
+    this.details = body?.details;
+  }
+}
+
 /**
  * What `upriv-invoke` answers: the value, or the failure as its `code: message`
- * text. The preload throws that text as an `Error`, which the renderer parses.
+ * text with the details core sent. The preload hands it to the renderer as it
+ * is, since an error thrown across the bridge keeps only its message.
  */
-export type InvokeReply = { ok: true; value: unknown } | { ok: false; error: string };
+export type InvokeReply =
+  { ok: true; value: unknown } | { ok: false; error: string; details?: unknown };
 
 /** Run one invoke and settle it into a reply, so a failure never leaves the handler as a throw. */
 export async function settleInvoke(run: () => Promise<unknown>): Promise<InvokeReply> {
   try {
     return { ok: true, value: await run() };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    const text = error instanceof Error ? error.message : String(error);
+    return error instanceof DaemonRpcError && error.details !== undefined
+      ? { ok: false, error: text, details: error.details }
+      : { ok: false, error: text };
   }
 }

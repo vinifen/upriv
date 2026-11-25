@@ -10,6 +10,8 @@ export interface InfoField {
   openPath?: string;
   /** HTTPS page opened from this row. */
   href?: string;
+  /** Its value is still being read: the modal draws a skeleton in its place. */
+  loading?: boolean;
 }
 
 export interface InfoSection {

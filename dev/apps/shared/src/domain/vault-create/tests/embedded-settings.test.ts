@@ -25,6 +25,7 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       mode: "keep_all",
       keep_last: 3,
       skip_unchanged: false,
+      keep_current: false,
       devices: {},
     },
     security: {
@@ -74,6 +75,7 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.hidden).toBe(true);
     expect(next.backup.mode).toBe("keep_all");
     expect(next.backup.skip_unchanged).toBe(false);
+    expect(next.backup.keep_current).toBe(false);
     expect(next.security.wipe_passes).toBe(2);
     expect(next.seven_zip.solid).toBe(true);
     expect(next.file_manager.confirm_delete).toBe(false);
@@ -90,6 +92,7 @@ describe("applyEmbeddedVaultSettings", () => {
         mode: "keep_all" as const,
         keep_last: 1,
         skip_unchanged: true,
+        keep_current: true,
         devices: {},
       },
     };

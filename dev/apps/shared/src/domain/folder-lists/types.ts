@@ -98,8 +98,10 @@ export const VAULT_BACKUP_LIST: FolderListPolicy<VaultBackupChoice> = {
   allowsNothing: false,
 };
 
-/** An encrypted vault's own switch for its unlocked folder, on every device. */
-export type EncryptedFolderSwitch = "inherit" | "on" | "off";
+/** An encrypted vault's own choice for its unlocked folder, on every device, in screen order. */
+export const ENCRYPTED_FOLDER_SWITCHES = ["inherit", "on", "off"] as const;
+
+export type EncryptedFolderSwitch = (typeof ENCRYPTED_FOLDER_SWITCHES)[number];
 
 /** `[unlocked_folders]` of `settings.toml`. */
 export interface AppUnlockedFolders {

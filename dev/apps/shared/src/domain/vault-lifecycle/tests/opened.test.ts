@@ -6,16 +6,30 @@ describe("parseVaultOpened", () => {
     expect(parseVaultOpened({ switches: [], storageReset: "saved" })).toEqual({
       switches: [],
       storageReset: "saved",
+      importKept: false,
     });
     expect(parseVaultOpened({ switches: [], storageReset: "unsaved" }).storageReset).toBe(
       "unsaved",
     );
   });
 
+  it("reads an unlock that kept a cut-off import", () => {
+    expect(parseVaultOpened({ switches: [], importKept: true }).importKept).toBe(true);
+    expect(parseVaultOpened({ importKept: "yes" }).importKept).toBe(false);
+  });
+
   it("reads an open with no reset, and a value it does not know as none", () => {
-    expect(parseVaultOpened({ switches: [] })).toEqual({ switches: [], storageReset: null });
+    expect(parseVaultOpened({ switches: [] })).toEqual({
+      switches: [],
+      storageReset: null,
+      importKept: false,
+    });
     expect(parseVaultOpened({ storageReset: "later" }).storageReset).toBeNull();
-    expect(parseVaultOpened(null)).toEqual({ switches: [], storageReset: null });
+    expect(parseVaultOpened(null)).toEqual({
+      switches: [],
+      storageReset: null,
+      importKept: false,
+    });
   });
 });
 

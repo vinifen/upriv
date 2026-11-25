@@ -149,6 +149,7 @@ pub(super) fn apply(params: Value) -> RpcResponse {
     let source = applied.source.as_str();
     if applied.switched {
         upriv_core::data_folder_entered(applied.root.root());
+        upriv_core::note_os_name(applied.root.root());
         leave_then_reopen_logging(
             prev_logger.as_deref(),
             from_path.as_deref(),

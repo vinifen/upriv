@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useAppSettingsService } from "@/platform/services";
+import { useAppSettingsService, useDeviceService } from "@/platform/services";
 import { I18nProvider, useTranslation } from "@/i18n";
 import { applyDocumentTheme } from "@/theme";
 import {
@@ -27,8 +27,9 @@ import type {
   AppSettingsConfig,
   AppSettingsPatch,
   ListsSaved,
+  OsNames,
 } from "@upriv/shared";
-import { useToast } from "@upriv/shared/react";
+import { DeviceNamesProvider, useDeviceInfo, useToast } from "@upriv/shared/react";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { Toast } from "@/components/ui";
 import type { I18nKey } from "@/i18n";
@@ -115,7 +116,10 @@ function SettingsPersistErrorToast({ signal, error }: { signal: number; error: u
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const appSettingsService = useAppSettingsService();
+  const device = useDeviceInfo(useDeviceService());
   const [settings, setSettings] = useState<AppSettingsConfig>(() => createDefaultAppSettings());
+  /** The data folder's `[os_names]`: every window names devices by them. */
+  const [osNames, setOsNames] = useState<OsNames>({});
   const [settingsReady, setSettingsReady] = useState(false);
   const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
   const [settingsOnDisk, setSettingsOnDisk] = useState(false);
@@ -144,6 +148,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           const normalized = normalizeAppSettings(loaded.settings);
           settingsRef.current = normalized;
           setSettings(normalized);
+          setOsNames(loaded.osNames);
           setSettingsOnDisk(loaded.onDisk);
           setSettingsLoadFailed(false);
           setSettingsReady(true);
@@ -169,6 +174,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       const loaded = await appSettingsService.load();
       const normalized = normalizeAppSettings(loaded.settings);
       setSettingsOnDisk(loaded.onDisk);
+      setOsNames(loaded.osNames);
       if (!loaded.onDisk) {
         // First-run / incomplete: keep RAM so the Gate locale picker still works.
         // A missing `.upriv` (case B) resets via `forgetVaultRootSession` instead.
@@ -193,6 +199,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     const defaults = createDefaultAppSettings();
     settingsRef.current = defaults;
     setSettings(defaults);
+    setOsNames({});
     setSettingsOnDisk(false);
     setSettingsLoadFailed(false);
     setSettingsReady(true);
@@ -370,7 +377,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   return (
     <AppSettingsContext.Provider value={value}>
       <I18nProvider locale={settings.ui.locale}>
-        {children}
+        <DeviceNamesProvider names={osNames} here={device}>
+          {children}
+        </DeviceNamesProvider>
         <SettingsPersistErrorToast signal={persistErrorSignal} error={persistError} />
       </I18nProvider>
     </AppSettingsContext.Provider>

@@ -23,6 +23,7 @@ export {
   APP_BACKUP_LIST,
   APP_UNLOCKED_LIST,
   DATA_FOLDER_LIST,
+  ENCRYPTED_FOLDER_SWITCHES,
   NOTHING_SELECTED,
   ROW_NAME_MAX_CHARS,
   SHARED_BACKUPS_CONTAINER,
@@ -67,7 +68,13 @@ export {
   rowUnsaved,
 } from "./changes";
 export { encryptedFolderOn, encryptedFolderUnchosen } from "./unlocked";
-export { appUnlockedFixedFolders, besideFolder, dataFolderFixedFolders } from "./fixed";
+export {
+  appUnlockedFixedFolders,
+  besideFolder,
+  dataFolderBackupsFolder,
+  dataFolderFixedFolders,
+  selectionFolder,
+} from "./fixed";
 export type { RowProblem } from "./changes";
 export {
   parseChoiceName,
@@ -98,7 +105,13 @@ export {
 export type { AppListChanges, ListLocks, ListsSaved, VaultListChanges } from "./saves";
 export { parseAttachAnswer, parseOsFolderAnswer, parseUnlockedFolderInfo } from "./attach";
 export type { AttachAnswer, OsFolderAnswer, UnlockedFolderInfo } from "./attach";
-export { choiceNameLabel, fixedChoiceLabel, rowLabel, selectionLabel } from "./labels";
+export {
+  choiceNameLabel,
+  fixedChoiceLabel,
+  removeDeviceQuestion,
+  rowLabel,
+  selectionLabel,
+} from "./labels";
 export type { ListTranslate } from "./labels";
 export { FOLDER_PATH_CHECK_DELAY_MS } from "./types";
 export {

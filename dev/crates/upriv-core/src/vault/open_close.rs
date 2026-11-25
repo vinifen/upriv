@@ -5,7 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::config::{load_vault_config, save_vault_config, VaultConfig};
+use crate::device::this_device;
 use crate::error::{Result, UprivError};
 use crate::folder_list::unlocked::EncryptedSwitch;
 use crate::folder_list::{Switch, UNLOCKED_CONTAINER};
@@ -20,24 +23,25 @@ use crate::runtime_state::{
 use crate::session::{
     any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
     is_vault_closing_at, is_vault_open_at, open_session_ids_under, take_session,
-    vault_close_phase_at, with_unlock_lock, with_vault_dir_lock, ClosePhase, ClosingGuard, Job,
-    JobKind, OpenSession, PreparingGuard,
+    vault_close_step_at, with_unlock_lock, with_vault_dir_lock, ClosePhase, CloseStep,
+    ClosingGuard, Job, JobKind, OpenSession, PreparingGuard,
 };
 use crate::store::{
     content_hash_hex, content_hash_with_index, flush_index_parts, index_logical_hash,
     pack_blob_waste, BlobPackMode, ChunkBlobMutation, OpenedStore, RecordsDue, Sealed, Unlock,
-    VaultStorage,
+    VaultIndex, VaultStorage,
 };
 
 use super::backup::{
-    backup_on_close, close_backup_is_kept, discard_unfinished_backups, list_backups,
-    promote_backup_save, LastBackup,
+    backup_on_close, close_backup_place, discard_unfinished_backups, list_backups,
+    promote_backup_save, LastBackup, LastBackupPlace,
 };
 use super::closed_store::{steady, unlock_counted, ClosedStore};
 use super::header_commit::{next_generation, CommitRecord};
 use super::password_change::{settle_pending, SettledPending};
 use super::persistence::{
-    load_vault_persistence, save_vault_persistence, update_vault_persistence, VaultPersistence,
+    load_vault_persistence, save_vault_persistence, update_vault_persistence, BackupDeviceRecord,
+    VaultPersistence,
 };
 use crate::failure::classify_write_failure;
 
@@ -121,6 +125,10 @@ pub struct VaultOpened {
     /// default ([`StorageReset`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_reset: Option<StorageReset>,
+    /// The vault's import had been cut off, and this unlock kept what got in:
+    /// its `[importing]` mark is gone, and it is a vault like any other.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub import_kept: bool,
 }
 
 /// Whether a reset at open reached the disk.
@@ -235,6 +243,20 @@ pub(crate) fn open_vault_for_ingest(
     .map(|_| ())
 }
 
+/// While a create, a store copy, or an import still makes or fills the vault,
+/// and for a vault whose create or copy was cut off (the launch sweep removes
+/// it), an unlock is refused before any lock, so it never waits behind that
+/// work. A vault whose import was cut off opens: that unlock keeps what got in.
+fn refuse_while_made(root: &VaultRoot, vault_id: &str, vault_dir: &Path) -> Result<()> {
+    let filling = || load_vault_config(vault_dir).is_ok_and(|config| config.importing.is_some());
+    if crate::runtime_state::vault_recorded_unfinished(root, vault_id)
+        || (filling() && super::unfinished::import_running(root, vault_id, vault_dir))
+    {
+        return Err(UprivError::VaultImportUnfinished);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OpenKind {
     /// The person opens the vault: an unlocked folder may follow.
@@ -257,6 +279,10 @@ fn open_unlocked_session(
         return Err(UprivError::WrongPassword);
     }
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
+    let user = kind == OpenKind::User;
+    if user {
+        refuse_while_made(root, vault_id, &vault_dir)?;
+    }
     let _preparing = PreparingGuard::enter_exclusive(&vault_dir)?;
     with_vault_dir_lock(&vault_dir, || {
         if !vault_dir.host_is_dir() {
@@ -266,7 +292,6 @@ fn open_unlocked_session(
         if config.deleting.is_some() {
             return Err(UprivError::VaultDeleting);
         }
-        let user = kind == OpenKind::User;
         // A vault another process holds is not a leftover: the lock below
         // refuses it with the right error. A leftover plain-text folder
         // blocks every open, whatever the copy says.
@@ -276,7 +301,7 @@ fn open_unlocked_session(
                 super::plain::check_before_unlock(root, vault_id, &config)?;
             }
         }
-        let (plain, storage_reset) = with_unlock_lock(|| {
+        let (plain, storage_reset, import_kept) = with_unlock_lock(|| {
             check_unlock_allowed(&vault_dir)?;
             if is_vault_open_at(&vault_dir) {
                 return Err(UprivError::VaultAlreadyOpen(vault_id.to_string()));
@@ -317,6 +342,16 @@ fn open_unlocked_session(
             }
             let storage_reset =
                 (!agree).then(|| reset_storage(&vault_dir, &mut store, &mut config));
+            // The person's unlock of a vault whose import was cut off keeps
+            // what got in. The mark goes before the session exists, so no
+            // session of theirs sits on a marked vault; a write that fails
+            // fails the open, and the vault stays in recovery.
+            let import_kept = user && config.importing.is_some();
+            if import_kept {
+                config.importing = None;
+                save_vault_config(&vault_dir, &config)?;
+                log_event(LogLevel::Info, "vault_import_kept", &[("id", vault_id)]);
+            }
             drop_unused_keys(&mut store);
             let opened = OpenedStore {
                 header: store.header,
@@ -330,6 +365,9 @@ fn open_unlocked_session(
                 vault_dir.clone(),
                 opened,
             );
+            if user && config.backup.enabled && config.backup.skip_unchanged {
+                note_first_open(&vault_dir, vault_id, &session.index);
+            }
             // Writes hash only when a close will compare contents. Turning the
             // skip on later costs one zip, not a re-read.
             session.index.writes.track_digests =
@@ -342,12 +380,13 @@ fn open_unlocked_session(
                 let _ = take_session(&vault_dir);
                 return Err(error);
             }
-            Ok((plain, storage_reset))
+            Ok((plain, storage_reset, import_kept))
         })?;
         // Outside the unlock lock: filling a folder can take minutes, and
         // other vaults must still open meanwhile.
         let mut opened = VaultOpened {
             storage_reset,
+            import_kept,
             ..VaultOpened::default()
         };
         if plain {
@@ -362,6 +401,38 @@ fn open_unlocked_session(
         log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
         Ok(opened)
     })
+}
+
+/// Record the tree as this device's starting point when it has no record of
+/// the vault's backups yet: the first open of a new vault, an import, a copy
+/// of a backup, or a vault from another device. Files its first close finds
+/// unchanged since then are no change. The record names no zip, so with
+/// `keep_current` that close still writes the first one. A failure costs that
+/// close a zip, and is logged; an unknown device records nothing.
+fn note_first_open(vault_dir: &Path, vault_id: &str, index: &VaultIndex) {
+    if this_device().id.is_none() {
+        return;
+    }
+    let recorded = load_vault_persistence(vault_dir)
+        .ok()
+        .flatten()
+        .is_some_and(|saved| saved.this_device_record().is_some());
+    if recorded {
+        return;
+    }
+    let hash = index_logical_hash(index);
+    let noted = update_vault_persistence(vault_dir, vault_id, |persistence| {
+        if let Some(record) = persistence.this_device_record_mut() {
+            record.index_hash = Some(hash);
+        }
+    });
+    if noted.is_err() {
+        log_event(
+            LogLevel::Warn,
+            "vault_backup_start_unrecorded",
+            &[("id", vault_id)],
+        );
+    }
 }
 
 /// Drop a session whose open did not finish.
@@ -408,8 +479,31 @@ pub struct CloseVaultOutcome {
     pub backup_failure: Option<&'static str>,
     /// Selections the close backup switched because a backup folder failed.
     pub backup_switches: Vec<Switch>,
+    /// Why a vault whose files did not change still got a zip, so the person
+    /// is told; `None` for a zip of changed files, a first one, or none.
+    pub backup_reason: Option<CloseBackupReason>,
+    /// The folder the close's zip went to; `None` when it wrote none.
+    pub backup_folder: Option<String>,
     /// What happened to a plaintext vault's folder.
     pub plain: Option<super::plain::PlainCloseSummary>,
+}
+
+/// Why a close wrote a zip of files that did not change since this device's
+/// last backup, while unchanged files skip their zip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseBackupReason {
+    /// A password change, an unlock-RAM change, or a rebuild rewrote the
+    /// store since: no zip holds it as it is, and keep-last can now drop a
+    /// zip of the store from before.
+    Rewritten,
+    /// The last zip is in another folder than the one in use now.
+    Moved,
+    /// The last zip is no longer in the folder in use.
+    Missing,
+    /// This device has written no zip of the vault yet: its first close since
+    /// its first open here, a new vault's among them.
+    First,
 }
 
 /// Keep the newest backup for good: it holds the vault from before a session
@@ -432,6 +526,11 @@ struct BackupDue {
     /// This machine's last backup: its contents id, and its zip.
     last_hash: Option<String>,
     last: Option<LastBackup>,
+    /// The store was rewritten after that zip.
+    rewritten: bool,
+    /// `[backup] keep_current`: unchanged files still get a zip while no
+    /// backup in the folder in use holds the vault as it is.
+    keep_current: bool,
 }
 
 /// How the backup of a close that sealed ended.
@@ -439,6 +538,43 @@ struct BackupDue {
 struct CloseBackupReport {
     failure: Option<&'static str>,
     switches: Vec<Switch>,
+    /// Why files that did not change got a zip.
+    reason: Option<CloseBackupReason>,
+    /// The folder the zip went to.
+    folder: Option<String>,
+}
+
+/// What a close does about its zip.
+enum CloseBackupNeed {
+    /// The files did not change and their last zip is in the folder in use.
+    Skip,
+    /// A zip, and why when the files did not change.
+    Write(Option<CloseBackupReason>),
+}
+
+/// A close that does not compare (`skip_unchanged` off) and changed files get
+/// a zip with no reason to tell. Files count as changed against this device's
+/// last zip, or the tree its first open here found ([`note_first_open`]).
+/// Unchanged files get one only with `keep_current`, while no zip of the store
+/// as it is sits in the folder in use.
+fn close_backup_need(root: &VaultRoot, vault_id: &str, due: &BackupDue) -> CloseBackupNeed {
+    if due.logical_hash.is_none() || due.logical_hash != due.last_hash {
+        return CloseBackupNeed::Write(None);
+    }
+    if !due.keep_current {
+        return CloseBackupNeed::Skip;
+    }
+    if due.rewritten {
+        return CloseBackupNeed::Write(Some(CloseBackupReason::Rewritten));
+    }
+    let Some(last) = due.last.as_ref() else {
+        return CloseBackupNeed::Write(Some(CloseBackupReason::First));
+    };
+    match close_backup_place(root, vault_id, last) {
+        LastBackupPlace::Kept => CloseBackupNeed::Skip,
+        LastBackupPlace::OtherFolder => CloseBackupNeed::Write(Some(CloseBackupReason::Moved)),
+        LastBackupPlace::Gone => CloseBackupNeed::Write(Some(CloseBackupReason::Missing)),
+    }
 }
 
 /// Write the close backup. A backup is ciphertext and needs no key, so a close
@@ -452,37 +588,37 @@ fn write_close_backup(
     closing: &ClosingGuard,
     due: BackupDue,
 ) -> CloseBackupReport {
-    let unchanged = due.logical_hash.is_some() && due.logical_hash == due.last_hash;
-    let already_backed_up = unchanged
-        && due
-            .last
-            .as_ref()
-            .is_some_and(|last| close_backup_is_kept(root, vault_id, last));
-    if already_backed_up {
+    let CloseBackupNeed::Write(reason) = close_backup_need(root, vault_id, &due) else {
         return CloseBackupReport::default();
-    }
+    };
     closing.set_phase(ClosePhase::Backup);
     match backup_on_close(root, vault_id, closing.backup_job()) {
         Ok(Some(written)) => {
-            if let Some(hash) = due.logical_hash {
-                let recorded = update_vault_persistence(vault_dir, vault_id, |persistence| {
-                    if let Some(record) = persistence.this_device_record_mut() {
-                        record.index_hash = Some(hash);
-                        record.stamp = Some(written.stamp.clone());
-                        record.folder = Some(written.folder.clone());
-                    }
-                });
-                if recorded.is_err() {
-                    log_event(
-                        LogLevel::Warn,
-                        "vault_backup_unrecorded",
-                        &[("id", vault_id)],
-                    );
+            let recorded = update_vault_persistence(vault_dir, vault_id, |persistence| {
+                if let Some(record) = persistence.this_device_record_mut() {
+                    *record = BackupDeviceRecord {
+                        index_hash: due.logical_hash,
+                        stamp: Some(written.stamp.clone()),
+                        folder: Some(written.folder.clone()),
+                        rewritten: false,
+                    };
                 }
+            });
+            if recorded.is_err() {
+                log_event(
+                    LogLevel::Warn,
+                    "vault_backup_unrecorded",
+                    &[("id", vault_id)],
+                );
             }
             CloseBackupReport {
                 failure: None,
+                folder: written
+                    .path
+                    .parent()
+                    .map(|folder| folder.to_string_lossy().into_owned()),
                 switches: written.switches,
+                reason,
             }
         }
         // Close now ended it; the next normal close writes it.
@@ -501,7 +637,7 @@ fn write_close_backup(
             log_event(LogLevel::Warn, "vault_backup_on_close_failed", &fields);
             CloseBackupReport {
                 failure: Some(class.reason),
-                switches: Vec::new(),
+                ..CloseBackupReport::default()
             }
         }
     }
@@ -525,7 +661,7 @@ pub enum CloseState {
     /// Core holds the session and no close has started.
     Open,
     /// A close runs, at this step.
-    Closing(ClosePhase),
+    Closing(CloseStep),
     /// No session and no close: closed, or never opened.
     Closed,
 }
@@ -546,8 +682,8 @@ impl CloseState {
 pub fn close_state(root: &VaultRoot, vault_id: &str) -> Result<CloseState> {
     let vault_dir = root.vault_dir(vault_id)?;
     let open = is_vault_open_at(&vault_dir);
-    Ok(match vault_close_phase_at(&vault_dir) {
-        Some(phase) => CloseState::Closing(phase),
+    Ok(match vault_close_step_at(&vault_dir) {
+        Some(step) => CloseState::Closing(step),
         None if open => CloseState::Open,
         None => CloseState::Closed,
     })
@@ -701,6 +837,9 @@ fn close_vault_inner(
         let skip_when_unchanged = backup_config
             .as_ref()
             .is_some_and(|backup| backup.enabled && backup.skip_unchanged);
+        let keep_current = backup_config
+            .as_ref()
+            .is_none_or(|backup| backup.keep_current);
         // Only a close that may skip its zip needs the contents id.
         let skip_backup = session.skip_close_backup || hurried();
         let logical_hash =
@@ -718,6 +857,8 @@ fn close_vault_inner(
                     folder: record.folder.clone()?,
                 })
             }),
+            rewritten: this_device.is_some_and(|record| record.rewritten),
+            keep_current,
         };
         let display_name = match config {
             Some(config) => config.vault.display_name,
@@ -811,6 +952,8 @@ fn close_vault_inner(
         backup_failed: report.failure.is_some(),
         backup_failure: report.failure,
         backup_switches: report.switches,
+        backup_reason: report.reason,
+        backup_folder: report.folder,
         plain,
     })
 }
@@ -1062,6 +1205,7 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             b"pass-word-new",
             true,
+            "",
             &job()
         )));
         assert!(locked(crate::vault::rename_vault(
@@ -1356,15 +1500,15 @@ mode = "encrypted_dir"
         {
             let vault_dir = root.vault_dir("notes").unwrap();
             let closing = ClosingGuard::enter(&vault_dir);
-            assert_eq!(
-                close_state(&root, "notes").unwrap(),
-                CloseState::Closing(ClosePhase::Flush)
-            );
+            let step = || match close_state(&root, "notes").unwrap() {
+                CloseState::Closing(step) => Some(step),
+                CloseState::Open | CloseState::Closed => None,
+            };
+            assert_eq!(step().map(|step| step.phase), Some(ClosePhase::Flush));
             closing.set_phase(ClosePhase::Backup);
-            assert_eq!(
-                close_state(&root, "notes").unwrap(),
-                CloseState::Closing(ClosePhase::Backup)
-            );
+            let backup = step().unwrap();
+            assert_eq!(backup.phase, ClosePhase::Backup);
+            assert!(backup.backup.is_some());
         }
         close_vault(&root, "notes").unwrap();
         assert_eq!(close_state(&root, "notes").unwrap(), CloseState::Closed);
@@ -1757,6 +1901,127 @@ mode = "encrypted_dir"
     }
 
     #[test]
+    fn the_first_close_after_a_rewrite_backs_up_and_says_why() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"one").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, None, "changed files need no reason");
+        assert_eq!(backup_names(&root).len(), 1);
+
+        crate::vault::change_vault_password(
+            &root,
+            "notes",
+            b"pass-word-ok",
+            b"pass-word-new",
+            false,
+            "",
+            &crate::test_support::test_job_id(),
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-new").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, Some(CloseBackupReason::Rewritten));
+        assert_eq!(backup_names(&root).len(), 2);
+
+        open_vault(&root, "notes", b"pass-word-new").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, None);
+        assert_eq!(backup_names(&root).len(), 2, "unchanged: no zip");
+
+        // Files changed since a rewrite: a zip, and no claim that none changed.
+        crate::vault::change_vault_password(
+            &root,
+            "notes",
+            b"pass-word-new",
+            b"pass-word-third",
+            false,
+            "",
+            &crate::test_support::test_job_id(),
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-third").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/b.txt", b"two").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, None);
+        assert_eq!(backup_names(&root).len(), 3);
+    }
+
+    #[test]
+    fn a_new_vault_compares_from_its_first_open() {
+        let (_tmp, root) = vault_root_with(&[]);
+        for (id, keep_current) in [("kept", true), ("unkept", false)] {
+            let mut config = sample_config(id, id);
+            config.backup.keep_current = keep_current;
+            create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        }
+
+        // Nothing changed since the first open: only `keep_current` writes a
+        // zip, and says it is the first.
+        open_vault(&root, "kept", b"pass-word-ok").unwrap();
+        let closed = close_vault(&root, "kept").unwrap();
+        assert_eq!(closed.backup_reason, Some(CloseBackupReason::First));
+        assert_eq!(list_backups(&root, "kept").unwrap().len(), 1);
+        open_vault(&root, "unkept", b"pass-word-ok").unwrap();
+        let closed = close_vault(&root, "unkept").unwrap();
+        assert_eq!(closed.backup_reason, None);
+        assert!(list_backups(&root, "unkept").unwrap().is_empty());
+
+        // A file written since is a change: a zip, with nothing to explain.
+        open_vault(&root, "unkept", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "unkept", "/a.txt", b"one").unwrap();
+        let closed = close_vault(&root, "unkept").unwrap();
+        assert_eq!(closed.backup_reason, None);
+        assert_eq!(list_backups(&root, "unkept").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn with_keep_current_off_only_changed_files_back_up() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        config.backup.keep_current = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"one").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        // The store rewritten, the files the same: no zip.
+        crate::vault::change_vault_password(
+            &root,
+            "notes",
+            b"pass-word-ok",
+            b"pass-word-new",
+            false,
+            "",
+            &crate::test_support::test_job_id(),
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-new").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, None);
+        assert_eq!(backup_names(&root), first);
+
+        // Its last zip gone: still none.
+        let vault_dir = root.vault_dir("notes").unwrap();
+        crate::host_fs::remove_file(vault_dir.join("backups").join(&first[0])).unwrap();
+        open_vault(&root, "notes", b"pass-word-new").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, None);
+        assert!(backup_names(&root).is_empty());
+
+        open_vault(&root, "notes", b"pass-word-new").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"two").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root).len(), 1, "a changed file backs up");
+    }
+
+    #[test]
     fn a_write_in_the_middle_drops_the_digest() {
         let (_tmp, root) = vault_root_with(&[]);
         let mut config = sample_config("notes", "Notes");
@@ -1922,7 +2187,8 @@ mode = "encrypted_dir"
         assert_eq!(after_delete[0].file_name, older);
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.backup_reason, Some(CloseBackupReason::Missing));
         let replaced = list_backups(&root, "notes").unwrap();
         assert_eq!(replaced.len(), 2);
         assert!(replaced.iter().any(|entry| entry.file_name == older));

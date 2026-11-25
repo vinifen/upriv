@@ -31,6 +31,22 @@ describe("parseVaultListItemWire", () => {
     });
   });
 
+  it("reads a vault an import fills, and one in recovery for a cut-off import", () => {
+    const row = (wire: Record<string, unknown>) =>
+      parseVaultListItemWire({
+        id: "notes",
+        displayName: "Notes",
+        storageMode: "encrypted_dir",
+        order: 1,
+        ...wire,
+      });
+    expect(row({ session: "importing" }).session).toBe("importing");
+    const cut = row({ session: "recovery", importUnfinished: true });
+    expect(cut.session).toBe("recovery");
+    expect(cut.importUnfinished).toBe(true);
+    expect(row({ session: "recovery" }).importUnfinished).toBe(false);
+  });
+
   it("collapses extra spaces in displayName", () => {
     const item = parseVaultListItemWire({
       id: "notes",

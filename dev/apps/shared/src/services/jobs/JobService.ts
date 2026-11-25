@@ -20,4 +20,10 @@ export interface JobService {
    * with `job_not_stoppable` once the job is in its last step. Core logs `by`.
    */
   cancel(job: string, by: JobStopBy): Promise<void>;
+  /**
+   * Stop only the backup the job writes before its change (a password
+   * change's Back up first): the backup ends with no zip left, and the job
+   * goes on without it. `false` when the job writes none now.
+   */
+  skipBackup(job: string): Promise<boolean>;
 }

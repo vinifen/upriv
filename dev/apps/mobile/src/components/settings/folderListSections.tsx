@@ -3,9 +3,13 @@ import { StyleSheet, View } from "react-native";
 import {
   APP_BACKUP_LIST,
   APP_UNLOCKED_LIST,
+  ENCRYPTED_FOLDER_SWITCHES,
   VAULT_BACKUP_LIST,
   VAULT_UNLOCKED_LIST,
+  besideFolder,
+  dataFolderBackupsFolder,
   folderStatusLine,
+  selectionFolder,
   selectionHere,
   selectionLabel,
   type AppBackupFolders,
@@ -17,10 +21,10 @@ import {
   type VaultUnlockedChoice,
   type VaultUnlockedFolder,
 } from "@upriv/shared";
-import { useFolderStatuses } from "@upriv/shared/react";
-import { FolderList, StatusLine } from "@/components/folder-list";
-import { FieldHint, FieldLabel, SwitchRow } from "@/components/settings/settingsFields";
-import { Select } from "@/components/ui";
+import { useDataFolderPath, useFolderStatuses } from "@upriv/shared/react";
+import { FolderList, StatusLine, shownPath } from "@/components/folder-list";
+import { PolicyRadioOption } from "@/components/settings/PolicyRadioOption";
+import { FieldHint, FieldLabel, RadioGroup } from "@/components/settings/settingsFields";
 import { useTranslation } from "@/i18n";
 import { useFolderListService, useVaultRootService } from "@/platform/services";
 import { spacing } from "@/theme/tokens";
@@ -71,6 +75,24 @@ function usePickFolder() {
 }
 
 /**
+ * The folders the fixed choices stand for on this phone, named as the Files
+ * app names them; `null` until the data folder in use answers.
+ */
+function useFixedFolders(here: HereDevice | null, vaultId: string | null) {
+  const dataFolder = useDataFolderPath(useVaultRootService());
+  if (!here || !dataFolder) return { beside: null, dataFolderBackups: null };
+  return {
+    beside: besideFolder(here.system, dataFolder),
+    dataFolderBackups: dataFolderBackupsFolder(here.system, dataFolder, vaultId),
+  };
+}
+
+/** A folder as a fixed choice shows it. */
+function shownFolder(folder: string | null): string | null {
+  return folder ? shownPath(folder) : null;
+}
+
+/**
  * Where open vaults' files appear on this phone for every vault that follows
  * the app's list. A phone mounts no encrypted vault's folder: its switch
  * shows, unavailable, and only plain-text vaults use the folders.
@@ -93,34 +115,49 @@ export function AppUnlockedFoldersSection({
   const { t } = useTranslation();
   const { renderStatus } = useRowStatuses("unlocked", config.devices, here, null);
   const pickFolder = usePickFolder();
+  const folders = useFixedFolders(here, null);
   return (
     <View style={styles.fields}>
-      <FieldHint>{t("modal.app_settings.section.unlocked_folders_intro")}</FieldHint>
-      <SwitchRow
-        label={t("modal.app_settings.field.encrypted_vaults")}
-        hint={t("modal.settings.field.unlocked_folder.phone")}
-        value={config.encrypted_vaults}
-        disabled
-        onValueChange={() => undefined}
-      />
-      <FolderList
-        label={t("modal.app_settings.section.unlocked_folders")}
-        policy={APP_UNLOCKED_LIST}
-        groups={config.devices}
-        saved={saved.devices}
-        here={here}
-        lockedHint={lockedHint}
-        fixed={[
-          {
-            choice: "beside",
-            title: t("folder_list.choice.beside"),
-            description: t("modal.app_settings.field.unlocked_folders.beside_desc"),
-          },
-        ]}
-        renderStatus={renderStatus}
-        pickFolder={pickFolder}
-        onChange={(devices) => onChange({ devices })}
-      />
+      <View style={styles.fieldGroup}>
+        <FieldLabel disabled>{t("modal.app_settings.field.encrypted_vaults")}</FieldLabel>
+        <FieldHint disabled>{t("modal.settings.field.unlocked_folder.phone")}</FieldHint>
+        <RadioGroup>
+          {(["on", "off"] as const).map((value) => (
+            <PolicyRadioOption
+              key={value}
+              value={value}
+              checked={config.encrypted_vaults === (value === "on")}
+              disabled
+              title={t(`modal.settings.option.unlocked_folder.encrypted.${value}`)}
+              description={t(`modal.settings.option.unlocked_folder.encrypted.${value}_app_desc`)}
+              onSelect={() => undefined}
+            />
+          ))}
+        </RadioGroup>
+      </View>
+      <View style={styles.fieldGroup}>
+        <FieldLabel>{t("modal.app_settings.field.unlocked_folders.list")}</FieldLabel>
+        <FieldHint>{t("modal.app_settings.field.unlocked_folders.list_help")}</FieldHint>
+        <FolderList
+          label={t("modal.app_settings.field.unlocked_folders.list")}
+          policy={APP_UNLOCKED_LIST}
+          groups={config.devices}
+          saved={saved.devices}
+          here={here}
+          lockedHint={lockedHint}
+          fixed={[
+            {
+              choice: "beside",
+              title: t("folder_list.choice.beside"),
+              description: t("modal.app_settings.field.unlocked_folders.beside_desc"),
+              folder: shownFolder(folders.beside),
+            },
+          ]}
+          renderStatus={renderStatus}
+          pickFolder={pickFolder}
+          onChange={(devices) => onChange({ devices })}
+        />
+      </View>
     </View>
   );
 }
@@ -140,6 +177,7 @@ export function AppBackupsSection({
   const { t } = useTranslation();
   const { renderStatus } = useRowStatuses("backup", config.devices, here, null);
   const pickFolder = usePickFolder();
+  const folders = useFixedFolders(here, null);
   return (
     <View style={styles.fields}>
       <FieldHint>{t("modal.app_settings.section.backups_intro")}</FieldHint>
@@ -154,6 +192,7 @@ export function AppBackupsSection({
             choice: "data_folder",
             title: t("folder_list.choice.data_folder"),
             description: t("modal.settings.field.backup.folder_data_desc"),
+            folder: shownFolder(folders.dataFolderBackups),
           },
         ]}
         renderStatus={renderStatus}
@@ -186,7 +225,7 @@ export function VaultUnlockedFolderSection({
   vaultId: string | null;
   /** The app's unlocked folders: what Use the app's means here. */
   appUnlocked: AppUnlockedFolders;
-  /** A plain-text vault writes its files there and has no switch. */
+  /** A plain-text vault writes its files there: its switch shows, unavailable. */
   plaintext: boolean;
   lockedHint?: string | null;
   onChange: (patch: Partial<VaultUnlockedFolder>) => void;
@@ -201,63 +240,73 @@ export function VaultUnlockedFolderSection({
   const rowInUse = (row: FolderRow) =>
     savedRows.some((old) => old.number === row.number && old.path.trim() === row.path.trim()) &&
     openIn(row.path).length > 0;
-  const appChoice = selectionLabel(
-    selectionHere(appUnlocked.devices, hereId, APP_UNLOCKED_LIST),
-    hereId ? appUnlocked.devices[hereId] : undefined,
-    t,
-  );
+  const appSelection = selectionHere(appUnlocked.devices, hereId, APP_UNLOCKED_LIST);
+  const appGroup = hereId ? appUnlocked.devices[hereId] : undefined;
+  const appChoice = selectionLabel(appSelection, appGroup, t);
+  const folders = useFixedFolders(here, vaultId);
+  const appFolder = selectionFolder(appSelection, appGroup, () => folders.beside);
   return (
     <View style={styles.fields}>
-      <FieldHint>
-        {t(
-          plaintext
-            ? "modal.settings.section.unlocked_folder_intro_plain"
-            : "modal.settings.section.unlocked_folder_intro",
-        )}
-      </FieldHint>
-      {plaintext ? null : (
-        <Select
-          label={t("modal.settings.field.unlocked_folder.encrypted")}
-          value={config.encrypted}
-          disabled
-          options={[
-            {
-              value: "inherit",
-              label: t("modal.settings.option.unlocked_folder.encrypted.inherit", {
+      <View style={styles.fieldGroup}>
+        <FieldLabel disabled>{t("modal.settings.field.unlocked_folder.encrypted")}</FieldLabel>
+        <FieldHint disabled>
+          {t(
+            plaintext
+              ? "modal.settings.field.unlocked_folder.plain"
+              : "modal.settings.field.unlocked_folder.phone",
+          )}
+        </FieldHint>
+        <RadioGroup>
+          {ENCRYPTED_FOLDER_SWITCHES.map((value) => (
+            <PolicyRadioOption
+              key={value}
+              value={value}
+              checked={config.encrypted === value}
+              disabled
+              title={t(`modal.settings.option.unlocked_folder.encrypted.${value}`, {
                 state: t(
                   appUnlocked.encrypted_vaults
                     ? "modal.settings.option.unlocked_folder.encrypted.on"
                     : "modal.settings.option.unlocked_folder.encrypted.off",
                 ),
-              }),
+              })}
+              description={t(`modal.settings.option.unlocked_folder.encrypted.${value}_desc`)}
+              onSelect={() => undefined}
+            />
+          ))}
+        </RadioGroup>
+      </View>
+      <View style={styles.fieldGroup}>
+        <FieldLabel>{t("modal.settings.field.unlocked_folder.list")}</FieldLabel>
+        <FieldHint>
+          {t(
+            plaintext
+              ? "modal.settings.field.unlocked_folder.list_help_plain"
+              : "modal.settings.field.unlocked_folder.list_help",
+          )}
+        </FieldHint>
+        <FolderList
+          label={t("modal.settings.field.unlocked_folder.list")}
+          policy={VAULT_UNLOCKED_LIST}
+          groups={config.devices}
+          saved={saved}
+          here={here}
+          lockedHint={lockedHint}
+          fixed={[
+            {
+              choice: "inherit",
+              title: t("folder_list.choice.inherit"),
+              description: t("folder_list.choice.inherit_now", { choice: appChoice }),
+              folder: shownFolder(appFolder),
             },
-            { value: "on", label: t("modal.settings.option.unlocked_folder.encrypted.on") },
-            { value: "off", label: t("modal.settings.option.unlocked_folder.encrypted.off") },
           ]}
-          onChange={() => undefined}
+          renderStatus={renderStatus}
+          markUnsaved={vaultId !== null}
+          rowInUse={rowInUse}
+          pickFolder={pickFolder}
+          onChange={(devices) => onChange({ devices })}
         />
-      )}
-      {plaintext ? null : <FieldHint>{t("modal.settings.field.unlocked_folder.phone")}</FieldHint>}
-      <FolderList
-        label={t("modal.settings.field.unlocked_folder.list")}
-        policy={VAULT_UNLOCKED_LIST}
-        groups={config.devices}
-        saved={saved}
-        here={here}
-        lockedHint={lockedHint}
-        fixed={[
-          {
-            choice: "inherit",
-            title: t("folder_list.choice.inherit"),
-            description: t("folder_list.choice.inherit_now", { choice: appChoice }),
-          },
-        ]}
-        renderStatus={renderStatus}
-        markUnsaved={vaultId !== null}
-        rowInUse={rowInUse}
-        pickFolder={pickFolder}
-        onChange={(devices) => onChange({ devices })}
-      />
+      </View>
     </View>
   );
 }
@@ -282,11 +331,11 @@ export function VaultBackupFolderField({
   const { renderStatus } = useRowStatuses("backup", devices, here, vaultId);
   const pickFolder = usePickFolder();
   const hereId = here?.id ?? null;
-  const appChoice = selectionLabel(
-    selectionHere(appBackups.devices, hereId, APP_BACKUP_LIST),
-    hereId ? appBackups.devices[hereId] : undefined,
-    t,
-  );
+  const appSelection = selectionHere(appBackups.devices, hereId, APP_BACKUP_LIST);
+  const appGroup = hereId ? appBackups.devices[hereId] : undefined;
+  const appChoice = selectionLabel(appSelection, appGroup, t);
+  const folders = useFixedFolders(here, vaultId);
+  const appFolder = selectionFolder(appSelection, appGroup, () => folders.dataFolderBackups);
   return (
     <View style={styles.fields}>
       <FieldLabel>{t("modal.settings.field.backup.folder")}</FieldLabel>
@@ -302,11 +351,13 @@ export function VaultBackupFolderField({
             choice: "inherit",
             title: t("folder_list.choice.inherit"),
             description: t("folder_list.choice.inherit_now", { choice: appChoice }),
+            folder: shownFolder(appFolder),
           },
           {
             choice: "data_folder",
             title: t("folder_list.choice.data_folder"),
             description: t("modal.settings.field.backup.folder_data_desc"),
+            folder: shownFolder(folders.dataFolderBackups),
           },
         ]}
         renderStatus={renderStatus}
@@ -320,4 +371,5 @@ export function VaultBackupFolderField({
 
 const styles = StyleSheet.create({
   fields: { gap: spacing.md },
+  fieldGroup: { gap: spacing.xs },
 });

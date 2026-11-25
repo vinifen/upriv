@@ -6,7 +6,7 @@ import {
 } from "@upriv/shared";
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
 
-/** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`).
+/** Matches `formatRpcError` in `apps/electron/src/daemonProtocol.ts` (`code: message`).
  * Electron wraps IPC failures as `Error invoking remote method '…': Error: code: message`.
  * Message may be multiline (e.g. TOML parse errors) — use `[\s\S]` not `.`. */
 const DAEMON_ERROR_MESSAGE_RE = /\b([a-z][a-z0-9_]*): ([\s\S]+)$/;
@@ -62,6 +62,16 @@ export function parseInvokeFailure(error: unknown): RpcError {
   return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, String(error));
 }
 
+type BridgeReply = Awaited<ReturnType<NonNullable<Window["upriv"]>["invoke"]>>;
+
+/** The value of `reply`, or its failure as an `RpcError` that keeps core's details. */
+export function bridgeReplyValue(reply: BridgeReply): unknown {
+  if (reply.ok) return reply.value;
+  const failure = parseInvokeFailure(new Error(reply.error));
+  if (reply.details === undefined) throw failure;
+  throw new RpcError(failure.code, failure.message, reply.details);
+}
+
 /**
  * Low-level IPC invoke with timeout. Prefer typed helpers in `./rpc.ts`.
  * Unknown daemon methods are rejected by `upriv-rpc` (via `upriv-daemon`).
@@ -86,7 +96,7 @@ export async function desktopInvokeRaw(
   }
 
   // Pass timeout to Electron main so `daemonRpc` matches the renderer budget.
-  const invocation = api.invoke(method, params ?? {}, timeoutMs);
+  const invocation = api.invoke(method, params ?? {}, timeoutMs).then(bridgeReplyValue);
   if (timeoutMs <= 0) {
     try {
       return await invocation;

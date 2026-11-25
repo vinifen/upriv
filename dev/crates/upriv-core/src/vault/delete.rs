@@ -280,8 +280,7 @@ fn overwrite_blobs(
         .map(|(path, _)| path)
         .chain(held_blob_paths(&store))
         .collect();
-    job.set_step(JobStep::Overwriting);
-    job.set_total(blobs.len() as u64 * KEY_COPY_LEN);
+    job.begin(JobStep::Overwriting, blobs.len() as u64 * KEY_COPY_LEN);
     let never = AtomicBool::new(false);
     for blob in blobs {
         job.ensure_running()?;
@@ -485,6 +484,7 @@ mod tests {
                 PW,
                 b"next-pass-ok",
                 false,
+                "",
                 &test_job_id()
             ),
             Err(UprivError::VaultDeleting)

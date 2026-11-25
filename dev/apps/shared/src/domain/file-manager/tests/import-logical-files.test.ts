@@ -213,7 +213,7 @@ describe("importLogicalFiles", () => {
     expect(imported).toEqual([]);
   });
 
-  it("counts a thrown unsupported read as skip, not import_failed", async () => {
+  it("counts a thrown unsupported read as skip, not left out", async () => {
     const result = await importLogicalFiles([{ name: "x.bin", relativePath: "x.bin" }], {
       vaultId: "v",
       parentPath: "/",
@@ -225,22 +225,70 @@ describe("importLogicalFiles", () => {
     });
     expect(result.importedPaths).toEqual([]);
     expect(result.skippedUnsupported).toBe(1);
-    expect(result.readFailureName).toBeNull();
+    expect(result.leftOut.count).toBe(0);
   });
 
-  it("treats a lone I/O failure as import_failed, not a skip toast", async () => {
-    const result = await importLogicalFiles([{ name: "a.txt", relativePath: "a.txt" }], {
-      vaultId: "v",
-      parentPath: "/",
-      readContent: async () => {
-        throw new Error("read failed");
+  it("leaves out a file whose read fails and imports the rest", async () => {
+    const result = await importLogicalFiles(
+      [
+        { name: "a.txt", relativePath: "pack/a.txt" },
+        { name: "b.txt", relativePath: "pack/b.txt" },
+      ],
+      {
+        vaultId: "v",
+        parentPath: "/",
+        readContent: async (file) => {
+          if (file.name === "a.txt") throw new Error("read failed");
+          return "body";
+        },
+        ensureFolder: () => "/pack",
+        importFile: (_id, parent, name) => `${parent}/${name}`,
       },
-      ensureFolder: () => "/",
-      importFile: () => "/a.txt",
+    );
+    expect(result.importedPaths).toEqual(["/pack/b.txt"]);
+    expect(result.leftOut).toEqual({
+      count: 1,
+      items: [{ path: "pack/a.txt", reason: "unreadable" }],
+      whole: false,
     });
-    expect(result.importedPaths).toEqual([]);
-    expect(result.readFailureName).toBe("a.txt");
+    expect(result.writeFailureName).toBeNull();
   });
+
+  it.each([1, 3])(
+    "leaves out a file core could not read, with why, and goes on (%i slots)",
+    async (slots) => {
+      const dropped: string[] = [];
+      const result = await importLogicalFiles(
+        [
+          { name: "a.txt", relativePath: "pack/a.txt" },
+          { name: "b.txt", relativePath: "pack/b.txt" },
+          { name: "c.txt", relativePath: "pack/c.txt" },
+        ],
+        {
+          vaultId: "v",
+          parentPath: "/",
+          readContent: async () => "",
+          ensureFolder: () => "/pack",
+          importFile: () => null,
+          importSlots: slots,
+          importBinaryFile: async (_id, parent, name) => {
+            if (name === "b.txt") {
+              throw new RpcError(VAULT_ERROR_CODES.IMPORT_SOURCE_UNREADABLE, "no", {
+                path: "/home/a/pack/b.txt",
+                reason: "permission",
+              });
+            }
+            return `${parent}/${name}`;
+          },
+          onImportDropped: (_path, relativePath) => dropped.push(relativePath),
+        },
+      );
+      expect(result.importedPaths).toEqual(["/pack/a.txt", "/pack/c.txt"]);
+      expect(result.leftOut.items).toEqual([{ path: "pack/b.txt", reason: "permission" }]);
+      expect(result.writeFailureName).toBeNull();
+      expect(dropped).toEqual(["pack/b.txt"]);
+    },
+  );
 
   it("treats a thrown ensureFolder as import_write_failed and stops the batch", async () => {
     const imported: string[] = [];

@@ -29,6 +29,7 @@ function view(selected: 1 | "default"): DataFolderListView {
         rows: [{ number: 1, name: "Other", path: "/data/other" }],
       },
     },
+    osNames: {},
     defaultFolder: "/app",
     explicit: null,
   };

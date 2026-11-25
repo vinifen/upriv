@@ -31,41 +31,29 @@ describe("vaultRowButtonRole", () => {
   });
 
   it("never runs Continue from a row click", () => {
-    expect(
-      vaultRowClick("continue_delete", { open: false, resumeOpen: false, runsButton: true }),
-    ).toBe(null);
+    expect(vaultRowClick("continue_delete", { open: false, resumeOpen: false })).toBe(null);
   });
 });
 
 describe("vaultRowClick", () => {
-  const row = { open: false, resumeOpen: false, runsButton: false };
+  const row = { open: false, resumeOpen: false };
 
-  it("reopens the password window of a running or waiting open, with the switch on or off", () => {
+  it("reopens the password window of a running or waiting open", () => {
     expect(vaultRowClick("stop", { ...row, resumeOpen: true })).toBe("resume_unlock");
-    expect(vaultRowClick("stop", { ...row, resumeOpen: true, runsButton: true })).toBe(
-      "resume_unlock",
-    );
   });
 
-  it("opens an open vault's file manager, never Lock, with the switch on or off", () => {
+  it("opens an open vault's file manager, never Lock", () => {
     expect(vaultRowClick("lock", { ...row, open: true })).toBe("file_manager");
-    expect(vaultRowClick("lock", { ...row, open: true, runsButton: true })).toBe("file_manager");
   });
 
-  it("does nothing else while the switch is off", () => {
-    expect(vaultRowClick("unlock", row)).toBeNull();
-    expect(vaultRowClick("stop", row)).toBeNull();
-  });
-
-  it("presses Unlock or Stop while the switch is on", () => {
-    const on = { ...row, runsButton: true };
-    expect(vaultRowClick("unlock", on)).toBe("button");
-    expect(vaultRowClick("stop", on)).toBe("button");
+  it("presses Unlock or Stop on any other row", () => {
+    expect(vaultRowClick("unlock", row)).toBe("button");
+    expect(vaultRowClick("stop", row)).toBe("button");
   });
 
   it("does nothing for a button that does nothing", () => {
     for (const role of ["busy", "stop_final", "stopping"] as const) {
-      expect(vaultRowClick(role, { ...row, runsButton: true })).toBeNull();
+      expect(vaultRowClick(role, row)).toBeNull();
     }
   });
 });

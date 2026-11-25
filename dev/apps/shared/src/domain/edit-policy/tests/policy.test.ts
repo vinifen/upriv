@@ -202,13 +202,14 @@ describe("vaultConfigEditAllowed", () => {
     expect(vaultConfigEditAllowed("action.delete", open)).toBe(false);
   });
 
-  it("recovery allows quiet edits, rename, and delete, but not the changes", () => {
+  it("recovery allows quiet edits, rename, delete, and Finish, but not the changes", () => {
     const recovery = vaultRowFixture({ id: "notes", session: "recovery" });
     expect(vaultConfigEditAllowed("unlocked_folder", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("vault.display_name", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.delete", recovery)).toBe(true);
+    expect(vaultConfigEditAllowed("action.finish_password_change", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_kdf", recovery)).toBe(false);
-    expect(vaultConfigEditAllowed("action.finish_password_change", recovery)).toBe(false);
+    expect(vaultConfigEditAllowed("action.change_password", recovery)).toBe(false);
   });
 
   it("allows Finish and delete on a closed vault, and nothing once a delete began", () => {

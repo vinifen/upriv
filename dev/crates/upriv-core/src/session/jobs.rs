@@ -183,6 +183,13 @@ struct JobState {
     stoppable: AtomicBool,
     /// [`JobStep::slot`] of the step it is in; 0 for none.
     step: AtomicU8,
+    /// The job writes the backup before its change now ([`Job::backup_step`]).
+    backup_open: AtomicBool,
+    /// [`skip_job_backup`] stopped that backup: it ends, and the job goes on.
+    backup_skip: AtomicBool,
+    /// The person's stop ended the job, which answers with what it kept
+    /// ([`Job::end_as_stopped`]).
+    ends_as_stopped: AtomicBool,
 }
 
 impl JobState {
@@ -193,6 +200,9 @@ impl JobState {
             stop,
             stoppable: AtomicBool::new(true),
             step: AtomicU8::new(0),
+            backup_open: AtomicBool::new(false),
+            backup_skip: AtomicBool::new(false),
+            ends_as_stopped: AtomicBool::new(false),
         }
     }
 }
@@ -263,7 +273,8 @@ impl Job {
                 std::panic::resume_unwind(payload)
             }
         };
-        log_ended(kind, vault_id, &result, started);
+        let ends_as_stopped = job.state.ends_as_stopped.load(Ordering::Relaxed);
+        log_ended(kind, vault_id, &result, ends_as_stopped, started);
         result
     }
 
@@ -330,6 +341,12 @@ impl Job {
         }
     }
 
+    /// A way to read how far this job got from another thread, for work
+    /// nobody can name by an id: a close's backup.
+    pub(crate) fn watch(&self) -> JobWatch {
+        JobWatch(Arc::clone(&self.state))
+    }
+
     /// The id this job is listed under; empty for work nobody can name.
     pub(crate) fn id(&self) -> &str {
         self.listed.as_ref().map_or("", |(_, id)| id.as_str())
@@ -343,13 +360,66 @@ impl Job {
         self.state.bytes_done.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// The job is in `step` now.
+    /// The job is in `step` now, still counting the work it measured before:
+    /// a delete that goes on with Delete now.
     pub(crate) fn set_step(&self, step: JobStep) {
         self.state.step.store(step.slot(), Ordering::Relaxed);
     }
 
+    /// The job enters `step`, whose work counts from zero up to `total`
+    /// bytes; 0 for a step with no measure, whose bar has no end.
+    pub(crate) fn begin(&self, step: JobStep, total: u64) {
+        self.state.bytes_done.store(0, Ordering::Relaxed);
+        self.state.bytes_total.store(total, Ordering::Relaxed);
+        self.set_step(step);
+    }
+
     pub(crate) fn is_stopped(&self) -> bool {
         self.state.stop.load(Ordering::Relaxed)
+    }
+
+    /// Run `write`, the backup this job writes before its change, which the
+    /// person may stop alone ([`skip_job_backup`]) while the job goes on.
+    /// Answers what `write` returned, and whether that stop came: its reads
+    /// and writes fail from then on, as a job's do after a stop, but the job
+    /// itself is not stopped. The step ends under the registry lock, so a
+    /// stop that comes as it ends is either seen here or refused.
+    pub(crate) fn backup_step<T>(&self, write: impl FnOnce() -> T) -> (T, bool) {
+        self.state.backup_open.store(true, Ordering::Relaxed);
+        let written = write();
+        let _jobs = self.listed.as_ref().map(|(registry, _)| lock(registry));
+        self.state.backup_open.store(false, Ordering::Relaxed);
+        (
+            written,
+            self.state.backup_skip.swap(false, Ordering::Relaxed),
+        )
+    }
+
+    /// The person's stop of the backup alone, as [`skip_job_backup`] asks it
+    /// while the backup runs; a test asks it first, so the backup meets it at
+    /// its first read or write.
+    #[cfg(test)]
+    pub(crate) fn stop_backup_alone(&self) {
+        self.state.backup_skip.store(true, Ordering::Relaxed);
+    }
+
+    /// The person's stop ended this job, which keeps what it did and answers
+    /// with it (an import that keeps the files that got in): its end is logged
+    /// as stopped, not done.
+    pub(crate) fn end_as_stopped(&self) {
+        self.state.ends_as_stopped.store(true, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ends_as_stopped(&self) -> bool {
+        self.state.ends_as_stopped.load(Ordering::Relaxed)
+    }
+
+    /// The job is stopped, or the backup it writes now was ([`Job::backup_step`]).
+    fn halted(&self) -> bool {
+        self.is_stopped()
+            || (self.state.backup_open.load(Ordering::Relaxed)
+                && self.state.backup_skip.load(Ordering::Relaxed))
     }
 
     /// The flag a stop sets, for work that checks one flag of its own: the
@@ -511,20 +581,36 @@ fn log_panicked(kind: JobKind, vault_id: Option<&str>, started: Instant) {
     log_event(LogLevel::Error, "job_ended", &fields);
 }
 
-/// `outcome` is `done`, `stopped`, or `failed`; a failure adds why
-/// ([`classify_write_failure`]).
-fn log_ended<T>(kind: JobKind, vault_id: Option<&str>, result: &Result<T>, started: Instant) {
+/// The `outcome` of a job that answered `result`: `done`, or `stopped` for a
+/// stop, also one that ended the job with what it kept (`ends_as_stopped`).
+/// A failure answers its error, which logs `failed` with why.
+fn ended_outcome<T>(
+    result: &Result<T>,
+    ends_as_stopped: bool,
+) -> std::result::Result<&'static str, &UprivError> {
+    match result {
+        Ok(_) if ends_as_stopped => Ok("stopped"),
+        Ok(_) => Ok("done"),
+        Err(UprivError::JobCancelled) => Ok("stopped"),
+        Err(error) => Err(error),
+    }
+}
+
+/// `outcome` is `done`, `stopped`, or `failed` ([`ended_outcome`]); a failure
+/// adds why ([`classify_write_failure`]).
+fn log_ended<T>(
+    kind: JobKind,
+    vault_id: Option<&str>,
+    result: &Result<T>,
+    ends_as_stopped: bool,
+    started: Instant,
+) {
     let elapsed = started.elapsed().as_secs().to_string();
     let mut fields = job_log_fields(kind, vault_id);
     fields.push(("elapsed_s", elapsed.as_str()));
-    let error = match result {
-        Ok(_) => {
-            fields.push(("outcome", "done"));
-            log_event(LogLevel::Info, "job_ended", &fields);
-            return;
-        }
-        Err(UprivError::JobCancelled) => {
-            fields.push(("outcome", "stopped"));
+    let error = match ended_outcome(result, ends_as_stopped) {
+        Ok(outcome) => {
+            fields.push(("outcome", outcome));
             log_event(LogLevel::Info, "job_ended", &fields);
             return;
         }
@@ -556,7 +642,7 @@ impl<W> JobWriter<'_, W> {
 
 impl<W: Write> Write for JobWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.job.is_stopped() {
+        if self.job.halted() {
             return Err(std::io::Error::other("job stopped"));
         }
         self.inner.write(buf)
@@ -573,6 +659,16 @@ impl<W: Seek> Seek for JobWriter<'_, W> {
     }
 }
 
+/// Reads how far one job got, as [`job_status`] does for a listed job.
+#[derive(Debug, Clone)]
+pub(crate) struct JobWatch(Arc<JobState>);
+
+impl JobWatch {
+    pub(crate) fn status(&self) -> JobStatus {
+        status_of(&self.0)
+    }
+}
+
 /// Moves its job's progress by the bytes read through it, and fails each read
 /// once the job is asked to stop.
 pub(crate) struct ProgressReader<'a, R> {
@@ -582,7 +678,7 @@ pub(crate) struct ProgressReader<'a, R> {
 
 impl<R: Read> Read for ProgressReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.job.is_stopped() {
+        if self.job.halted() {
             return Err(std::io::Error::other("job stopped"));
         }
         let read = self.inner.read(buf)?;
@@ -658,6 +754,36 @@ pub fn stop_all_jobs() -> usize {
     stop_all_in(&JOBS)
 }
 
+/// [`stop_all_jobs`] ran: a job stopped now was stopped by the quit, not by
+/// the person.
+pub(crate) fn is_quitting() -> bool {
+    lock(&JOBS).quitting
+}
+
+/// Stop the backup the job `id` writes before its change (a password
+/// change's Back up first), and let the job go on without it: the partial
+/// zip is removed, and the job answers that the backup was stopped. `false`
+/// when the job is not writing one now: it has none, or it went past it. A
+/// malformed id is [`UprivError::JobIdInvalid`].
+pub fn skip_job_backup(id: &str) -> Result<bool> {
+    skip_backup_in(&JOBS, id)
+}
+
+fn skip_backup_in(registry: Registry, id: &str) -> Result<bool> {
+    if !is_valid_job_id(id) {
+        return Err(UprivError::JobIdInvalid);
+    }
+    let jobs = lock(registry);
+    let Some(state) = jobs.running.get(id) else {
+        return Ok(false);
+    };
+    if !state.backup_open.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+    state.backup_skip.store(true, Ordering::Relaxed);
+    Ok(true)
+}
+
 fn stop_all_in(registry: Registry) -> usize {
     let mut jobs = lock(registry);
     jobs.quitting = true;
@@ -711,6 +837,17 @@ mod tests {
         assert_eq!(JobStep::of_slot(0), None);
         job.advance(20);
         assert_eq!(job_status(&id).unwrap().bytes_done, 10);
+        // A step that measures its own work counts from zero.
+        job.begin(JobStep::UpdatingKeyCopies, 4);
+        assert_eq!(
+            job_status(&id),
+            Some(JobStatus {
+                bytes_done: 0,
+                bytes_total: 4,
+                stoppable: true,
+                step: Some(JobStep::UpdatingKeyCopies),
+            })
+        );
         drop(job);
         assert_eq!(job_status(&id), None);
     }
@@ -898,6 +1035,49 @@ mod tests {
             .progress_reader(&b"more"[..])
             .read_to_end(&mut more)
             .is_err());
+    }
+
+    #[test]
+    fn a_job_ends_stopped_on_a_stop_also_when_it_keeps_what_it_did() {
+        let done: Result<()> = Ok(());
+        assert!(matches!(ended_outcome(&done, false), Ok("done")));
+        assert!(matches!(ended_outcome(&done, true), Ok("stopped")));
+        let stopped: Result<()> = Err(UprivError::JobCancelled);
+        assert!(matches!(ended_outcome(&stopped, false), Ok("stopped")));
+        let failed: Result<()> = Err(UprivError::InsufficientRam);
+        assert!(matches!(
+            ended_outcome(&failed, false),
+            Err(UprivError::InsufficientRam)
+        ));
+    }
+
+    #[test]
+    fn a_stop_of_the_backup_alone_ends_that_backup_and_not_the_job() {
+        let registry = registry();
+        let job = Job::start_in(registry, "changing").unwrap();
+        // No backup runs: nothing to stop.
+        assert!(!skip_backup_in(registry, "changing").unwrap());
+        assert!(!skip_backup_in(registry, "unknown").unwrap());
+        assert!(matches!(
+            skip_backup_in(registry, "../bad"),
+            Err(UprivError::JobIdInvalid)
+        ));
+
+        let ((first, second), stopped_alone) = job.backup_step(|| {
+            let first = job.writer(Vec::new()).write(b"zip").map(|_| ());
+            assert!(skip_backup_in(registry, "changing").unwrap());
+            let second = job.writer(Vec::new()).write(b"zip").map(|_| ());
+            (first, second)
+        });
+        assert!(first.is_ok());
+        assert!(second.is_err());
+        assert!(stopped_alone);
+        // The job goes on: its later work reads and writes, and it ends done.
+        job.ensure_running().unwrap();
+        assert!(job.writer(Vec::new()).write(b"rewrite").is_ok());
+        assert!(!skip_backup_in(registry, "changing").unwrap());
+        let ((), next) = job.backup_step(|| ());
+        assert!(!next);
     }
 
     #[test]

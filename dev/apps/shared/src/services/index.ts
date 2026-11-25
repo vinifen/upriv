@@ -19,16 +19,19 @@ export type {
   VaultLifecycleService,
   CloseVaultOutcome,
   BackupFailureReason,
+  CloseBackupReason,
   VaultCloseReason,
 } from "./lifecycle/VaultLifecycleService";
 export {
   BACKUP_CLOSE_TOAST_MS,
-  parseBackupFailure,
   backupCloseFailureToastKey,
+  closeBackupReasonToastKey,
+  parseCloseVaultOutcome,
 } from "./lifecycle/VaultLifecycleService";
 export type { LogService } from "./logs/LogService";
 export type {
   CreateVaultInput,
+  CreatedVault,
   VaultDeleteInput,
   VaultImportPackage,
   VaultRenameResult,

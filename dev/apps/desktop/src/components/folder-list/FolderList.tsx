@@ -19,6 +19,7 @@ import {
   type RowProblem,
   type Selection,
 } from "@upriv/shared";
+import { useOsNames } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
 import { useRevealFolder } from "@/components/RevealPathButton";
 import { Button, Collapse, type DropdownMenuItem } from "@/components/ui";
@@ -69,6 +70,12 @@ export interface FolderListProps<F extends string> {
   renderStatus?: (path: string) => ReactNode;
   /** The selected choice misses a step the caller checks (a data folder that does not answer). */
   selectionAttention?: boolean;
+  /**
+   * The step the selected choice still needs, inside its card under its
+   * status (a Retry, a data folder's replace choice), so the card that wears
+   * attention holds what clears it.
+   */
+  selectedFooter?: ReactNode;
   /**
    * The window needs a folder from this list on this device, and the
    * selection gives none: the selected choice, or every choice while nothing
@@ -130,6 +137,7 @@ export function FolderList<F extends string>({
   noneChecked = false,
   renderStatus,
   selectionAttention = false,
+  selectedFooter = null,
   selectionMissing = null,
   inUse = null,
   confirmDelete,
@@ -140,6 +148,7 @@ export function FolderList<F extends string>({
   onChange,
 }: FolderListProps<F>) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const radioName = useId();
   const reveal = useRevealFolder();
   const [editing, setEditing] = useState<number | null>(null);
@@ -253,38 +262,41 @@ export function FolderList<F extends string>({
       {showDevices && here ? (
         <DeviceHeading
           heading={t("folder_list.this_device")}
-          name={deviceName(here.id, here.system, t)}
+          name={deviceName(here.id, here.system, osNames, t)}
         />
       ) : null}
       <div role="radiogroup" aria-label={label} className="grid gap-2">
         {fixed.map((option) => {
           const checked = selected === option.choice;
           return (
-            <label
-              key={option.choice}
-              className={[
-                rowCardClass(checked, attention(checked, false)),
-                "flex gap-2.5 sm:gap-3",
-                cursor,
-              ].join(" ")}
-            >
-              <input
-                type="radio"
-                name={radioName}
-                checked={checked}
-                disabled={locked}
-                onChange={() => select(option.choice)}
-                className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
-              />
-              <RowText
-                title={option.title}
-                badges={inUse === option.choice ? <ListBadge kind="in_use" /> : null}
-                description={option.description}
-                folder={option.folder}
-              >
-                {option.status}
-              </RowText>
-            </label>
+            <div key={option.choice} className={rowCardClass(checked, attention(checked, false))}>
+              <label className={["flex gap-2.5 sm:gap-3", cursor].join(" ")}>
+                <input
+                  type="radio"
+                  name={radioName}
+                  checked={checked}
+                  disabled={locked}
+                  onChange={() => select(option.choice)}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                />
+                <RowText
+                  title={option.title}
+                  badges={
+                    <>
+                      {inUse === option.choice ? <ListBadge kind="in_use" /> : null}
+                      {policy.fallback === option.choice ? <ListBadge kind="default" /> : null}
+                    </>
+                  }
+                  description={option.description}
+                  folder={option.folder}
+                >
+                  {option.status}
+                </RowText>
+              </label>
+              {checked && selectedFooter ? (
+                <div className={[ROW_INSET_CLASS, "pt-3"].join(" ")}>{selectedFooter}</div>
+              ) : null}
+            </div>
           );
         })}
         {rows.map((row, index) => {
@@ -330,6 +342,9 @@ export function FolderList<F extends string>({
                 </label>
                 <RowMenu name={rowLabel(row, t)} items={rowItems(row, index)} />
               </div>
+              {checked && selectedFooter && !problem ? (
+                <div className={[ROW_INSET_CLASS, "pt-3"].join(" ")}>{selectedFooter}</div>
+              ) : null}
               <Collapse open={asking === row.number}>
                 <div className={ROW_INSET_CLASS}>
                   <RowConfirm

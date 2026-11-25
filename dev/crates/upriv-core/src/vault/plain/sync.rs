@@ -24,7 +24,7 @@ use super::marker;
 use super::names::NameRules;
 use super::sweep;
 use super::{PlainSession, PlainSyncReport};
-use crate::error::{Result, UprivError};
+use crate::error::{ImportBlockReason, Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::session::{with_open_session, OpenSession};
 use crate::store::{
@@ -1109,10 +1109,13 @@ fn import_file(pass: &mut Pass<'_>, import: &Import) -> Result<bool> {
         cancel: pass.cancel,
     };
     let sealed = match seal_reader(pass.dir, &mut reader, |_| {
-        UprivError::ImportSourceUnreadable(PathBuf::new())
+        UprivError::ImportSourceUnreadable {
+            path: PathBuf::new(),
+            reason: ImportBlockReason::Unreadable,
+        }
     }) {
         Ok(sealed) => sealed,
-        Err(UprivError::ImportSourceUnreadable(_)) => {
+        Err(UprivError::ImportSourceUnreadable { .. }) => {
             pass.report.retry += 1;
             return Ok(false);
         }

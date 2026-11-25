@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   ContentSkeleton,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
+import { useRevealWhen } from "@/hooks/useRevealWhen";
 import {
   useOperationLimit,
   usePasswordWeakness,
@@ -40,6 +41,7 @@ import {
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useVaultSettings } from "./hooks/useVaultSettings";
 import type {
+  ChangeVaultPasswordInput,
   CreateVaultGroupAssignment,
   VaultConfigEditHold,
   VaultGroup,
@@ -125,12 +127,7 @@ interface VaultSettingsModalProps {
   /** How the last password change or Finish ended. */
   passwordOutcome?: PasswordChangeOutcome | null;
   /** False while another change runs. */
-  onChangePassword?: (
-    vaultId: string,
-    currentPassword: string,
-    newPassword: string,
-    backUpFirst: boolean,
-  ) => boolean;
+  onChangePassword?: (vaultId: string, input: Omit<ChangeVaultPasswordInput, "job">) => boolean;
   onFinishPasswordChange?: (vaultId: string, password: string) => boolean;
   onStopPasswordChange?: () => void;
   /** The unlock-RAM change in flight; the list owns it. */
@@ -254,8 +251,10 @@ export function VaultSettingsModal({
   const displayNameLocked = !editAllowed("vault.display_name");
   /** This device's unlocked folder group and the encrypted switch — `vault_quiet`. */
   const unlockedLocked = !editAllowed("unlocked_folder");
-  /** The password change, Finish, unlock RAM, and storage — `vault_closed`. */
+  /** The password change, unlock RAM, and storage — `vault_closed`. */
   const changeBlocked = !editAllowed("action.change_password");
+  /** Finish also runs on the recovery row an unfinished change makes. */
+  const finishBlocked = !editAllowed("action.finish_password_change");
 
   const baseline = useMemo(() => (config ? normalizeVaultSettingsConfig(config) : null), [config]);
 
@@ -286,7 +285,7 @@ export function VaultSettingsModal({
       setDraft((current) => (current ? { ...current, storage: change.storage } : current));
       return;
     }
-    // The change stamps `password_changed_at`.
+    // The change stamps `password_changed_at` and writes the hint it was given.
     void vaultService
       .getSettings(change.vaultId)
       .then((fresh) => {
@@ -297,6 +296,7 @@ export function VaultSettingsModal({
           current
             ? {
                 ...current,
+                vault: { ...current.vault, password_hint: normalized.vault.password_hint },
                 security: {
                   ...current.security,
                   password_changed_at: normalized.security.password_changed_at,
@@ -345,6 +345,9 @@ export function VaultSettingsModal({
     onChanged: followChange,
   });
   const { password: passwordScreen, kdf: kdfScreen, storage: storageScreen } = changes;
+  /** A change starting here brings its progress into view. */
+  const changeProgressRef = useRevealWhen<HTMLDivElement>(Boolean(changes.active?.job));
+  const finishPasswordId = useId();
 
   const areaDirty =
     activeArea === "preferences"
@@ -353,14 +356,16 @@ export function VaultSettingsModal({
         ? groupDirty
         : (changes.active?.dirty ?? false);
 
+  // The hint the change writes is public text the new password is checked against.
+  const newHint = passwordScreen.fields.passwordHint;
   const vaultText = useMemo(
     () =>
       vaultPublicText({
         displayName: vault?.displayName ?? "",
-        passwordHint: config?.vault.password_hint ?? "",
+        passwordHint: newHint,
         note: config?.vault.note ?? "",
       }),
-    [vault?.displayName, config?.vault.password_hint, config?.vault.note],
+    [vault?.displayName, newHint, config?.vault.note],
   );
   const passwordWeakness = usePasswordWeakness(
     passwordScreen.fields.newPassword,
@@ -836,13 +841,22 @@ export function VaultSettingsModal({
       ? t("modal.settings.area.group_save_confirm")
       : t("modal.settings.save_confirm");
 
+  // While a change runs its progress takes the screen's place, as an export's
+  // does, and the window shows it; once it ends, its report takes the place.
   const changeProgress = changeJobHere ? (
-    <JobProgressBar
-      progress={changeJobHere.progress}
-      startedAt={changeJobHere.startedAt}
-      label={modalTitle}
-      copy={jobStepCopy(changeJobHere.progress, "job.step.unlocking")}
-    />
+    <div ref={changeProgressRef} className="space-y-1.5">
+      <JobProgressBar
+        progress={changeJobHere.progress}
+        startedAt={changeJobHere.startedAt}
+        label={modalTitle}
+        copy={jobStepCopy(changeJobHere.progress, "job.step.unlocking")}
+      />
+      {activeArea === "kdf" && changeJobHere.progress?.step === "updating_key_copies" ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("vault.change_kdf.key_copies_running")}
+        </p>
+      ) : null}
+    </div>
   ) : null;
 
   const footer =
@@ -1009,38 +1023,28 @@ export function VaultSettingsModal({
                   </VaultSettingsSection>
                 ))}
               </>
+            ) : changeProgress ? (
+              changeProgress
             ) : activeArea === "password" ? (
               <div className="space-y-3">
-                {changeProgress}
                 <ChangeReportLines lines={passwordScreen.report} />
-                {passwordScreen.unfinished ? (
-                  <div className="space-y-1 rounded-lg border border-outline-variant/40 p-3">
-                    <p className="text-sm leading-relaxed text-on-surface">
-                      {t("vault.change_password.unfinished")}
-                    </p>
-                    {!passwordScreen.job ? (
-                      <Button variant="ghost" size="sm" onClick={passwordScreen.toggleMode}>
-                        {t(
-                          passwordScreen.mode === "finish"
-                            ? "vault.change_password.change_instead"
-                            : "vault.change_password.finish_instead",
-                        )}
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
                 {passwordScreen.mode === "finish" ? (
                   <>
+                    <p className="text-sm leading-relaxed text-on-surface-variant">
+                      {t("vault.change_password.unfinished")}
+                    </p>
                     <p className="text-sm leading-relaxed text-on-surface-variant">
                       {t("vault.change_password.finish_help")}
                     </p>
                     <SettingsField
                       label={t("vault.change_password.finish_password")}
-                      disabled={changeBlocked || passwordScreen.job !== null}
+                      htmlFor={finishPasswordId}
+                      disabled={finishBlocked}
                     >
                       <PasswordInput
+                        id={finishPasswordId}
                         value={passwordScreen.finishPassword}
-                        disabled={changeBlocked || passwordScreen.job !== null}
+                        disabled={finishBlocked}
                         aria-invalid={passwordScreen.passwordFieldError ? true : undefined}
                         onChange={(event) => passwordScreen.editFinishPassword(event.target.value)}
                         autoComplete="current-password"
@@ -1074,8 +1078,7 @@ export function VaultSettingsModal({
                       weakness={passwordWeakness}
                       backUpFirst={passwordScreen.backUpFirst}
                       onBackUpFirstChange={passwordScreen.setBackUpFirst}
-                      blocked={changeBlocked && passwordScreen.job === null}
-                      busy={passwordScreen.job !== null}
+                      blocked={changeBlocked}
                       passwordFieldError={passwordScreen.passwordFieldError}
                       onChange={passwordScreen.edit}
                       error={passwordScreen.formError}
@@ -1083,43 +1086,30 @@ export function VaultSettingsModal({
                   </>
                 )}
               </div>
-            ) : activeArea === "kdf" &&
-              kdfScreen.fields &&
-              kdfScreen.currentPreset !== undefined ? (
-              <div className="space-y-3">
-                {changeProgress}
-                {changeJobHere?.progress?.step === "updating_key_copies" ? (
-                  <p className="text-xs leading-relaxed text-on-surface-variant">
-                    {t("vault.change_kdf.key_copies_running")}
-                  </p>
-                ) : null}
-                <ChangeReportLines lines={kdfScreen.report} />
-                <p className="text-sm leading-relaxed text-on-surface-variant">
-                  {t("modal.settings.section.kdf_settings_intro")}
-                </p>
-                <VaultChangeKdfFields
-                  currentPreset={kdfScreen.currentPreset}
-                  blocked={changeBlocked && kdfScreen.job === null}
-                  busy={kdfScreen.job !== null}
-                  fields={kdfScreen.fields}
-                  passwordFieldError={kdfScreen.passwordFieldError}
-                  onChange={kdfScreen.edit}
-                  error={kdfScreen.formError}
-                />
-              </div>
             ) : activeArea === "kdf" ? (
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {vault ? "—" : t("vault.list.loading")}
-              </p>
+              kdfScreen.fields && kdfScreen.currentPreset !== undefined ? (
+                <div className="space-y-3">
+                  <ChangeReportLines lines={kdfScreen.report} />
+                  <VaultChangeKdfFields
+                    currentPreset={kdfScreen.currentPreset}
+                    blocked={changeBlocked}
+                    fields={kdfScreen.fields}
+                    passwordFieldError={kdfScreen.passwordFieldError}
+                    onChange={kdfScreen.edit}
+                    error={kdfScreen.formError}
+                  />
+                </div>
+              ) : (
+                // The list row has not read the header's cost yet.
+                <ContentSkeleton label={t("modal.info.loading")} />
+              )
             ) : activeArea === "storage" && storageScreen.fields && storageScreen.current ? (
               <div className="space-y-3">
-                {changeProgress}
                 <ChangeReportLines lines={storageScreen.report} />
                 <VaultChangeStorageFields
                   vaultId={vault.id}
                   current={storageScreen.current}
-                  blocked={changeBlocked && storageScreen.job === null}
-                  busy={storageScreen.job !== null}
+                  blocked={changeBlocked}
                   fields={storageScreen.fields}
                   passwordFieldError={storageScreen.passwordFieldError}
                   onChange={storageScreen.edit}

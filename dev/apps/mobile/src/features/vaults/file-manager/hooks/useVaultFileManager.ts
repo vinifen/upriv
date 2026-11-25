@@ -49,6 +49,7 @@ import {
   type FileManagerEntry,
   type FileNameErrorCode,
   type FileProblem,
+  type ImportBlockedReport,
   type JobStopBy,
   type PendingImportEntry,
   type VaultWorkspaceAction,
@@ -499,6 +500,14 @@ export function useVaultFileManager({
     [commitLandedImportPaths],
   );
 
+  /**
+   * Windows of the files finished batches could not read on their way in,
+   * shown one at a time in order. A phone opens no document before its copy,
+   * since opening a cloud document may download it, so nothing is asked
+   * ahead of the import.
+   */
+  const [leftOutReports, setLeftOutReports] = useState<ImportBlockedReport[]>([]);
+
   const revealImportNames = useCallback(
     (sessionId: number, parentPath: string, relativePaths: readonly string[]) => {
       const planTree = treeRef.current;
@@ -609,15 +618,21 @@ export function useVaultFileManager({
           if (toOpen) dispatch({ type: "open_file", path: toOpen });
         }
 
+        if (result.leftOut.count > 0) {
+          const report: ImportBlockedReport = {
+            vaultName: entry.displayName,
+            blocked: result.leftOut,
+            stage: "left_out",
+          };
+          setLeftOutReports((prev) => [...prev, report]);
+        }
         const message = formatImportOutcomeToast(
           result.importedPaths.length,
           result.skippedInvalid,
           result.skippedUnsupported,
           (key, vars) => t(key, vars),
         );
-        if (result.readFailureName) {
-          showToast(t("modal.file_manager.toast.import_failed", { name: result.readFailureName }));
-        } else if (result.writeFailureName) {
+        if (result.writeFailureName) {
           showToast(
             t("modal.file_manager.toast.import_write_failed", { name: result.writeFailureName }),
           );
@@ -660,6 +675,7 @@ export function useVaultFileManager({
       commitLandedImportPaths,
       dispatch,
       endImportSession,
+      entry.displayName,
       fs,
       reloadTree,
       revealImportNames,
@@ -1065,6 +1081,11 @@ export function useVaultFileManager({
     importFiles,
     importPickedFolder,
     importBusy,
+    /** The window of files an import left out, for `ImportBlockedModal`. */
+    importBlocked: {
+      report: leftOutReports[0] ?? null,
+      onClose: () => setLeftOutReports((prev) => prev.slice(1)),
+    },
     editorImportStartedAt,
     stopImports,
     cancelImportAndDismiss,

@@ -9,11 +9,11 @@
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
@@ -31,6 +31,11 @@ pub const FOLDER_SWITCH_CHECK_LIMIT: Duration = Duration::from_secs(30);
 const PROBE_FILE_BYTES: usize = 4096;
 /// Prefix of the file a check writes and removes again.
 pub const PROBE_FILE_PREFIX: &str = ".upriv-check-";
+/// A check's file older than this is a leftover: the check that wrote it
+/// ended before it could remove it (a crash, a drive pulled mid-check). A
+/// check takes seconds, so none still running, on this device or another
+/// that shares the folder, is this old.
+const PROBE_LEFTOVER_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// What a folder can do right now. Every state but `Ok` is a failure of the
 /// folder itself, the kind that hands a selection over.
@@ -152,7 +157,10 @@ pub fn probe_writable(dir: &Path) -> FolderState {
         Err(error) => return FolderState::of_io(&error),
     }
     match write_probe_file(dir) {
-        Ok(()) => FolderState::Ok,
+        Ok(()) => {
+            clear_leftovers_once(dir);
+            FolderState::Ok
+        }
         Err(error) => FolderState::of_io(&error),
     }
 }
@@ -178,6 +186,47 @@ fn write_probe_file(dir: &Path) -> std::io::Result<()> {
     let removed = crate::host_fs::remove_file(&renamed);
     written?;
     removed
+}
+
+/// After the first check of `dir` this run that passed, remove what earlier
+/// checks left there ([`remove_probe_leftovers`]) on a thread of its own: a
+/// folder may hold many entries, and listing them never holds up a check or
+/// counts against its limit. True when this call started it.
+fn clear_leftovers_once(dir: &Path) -> bool {
+    static CLEARED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+    if !lock_table(&CLEARED).insert(dir.to_path_buf()) {
+        return false;
+    }
+    let dir = dir.to_path_buf();
+    std::thread::Builder::new()
+        .name("upriv-check-leftovers".into())
+        .spawn(move || remove_probe_leftovers(&dir))
+        .is_ok()
+}
+
+/// Remove the check files in `dir` older than [`PROBE_LEFTOVER_AGE`]. Only
+/// those names are looked at further: no other entry is read or touched.
+fn remove_probe_leftovers(dir: &Path) {
+    let Ok(entries) = crate::host_fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let probe = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(PROBE_FILE_PREFIX));
+        if !probe {
+            continue;
+        }
+        let old = entry
+            .modified()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= PROBE_LEFTOVER_AGE);
+        if old {
+            let _ = crate::host_fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Whether a file of `bytes` fits in `dir` now: free space, and the largest
@@ -403,6 +452,58 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A file in `dir` last changed `age` ago.
+    fn aged_file(dir: &Path, name: &str, age: Duration) -> PathBuf {
+        let path = dir.join(name);
+        let written = std::fs::File::create(&path).unwrap();
+        written.set_modified(SystemTime::now() - age).unwrap();
+        path
+    }
+
+    #[test]
+    fn only_check_files_older_than_an_hour_are_leftovers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = PROBE_LEFTOVER_AGE * 2;
+        let left = aged_file(tmp.path(), ".upriv-check-0123456789abcdef", old);
+        let renamed = aged_file(tmp.path(), ".upriv-check-fedcba9876543210.done", old);
+        // A check that may still be running, here or on another device.
+        let running = aged_file(
+            tmp.path(),
+            ".upriv-check-00000000000000aa",
+            Duration::from_secs(5),
+        );
+        let mine = aged_file(tmp.path(), "notes.txt", PROBE_LEFTOVER_AGE * 24);
+
+        remove_probe_leftovers(tmp.path());
+        assert!(!left.exists());
+        assert!(!renamed.exists());
+        assert!(running.exists());
+        assert!(mine.exists());
+    }
+
+    #[test]
+    fn a_passing_check_clears_its_folder_once_a_run_after_its_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let left = aged_file(
+            tmp.path(),
+            ".upriv-check-0123456789abcdef",
+            PROBE_LEFTOVER_AGE * 2,
+        );
+        assert_eq!(probe_writable(tmp.path()), FolderState::Ok);
+        let started = Instant::now();
+        while left.exists() && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!left.exists());
+        // Once per run: this folder's clearing has started already.
+        assert!(!clear_leftovers_once(tmp.path()));
+
+        // A check that does not pass starts none.
+        let gone = tmp.path().join("gone");
+        assert_eq!(probe_writable(&gone), FolderState::Missing);
+        assert!(clear_leftovers_once(&gone));
+    }
 
     #[test]
     fn a_writable_folder_is_ok_and_keeps_no_probe_file() {

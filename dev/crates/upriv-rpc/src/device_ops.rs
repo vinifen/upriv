@@ -14,13 +14,15 @@ struct DeviceIdentityParams {
 }
 
 /// `device_info`: this device's ID when it has one, so the lists can tell
-/// its group from the others, and its system. Only the derived ID leaves
-/// core, never the OS machine ID, and no name of the computer or phone.
+/// its group from the others, its system, and the name its OS gives itself
+/// (`null` when it gives none). Only the derived ID leaves core, never the
+/// OS machine ID, and no name of the computer or phone.
 pub(super) fn info() -> RpcResponse {
     let device = upriv_core::this_device();
     ok(json!({
         "id": device.id,
         "system": device.system,
+        "os": upriv_core::this_os_name(),
     }))
 }
 
@@ -57,8 +59,12 @@ mod tests {
             result.get("system").and_then(Value::as_str),
             Some(upriv_core::DeviceSystem::current().as_str())
         );
+        assert_eq!(
+            result.get("os").and_then(Value::as_str),
+            upriv_core::this_os_name()
+        );
         // No name of the computer leaves core.
-        assert_eq!(result.as_object().map(|body| body.len()), Some(2));
+        assert_eq!(result.as_object().map(|body| body.len()), Some(3));
     }
 
     #[test]

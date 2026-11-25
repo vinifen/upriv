@@ -15,7 +15,7 @@ use crate::session::{with_vault_dir_lock, Job, JobKind};
 use crate::store::{content_hash_hex, load_header, VaultStorage, INDEX_DIR_NAME};
 
 use super::backup::{backup_zip_file, copy_ciphertext_tree, split_backup_locator};
-use super::create::claim_new_vault_dir;
+use super::create::{claim_new_vault_dir, fresh_marks, NewVault};
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::package::imported_vault_name;
 use super::persistence::{save_vault_persistence, VaultPersistence};
@@ -96,6 +96,9 @@ fn materialize_imported_store(
     fill_store: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<String> {
     config.storage = carried;
+    // A copied store is whole once its copy lands; until then the record
+    // below covers it, and a cut-off copy is removed.
+    fresh_marks(&mut config, NewVault::Complete);
     let id = prepare_imported_id(root, &mut config)?;
     let dest = root.vault_dir(&id)?;
     crate::host_fs::create_dir_all(root.vaults_dir())?;

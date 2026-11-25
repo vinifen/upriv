@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, UprivError};
 use crate::folder_list::backup::AppBackupFolders;
 use crate::folder_list::unlocked::AppUnlockedFolders;
+use crate::os_name::OsNames;
 use crate::paths::VAULT_ROOT_SETTINGS_REL;
 
 use super::types::{AppSectionSettings, AppSettings, LoggingSettings, UiSettings};
@@ -27,6 +28,8 @@ pub(super) struct SettingsToml {
     pub(super) unlocked_folders: AppUnlockedFolders,
     #[serde(default)]
     pub(super) backups: AppBackupFolders,
+    #[serde(default, skip_serializing_if = "OsNames::is_empty")]
+    pub(super) os_names: OsNames,
 }
 
 /// `[package]`: the settings format. The data-folder layout under `.upriv/` is fixed.
@@ -71,8 +74,6 @@ pub(super) struct UiToml {
     pub(super) lifecycle_confirm_stop: bool,
     /// Lock on a vault row needs a second click. Default false.
     pub(super) lifecycle_confirm_lock: bool,
-    /// A click on the row of a vault that is not open presses its button. Default false.
-    pub(super) lifecycle_row_runs_button: bool,
 }
 
 impl Default for UiToml {
@@ -102,7 +103,6 @@ impl Default for UiToml {
             lifecycle_confirm_close_now: true,
             lifecycle_confirm_stop: true,
             lifecycle_confirm_lock: false,
-            lifecycle_row_runs_button: false,
         }
     }
 }
@@ -133,7 +133,6 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
         lifecycle_confirm_stop: ui.lifecycle_confirm_stop,
         lifecycle_confirm_lock: ui.lifecycle_confirm_lock,
-        lifecycle_row_runs_button: ui.lifecycle_row_runs_button,
     }
 }
 
@@ -179,7 +178,6 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
         lifecycle_confirm_stop: ui.lifecycle_confirm_stop,
         lifecycle_confirm_lock: ui.lifecycle_confirm_lock,
-        lifecycle_row_runs_button: ui.lifecycle_row_runs_button,
     }
 }
 
@@ -285,6 +283,7 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
         },
         unlocked_folders: parsed.unlocked_folders,
         backups: parsed.backups,
+        os_names: parsed.os_names,
     })
 }
 
@@ -310,6 +309,7 @@ pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
         app: AppToml { last_opened_vault },
         unlocked_folders: settings.unlocked_folders.clone(),
         backups: settings.backups.clone(),
+        os_names: settings.os_names.clone(),
     };
     let body = toml::to_string_pretty(&file).map_err(|error| {
         UprivError::Io(std::io::Error::other(format!(
@@ -419,7 +419,6 @@ last_opened_vault = "kept"
         assert!(settings.ui.lifecycle_confirm_close_now);
         assert!(settings.ui.lifecycle_confirm_stop);
         assert!(!settings.ui.lifecycle_confirm_lock);
-        assert!(!settings.ui.lifecycle_row_runs_button);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
     }
@@ -439,7 +438,6 @@ lifecycle_keep_open_on_wake = true
 lifecycle_confirm_close_now = false
 lifecycle_confirm_stop = false
 lifecycle_confirm_lock = true
-lifecycle_row_runs_button = true
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.ui.lifecycle_close_modal_on_submit);
@@ -448,13 +446,21 @@ lifecycle_row_runs_button = true
         assert!(!settings.ui.lifecycle_confirm_close_now);
         assert!(!settings.ui.lifecycle_confirm_stop);
         assert!(settings.ui.lifecycle_confirm_lock);
-        assert!(settings.ui.lifecycle_row_runs_button);
         let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
         assert!(written.contains("lifecycle_keep_open_on_wake = true"));
         assert!(written.contains("lifecycle_confirm_close_now = false"));
-        assert!(written.contains("lifecycle_row_runs_button = true"));
+        assert!(written.contains("lifecycle_confirm_lock = true"));
+    }
+
+    #[test]
+    fn a_key_the_ui_table_does_not_know_is_ignored_and_dropped_on_save() {
+        let raw = "[package]\nversion = 1\n\n[ui]\nlocale = \"es\"\nnot_a_setting = true\n";
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert_eq!(settings.ui.locale, "es");
+        let written = serialize_settings_toml_str(&settings).unwrap();
+        assert!(!written.contains("not_a_setting"));
     }
 
     #[test]
@@ -558,14 +564,14 @@ next_number = 1
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.unlocked_folders.encrypted_vaults);
         assert_eq!(settings.unlocked_folders.devices.0.len(), 1);
-        // A group that holds nothing is not written back.
+        // A group with no rows stays until it is removed.
+        assert_eq!(settings.backups.devices.0.len(), 1);
         let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("path = \"/mnt/ssd\""), "{written}");
-        assert!(!written.contains("[backups.devices"), "{written}");
-        assert_eq!(
-            parse_settings_toml_str(&written).unwrap().unlocked_folders,
-            settings.unlocked_folders
-        );
+        assert!(written.contains("[backups.devices"), "{written}");
+        let read_again = parse_settings_toml_str(&written).unwrap();
+        assert_eq!(read_again.unlocked_folders, settings.unlocked_folders);
+        assert_eq!(read_again.backups, settings.backups);
     }
 
     #[test]

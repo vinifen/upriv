@@ -49,6 +49,7 @@ import {
   VIEW_MODE_ICON,
   type VaultGroup,
   type VaultListItem,
+  type VaultSettingsAreaId,
   type VaultListSortDirection,
   type VaultListSortMode,
   type VaultListViewMode,
@@ -79,6 +80,7 @@ import { VaultGroupsModal } from "@/features/vaults/list/VaultGroupsModal";
 import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import { DeleteNowModal } from "@/features/vaults/list/DeleteNowModal";
+import { ImportBlockedModal } from "@/components/ImportBlockedModal";
 import { VaultDeleteModal } from "@/features/vaults/list/VaultDeleteModal";
 import {
   VaultClosePromptModal,
@@ -250,8 +252,13 @@ export function VaultListScreen() {
     setExportVault,
     exportPasswordError,
     setExportPasswordError,
+    refusedImport,
+    retryRefusedImport,
+    closeRefusedImport,
     backupsVault,
     backupSaveJob,
+    backupCloseBackup,
+    backupChangeBackup,
     backupListRefresh,
     handleBackupSaveNow,
     backupExportFolder,
@@ -275,8 +282,8 @@ export function VaultListScreen() {
     setGroupDraftGroupedVaultSortDirection,
     groupDraftHidden,
     setGroupDraftHidden,
-    groupDeleteOpen,
-    setGroupDeleteOpen,
+    deleteGroup,
+    setDeleteGroup,
     groupFormError,
     setGroupFormError,
     groupBusy,
@@ -336,6 +343,8 @@ export function VaultListScreen() {
     cancelDeleteNow,
     confirmDeleteNow,
     backupSaveStop,
+    handleCloseBackupStop,
+    handleChangeBackupStop,
     handleConfirmExportVault,
     handleStopExportVault,
     handleRowExport,
@@ -619,6 +628,24 @@ export function VaultListScreen() {
     };
   }, [draggingId, draggingGroupedVaultSourceGroupId, refreshDropRects]);
 
+  const openSettings = (rowVault: VaultListItem, area: VaultSettingsAreaId) => {
+    // One change of each kind at a time: another vault's screen waits.
+    if (area === "password" && passwordJob && passwordJob.vaultId !== rowVault.id) {
+      show(t("vault.password_change.busy"));
+      return;
+    }
+    if (area === "kdf" && unlockRamJob && unlockRamJob.vaultId !== rowVault.id) {
+      show(t("vault.unlock_ram_change.busy"));
+      return;
+    }
+    if (area === "storage" && storageJob && storageJob.vaultId !== rowVault.id) {
+      show(t("vault.change_storage.busy"));
+      return;
+    }
+    setSettingsVault(rowVault);
+    setSettingsArea(area);
+  };
+
   const renderVaultRow = (
     vault: VaultListItem,
     opts?: { nested?: boolean; blocks?: boolean; group?: VaultGroup; dropKey?: string },
@@ -660,23 +687,7 @@ export function VaultListScreen() {
         onDragEnd={onRowDragEnd}
         onDragCancel={clearDrag}
         onOpenFileManager={openFromVault}
-        onOpenSettings={(rowVault, area) => {
-          // One change of each kind at a time: another vault's screen waits.
-          if (area === "password" && passwordJob && passwordJob.vaultId !== rowVault.id) {
-            show(t("vault.password_change.busy"));
-            return;
-          }
-          if (area === "kdf" && unlockRamJob && unlockRamJob.vaultId !== rowVault.id) {
-            show(t("vault.unlock_ram_change.busy"));
-            return;
-          }
-          if (area === "storage" && storageJob && storageJob.vaultId !== rowVault.id) {
-            show(t("vault.change_storage.busy"));
-            return;
-          }
-          setSettingsVault(rowVault);
-          setSettingsArea(area);
-        }}
+        onOpenSettings={openSettings}
         onOpenDelete={(rowVault) => setDeleteVaultId(rowVault.id)}
         onUnlock={(rowVault) => lifecycle.requestLifecycle(rowVault.id, "unlock")}
         onLock={(rowVault) => lifecycle.requestLifecycle(rowVault.id, "close")}
@@ -714,7 +725,6 @@ export function VaultListScreen() {
     setGroupDraftGroupedVaultSort(group.groupedVaultSort);
     setGroupDraftGroupedVaultSortDirection(group.groupedVaultSortDirection);
     setGroupDraftHidden(group.hidden);
-    setGroupDeleteOpen(false);
     setGroupFormError(null);
   };
 
@@ -838,13 +848,32 @@ export function VaultListScreen() {
             </View>
           </Pressable>
           {showGroupSettings ? (
+            // The group's Settings menu, as a vault row's gear opens its own.
             <View style={[styles.groupHeaderSide, { paddingVertical: rowPaddingY }]}>
-              <IconButton
+              <DropdownPanel
                 label={t("vault.group.open_settings")}
-                icon="settings"
-                size={18}
-                onPress={() => openGroupSettings(pack.group)}
-              />
+                heading={t("action.settings")}
+                align="right"
+                minWidth={220}
+                trigger={
+                  <IconButton label={t("vault.group.open_settings")} icon="settings" size={18} />
+                }
+              >
+                <MenuActionItem
+                  icon="settings"
+                  label={t("vault.group.settings.title")}
+                  onPress={() => openGroupSettings(pack.group)}
+                />
+                <MenuActionItem
+                  icon="trash"
+                  label={t("vault.group.settings.delete_entry")}
+                  danger
+                  onPress={() => {
+                    setGroupFormError(null);
+                    setDeleteGroup(pack.group);
+                  }}
+                />
+              </DropdownPanel>
             </View>
           ) : null}
         </View>
@@ -1425,6 +1454,16 @@ export function VaultListScreen() {
         open={lifecycle.recoveryOpen}
         onClose={lifecycle.cancelRecovery}
         onAction={lifecycle.handleRecoveryAction}
+        onFinishPasswordChange={() => {
+          const recoveryVault = lifecycle.recoveryVault;
+          lifecycle.cancelRecovery();
+          if (recoveryVault) openSettings(recoveryVault, "password");
+        }}
+        onDelete={() => {
+          const recoveryVault = lifecycle.recoveryVault;
+          lifecycle.cancelRecovery();
+          if (recoveryVault) setDeleteVaultId(recoveryVault.id);
+        }}
       />
 
       <PlainPlaceModal
@@ -1434,10 +1473,8 @@ export function VaultListScreen() {
         appUnlocked={lifecycle.placeAppUnlocked}
         vaultUnlocked={lifecycle.placeVaultUnlocked}
         submitting={lifecycle.placeSubmitting}
-        warningClass={lifecycle.placeWarningClass}
         onClose={lifecycle.onPlaceClose}
         onContinue={lifecycle.onPlaceContinue}
-        onAcceptWarning={lifecycle.onPlaceAcceptWarning}
       />
       <PlainHeldModal
         open={lifecycle.heldOpen}
@@ -1511,14 +1548,15 @@ export function VaultListScreen() {
         }}
       />
 
+      {/* Delete group, the last entry of the group's Settings menu. */}
       <Modal
-        open={settingsGroup !== null && groupDeleteOpen}
+        open={deleteGroup !== null}
         title={t("vault.group.settings.delete")}
         titleIcon="trash"
-        contextTitle={settingsGroup?.displayName}
+        contextTitle={deleteGroup?.displayName}
         panelClassName="max-w-md"
         onClose={() => {
-          if (!groupBusy) setGroupDeleteOpen(false);
+          if (!groupBusy) setDeleteGroup(null);
         }}
         footer={
           <ModalFooterActions layout="dialog">
@@ -1526,20 +1564,19 @@ export function VaultListScreen() {
               label={t("action.cancel")}
               variant="ghost"
               disabled={groupBusy}
-              onPress={() => setGroupDeleteOpen(false)}
+              onPress={() => setDeleteGroup(null)}
             />
             <Button
               label={t("vault.group.settings.delete")}
               variant="danger"
-              disabled={!settingsGroup || groupBusy}
+              disabled={!deleteGroup || groupBusy}
               onPress={() => {
-                if (!settingsGroup || groupBusy) return;
+                if (!deleteGroup || groupBusy) return;
                 void runWithGroupBusy(async (generation) => {
-                  await vaultGroupService.delete(settingsGroup.id);
+                  await vaultGroupService.delete(deleteGroup.id);
                   await applyListedIfCurrent(generation);
                   if (generation !== groupBusyGenRef.current) return;
-                  setSettingsGroup(null);
-                  setGroupDeleteOpen(false);
+                  setDeleteGroup(null);
                 }).catch(() => undefined);
               }}
             />
@@ -1549,18 +1586,23 @@ export function VaultListScreen() {
         <View style={{ gap: spacing.sm }}>
           <Text style={typography.bodyMuted}>{t("vault.group.settings.delete_help")}</Text>
           <Text style={typography.bodyMuted}>{t("vault.group.settings.delete_confirm")}</Text>
+          {groupFormError ? (
+            <Text style={[typography.caption, { color: colors.onErrorContainer }]}>
+              {groupFormError}
+            </Text>
+          ) : null}
         </View>
       </Modal>
 
+      {/* Group settings, the first entry of the group's Settings menu. */}
       <Modal
-        open={settingsGroup !== null && !groupDeleteOpen}
+        open={settingsGroup !== null}
         title={t("vault.group.settings.title")}
         titleIcon="layers"
         contextTitle={settingsGroup?.displayName}
         panelClassName="max-w-3xl"
         onClose={() => {
           setSettingsGroup(null);
-          setGroupDeleteOpen(false);
           setGroupFormError(null);
         }}
         footer={
@@ -1571,7 +1613,6 @@ export function VaultListScreen() {
               disabled={groupBusy}
               onPress={() => {
                 setSettingsGroup(null);
-                setGroupDeleteOpen(false);
                 setGroupFormError(null);
               }}
             />
@@ -1600,7 +1641,6 @@ export function VaultListScreen() {
                   await applyListedIfCurrent(generation);
                   if (generation !== groupBusyGenRef.current) return;
                   setSettingsGroup(null);
-                  setGroupDeleteOpen(false);
                 }).catch(() => undefined);
               }}
             />
@@ -1699,18 +1739,6 @@ export function VaultListScreen() {
               }}
             />
           </SettingsAccordionSection>
-
-          <View style={styles.groupDeleteEntry}>
-            <Button
-              label={t("vault.group.settings.delete_entry")}
-              variant="ghost"
-              disabled={groupBusy}
-              onPress={() => {
-                setGroupFormError(null);
-                setGroupDeleteOpen(true);
-              }}
-            />
-          </View>
         </View>
       </Modal>
 
@@ -1719,8 +1747,12 @@ export function VaultListScreen() {
         open={backupsVault !== null}
         canSaveNow={backupsVault !== null && vaultCanSaveBackupNow(backupsVault, pipelineStatus)}
         saveJob={backupSaveJob}
+        closeBackup={backupCloseBackup}
         onSaveNow={handleBackupSaveNow}
         onStopSave={backupSaveStop}
+        onStopCloseBackup={handleCloseBackupStop}
+        changeBackup={backupChangeBackup}
+        onStopChangeBackup={handleChangeBackupStop}
         listRefreshToken={backupListRefresh}
         onClose={() => setBackupsVault(null)}
         onCreateVaultFromBackup={(backup) => {
@@ -1802,6 +1834,11 @@ export function VaultListScreen() {
         onCreate={handleCreateVault}
       />
 
+      <ImportBlockedModal
+        report={refusedImport}
+        onLeaveOut={retryRefusedImport}
+        onClose={closeRefusedImport}
+      />
       <Toast toast={toast} onDismiss={dismiss} />
 
       {draggingId && dragPointer ? (
@@ -2037,7 +2074,6 @@ const styles = StyleSheet.create({
   groupInput: {
     marginTop: spacing.sm,
   },
-  groupDeleteEntry: { alignItems: "flex-start" },
   memberPick: { paddingVertical: spacing.sm },
   blockRowWrap: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   blockCellFill: { flex: 1, minWidth: 0 },

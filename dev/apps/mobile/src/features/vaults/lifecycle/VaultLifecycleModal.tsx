@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import {
+  jobStepCopy,
   lifecycleBusyLabelKey,
   offersVaultRebuild,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
   storageModeIsPlaintext,
   unlockFolderLine,
-  vaultRowWorkClock,
   VAULT_ERROR_CODES,
   type UnlockedDestination,
   type VaultListItem,
@@ -17,7 +17,7 @@ import { useUnlockedDestination } from "@upriv/shared/react";
 import { rpcVaultUnlockedDestination } from "@/lib/rpc";
 import { useVaultLifecycleService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { Button, ElapsedTime, JobStopButton, Modal, ModalFooterActions } from "@/components/ui";
+import { Button, JobProgressBar, JobStopButton, Modal, ModalFooterActions } from "@/components/ui";
 import { UnlockedFolderLineView } from "@/components/settings";
 import { FieldLabel, PasswordInput } from "@/components/settings/settingsFields";
 import { useTheme } from "@/theme";
@@ -125,6 +125,7 @@ export function VaultLifecycleModal({
   const rebuildOffered = !submitting && error !== null && offersVaultRebuild(verifyErrorKey);
   const headerLost =
     verifyErrorKey === requireVaultErrorI18nKey(VAULT_ERROR_CODES.HEADER_UNREADABLE);
+  const busyKey = lifecycleBusyLabelKey("unlock", pipelineStep);
 
   return (
     <Modal
@@ -151,13 +152,7 @@ export function VaultLifecycleModal({
             />
           ) : (
             <Button
-              label={
-                submitting
-                  ? work?.startedAt != null
-                    ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
-                    : t("vault.status.queued")
-                  : t("unlock.submit")
-              }
+              label={t("unlock.submit")}
               variant="primary"
               disabled={!canSubmit}
               onPress={handleConfirm}
@@ -208,15 +203,16 @@ export function VaultLifecycleModal({
         </Text>
       ) : null}
 
-      {submitting ? (
-        <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
-          {work?.startedAt != null
-            ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
-            : t("vault.status.queued")}
-        </Text>
-      ) : null}
+      {/* Stop counts its own wait; the bar shows the step until then. */}
       {submitting && work?.stop !== "stopping" ? (
-        <ElapsedTime startedAt={vaultRowWorkClock(work)} />
+        <View style={styles.progress}>
+          <JobProgressBar
+            progress={null}
+            startedAt={work?.startedAt ?? null}
+            label={t("unlock.title")}
+            copy={jobStepCopy(null, busyKey)}
+          />
+        </View>
       ) : null}
     </Modal>
   );
@@ -225,4 +221,5 @@ export function VaultLifecycleModal({
 const styles = StyleSheet.create({
   passwordBlock: { gap: spacing.sm },
   passwordField: { gap: spacing.sm },
+  progress: { gap: spacing.xs },
 });

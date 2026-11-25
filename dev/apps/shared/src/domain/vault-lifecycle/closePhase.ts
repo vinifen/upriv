@@ -1,3 +1,4 @@
+import { parseJobStatus, type JobProgress } from "../jobs/progress";
 import { delayMs } from "../timing/delay";
 
 /** Step of a running close. */
@@ -6,21 +7,29 @@ export type VaultClosePhase = "flush" | "backup";
 /**
  * `vault_close_phase`: where one vault's close stands. `open` is core still
  * holding the session with no close started; `closed` is no session and no
- * close.
+ * close. While the close writes its backup, `progress` is how far the zip
+ * got, as `job_status` reports a job (`null` before it measured).
  */
 export type VaultCloseState =
-  { state: "open" } | { state: "closing"; phase: VaultClosePhase } | { state: "closed" };
+  | { state: "open" }
+  | { state: "closing"; phase: "flush" }
+  | { state: "closing"; phase: "backup"; progress: JobProgress | null }
+  | { state: "closed" };
 
 export const CLOSE_PHASE_POLL_MS = 400;
 
 /** `null` when the answer is not one. */
 export function parseVaultCloseState(raw: unknown): VaultCloseState | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const { state, phase } = raw as { state?: unknown; phase?: unknown };
+  const { state, phase, progress } = raw as {
+    state?: unknown;
+    phase?: unknown;
+    progress?: unknown;
+  };
   if (state === "open" || state === "closed") return { state };
-  if (state === "closing" && (phase === "flush" || phase === "backup")) {
-    return { state, phase };
-  }
+  if (state !== "closing") return null;
+  if (phase === "flush") return { state, phase };
+  if (phase === "backup") return { state, phase, progress: parseJobStatus(progress) };
   return null;
 }
 
@@ -46,17 +55,17 @@ export async function askCloseToHurry(
   }
 }
 
-/** What a running close tells its watcher, once. */
+/** What a running close tells its watcher. */
 export interface ClosePhaseEvents {
-  /** The close backup started. */
-  onBackup: () => void;
+  /** The close writes its backup: at each read while it does, with how far the zip got. */
+  onBackup: (progress: JobProgress | null) => void;
 }
 
 /**
- * Wait for `work`, the `vault_close` call. While it runs, poll the core close
- * and call `onBackup` when its backup starts, then stop asking. A failed read
- * is skipped; it never fails the close. A close has no time limit: Close now
- * is its stop.
+ * Wait for `work`, the `vault_close` call. While it runs, poll the core close,
+ * and while its backup runs call `onBackup` at each read, so a window can show
+ * how far the zip got. A failed read is skipped; it never fails the close. A
+ * close has no time limit: Close now is its stop.
  */
 export async function waitForClose<T>(
   work: Promise<T>,
@@ -75,8 +84,7 @@ export async function waitForClose<T>(
       }
       if (settled) return;
       if (current?.state === "closing" && current.phase === "backup") {
-        events.onBackup();
-        return;
+        events.onBackup(current.progress);
       }
       await delayMs(pollMs);
     }

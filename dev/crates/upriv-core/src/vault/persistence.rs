@@ -55,7 +55,7 @@ pub struct WrittenZip {
 #[serde(deny_unknown_fields)]
 pub struct BackupDeviceRecord {
     /// Logical index hash of this device's last finished backup, ignoring
-    /// `.upriv-workspace.json`.
+    /// `.upriv-workspace.json`; `None` when that close did not compare.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_hash: Option<String>,
     /// Stamp of that zip.
@@ -65,6 +65,12 @@ pub struct BackupDeviceRecord {
     /// folder in use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// A password change, an unlock-RAM change, or a rebuild rewrote the
+    /// store after that zip, so no zip holds it as it is: with `[backup]
+    /// keep_current` the next close writes one, and says why when the files
+    /// match `index_hash`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rewritten: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -215,12 +221,12 @@ impl VaultPersistence {
         }
     }
 
-    /// The store was rewritten: no zip holds it as it is now.
-    fn forget_last_backups(&mut self) {
+    /// The store was rewritten: no zip holds it as it is now. Each record
+    /// keeps its last zip and what its files held, so the next close can
+    /// tell a rewrite alone from changed files.
+    fn mark_store_rewritten(&mut self) {
         for record in self.backup_devices.values_mut() {
-            record.index_hash = None;
-            record.stamp = None;
-            record.folder = None;
+            record.rewritten = true;
         }
     }
 }
@@ -300,8 +306,9 @@ pub(crate) fn record_store_hash(vault_dir: &Path, vault_id: &str) -> Result<()> 
 /// After `store/` was written with no session (a password or unlock-RAM
 /// change, a rebuild): the store's new content `hash` is recorded, so the list
 /// does not read the change as a crash, and every machine's last backup is
-/// dropped, so the next close writes a zip of the store as it is now. A
-/// rebuild also records what its new tree holds (`files_bytes`).
+/// marked rewritten, so with `[backup] keep_current` the next close writes a
+/// zip of the store as it is now. A rebuild also records what its new tree
+/// holds (`files_bytes`).
 pub(super) fn record_store_rewritten(
     vault_dir: &Path,
     vault_id: &str,
@@ -316,7 +323,7 @@ pub(super) fn record_store_rewritten(
         if files_bytes.is_some() {
             persistence.files_bytes = files_bytes;
         }
-        persistence.forget_last_backups();
+        persistence.mark_store_rewritten();
         persistence.persistence = "closed".to_string();
     })
 }
@@ -389,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rewritten_store_drops_every_devices_last_backup_and_keeps_the_rest() {
+    fn a_rewritten_store_marks_every_devices_last_backup_and_keeps_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let mut saved = VaultPersistence::closed("notes".into(), "Notes".into(), None);
         saved.backups_written = vec![written("20260101000000-notes.zip", DATA_FOLDER_REF)];
@@ -400,6 +407,7 @@ mod tests {
                     index_hash: Some("hash".into()),
                     stamp: Some("20260101000000".into()),
                     folder: Some(DATA_FOLDER_REF.into()),
+                    rewritten: false,
                 },
             );
         }
@@ -412,7 +420,15 @@ mod tests {
         assert_eq!(loaded.backups_written, saved.backups_written);
         assert_eq!(loaded.backup_devices.len(), 2);
         for record in loaded.backup_devices.values() {
-            assert_eq!(record, &BackupDeviceRecord::default());
+            assert_eq!(
+                record,
+                &BackupDeviceRecord {
+                    index_hash: Some("hash".into()),
+                    stamp: Some("20260101000000".into()),
+                    folder: Some(DATA_FOLDER_REF.into()),
+                    rewritten: true,
+                }
+            );
         }
     }
 

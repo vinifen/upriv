@@ -7,7 +7,7 @@ import {
   SHUTDOWN_METHOD,
   SHUTDOWN_NOW_TIMEOUT_MS,
   STARTUP_TIMEOUT_MS,
-  formatRpcError,
+  DaemonRpcError,
   parseDaemonStdoutLine,
   rpcTimeoutErrorMessage,
   shouldArmRpcTimeout,
@@ -334,7 +334,7 @@ function dispatchWireMessage(connection: DaemonConnection, message: WireOutMessa
     if (message.ok) {
       pending.resolve(message.result);
     } else {
-      pending.reject(new Error(formatRpcError(message.error, "daemon RPC failed")));
+      pending.reject(new DaemonRpcError(message.error, "daemon RPC failed"));
     }
     return;
   }

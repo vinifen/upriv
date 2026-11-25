@@ -98,6 +98,7 @@ interface VaultListProps {
   onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => void;
   onOpenDelete: (vaultId: string) => void;
   onOpenGroupSettings: (groupId: string) => void;
+  onOpenGroupDelete: (groupId: string) => void;
   onToggleGroupCollapsed: (groupId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
@@ -135,6 +136,7 @@ export function VaultList({
   onOpenSettings,
   onOpenDelete,
   onOpenGroupSettings,
+  onOpenGroupDelete,
   onToggleGroupCollapsed,
   onExportVault,
   onOpenFileManager,
@@ -347,6 +349,7 @@ export function VaultList({
                   pointerDrag={pointerDrag}
                   onToggleCollapsed={onToggleGroupCollapsed}
                   onOpenSettings={onOpenGroupSettings}
+                  onOpenDelete={onOpenGroupDelete}
                 />
                 <Collapse open={childrenVisible}>
                   <div className={blocksGroupInnerClass(innerColumns)}>
@@ -450,6 +453,7 @@ export function VaultList({
               pointerDrag={pointerDrag}
               onToggleCollapsed={onToggleGroupCollapsed}
               onOpenSettings={onOpenGroupSettings}
+              onOpenDelete={onOpenGroupDelete}
             />
             <Collapse open={childrenVisible}>
               <div className="min-w-0 space-y-3 px-3 pb-3 pt-1">

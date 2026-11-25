@@ -1,10 +1,12 @@
 import type { PlainRecord } from "../vault-plain/types";
 /**
  * What `vault_list` says of a vault beside closed: open, closing, in
- * recovery (a pending password change included), or being deleted (a delete
- * started, and `config.toml` holds `[deleting]`).
+ * recovery (a pending password change included), being deleted (a delete
+ * started, and `config.toml` holds `[deleting]`, or an import never finished
+ * it and the launch sweep removes it), or importing (an import still fills
+ * it, also one this window did not start, as after a reload).
  */
-export type VaultSession = "open" | "closing" | "recovery" | "deleting";
+export type VaultSession = "open" | "closing" | "recovery" | "deleting" | "importing";
 
 /** Where a vault's password change stands, as its header says in the clear. */
 export type PasswordChangeState = "none" | "pending" | "unfinished";
@@ -260,6 +262,11 @@ export interface VaultRow {
   passwordChange?: PasswordChangeState;
   /** The row is `deleting` and no delete of it runs: Continue goes on with it. */
   deleteUnfinished?: boolean;
+  /**
+   * The row is `recovery` because a quit or a crash cut off the import that
+   * filled it: an unlock keeps the files it got in, or the vault is deleted.
+   */
+  importUnfinished?: boolean;
 }
 
 /**
@@ -267,6 +274,7 @@ export interface VaultRow {
  * UI "Closed" labels must use `resolveVaultListStatus` / `isVaultListClosed`.
  */
 export function resolveVaultDisplayStatus(row: VaultRow): VaultDisplayStatus {
+  if (row.session === "importing") return "creating";
   if (row.session === "deleting") return "deleting";
   if (row.session === "recovery") return "recovery";
   if (row.session === "closing") return "closing";

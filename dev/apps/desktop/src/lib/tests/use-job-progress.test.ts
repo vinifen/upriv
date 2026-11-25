@@ -11,6 +11,7 @@ function jobs(byId: Record<string, JobProgress | null>): JobService & {
   return {
     status: vi.fn(async (job: string) => byId[job] ?? null),
     cancel: vi.fn(async () => undefined),
+    skipBackup: async () => false,
   };
 }
 

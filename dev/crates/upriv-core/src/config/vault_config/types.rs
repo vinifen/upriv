@@ -65,6 +65,12 @@ pub struct VaultBackupSection {
     /// every close.
     #[serde(default = "default_true")]
     pub skip_unchanged: bool,
+    /// With `skip_unchanged`: files that did not change still get a zip while
+    /// no backup in the folder in use holds the vault as it is (the store was
+    /// rewritten since, or its last zip is in another folder or gone).
+    /// `false` skips every close of unchanged files.
+    #[serde(default = "default_true")]
+    pub keep_current: bool,
     /// The vault's backup folder list, per device.
     #[serde(default, skip_serializing_if = "DeviceGroups::is_empty")]
     pub devices: DeviceGroups<VaultBackupChoice>,
@@ -77,6 +83,7 @@ impl Default for VaultBackupSection {
             mode: VaultBackupMode::KeepLast,
             keep_last: 1,
             skip_unchanged: true,
+            keep_current: true,
             devices: DeviceGroups::default(),
         }
     }
@@ -234,6 +241,12 @@ pub struct VaultConfig {
     /// finish. Only the delete writes it, and it leaves with `config.toml`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleting: Option<VaultDeletingSection>,
+    /// Present while an import fills the vault. The create of an import
+    /// writes it and the import removes it once every file is in, so one a
+    /// quit or a crash cut off keeps it: the vault is in recovery until the
+    /// person keeps what got in (an unlock) or deletes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importing: Option<VaultImportingSection>,
 }
 
 /// `[deleting]`: a delete of this vault started (`vault_delete`).
@@ -242,6 +255,23 @@ pub struct VaultConfig {
 pub struct VaultDeletingSection {
     /// The backups outside the data folder go too.
     pub outside_backups: bool,
+}
+
+/// `[importing]`: an import fills this vault and has not finished.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultImportingSection {
+    /// When the import began (UTC, RFC 3339).
+    pub started_at: String,
+}
+
+impl VaultImportingSection {
+    /// The mark of an import that begins now.
+    pub fn begun_now() -> Self {
+        Self {
+            started_at: crate::time::utc_timestamp_iso_millis(),
+        }
+    }
 }
 
 impl VaultConfig {

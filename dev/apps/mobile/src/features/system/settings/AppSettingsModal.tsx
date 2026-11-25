@@ -652,12 +652,6 @@ function GeneralFields({
         value={config.lifecycle_confirm_lock}
         onValueChange={(lifecycle_confirm_lock) => onChange({ lifecycle_confirm_lock })}
       />
-      <SwitchRow
-        label={t("modal.app_settings.field.lifecycle_row_runs_button")}
-        hint={t("modal.app_settings.field.lifecycle_row_runs_button_help")}
-        value={config.lifecycle_row_runs_button}
-        onValueChange={(lifecycle_row_runs_button) => onChange({ lifecycle_row_runs_button })}
-      />
     </View>
   );
 }

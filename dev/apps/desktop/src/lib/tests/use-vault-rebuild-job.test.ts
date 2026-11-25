@@ -22,7 +22,11 @@ function deferred() {
 }
 
 function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
-  return { status: async () => null, cancel: vi.fn(async () => undefined) };
+  return {
+    status: async () => null,
+    cancel: vi.fn(async () => undefined),
+    skipBackup: async () => false,
+  };
 }
 
 /** A security service whose other calls are never asked for here. */

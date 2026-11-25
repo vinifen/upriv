@@ -92,17 +92,18 @@ pub use import::{
     read_import_archive_bytes, read_import_zip_bytes_settings, read_import_zip_settings,
     StoreZipSettings,
 };
+pub use import_job::{ImportEnd, ImportedVault};
 pub use import_slots::{import_slots, import_slots_for};
 pub use key_pass::{update_key_copies, vault_key_status, KeyCopies, KeyStatus};
 pub use lost_sessions::{data_folder_entered, end_lost_sessions, leave_lost_data_folder};
 pub use open_close::{
     close_all_vaults, close_all_vaults_now, close_state, close_vault, close_vault_auto,
     close_vault_now, hurry_close, hurry_quit, open_vault, open_vault_as_job, wait_for_previous_app,
-    CloseState, CloseVaultOutcome, StorageReset, VaultOpened,
+    CloseBackupReason, CloseState, CloseVaultOutcome, StorageReset, VaultOpened,
 };
 pub use os_import::{
     abort_import_vault, finish_import_session, import_logical_os_path, ingest_import_directory,
-    ingest_import_reader, open_import_session,
+    ingest_import_reader, open_import_session, BlockedItems,
 };
 pub use partial::{hurry_partial_wipes, wait_for_partial_wipes};
 pub use password_change::{
@@ -152,6 +153,11 @@ pub(crate) fn files_bytes(index: &crate::store::VaultIndex) -> u64 {
 pub struct VaultListItem {
     pub id: String,
     pub display_name: String,
+    /// Beside closed: `open`, `recovery` (also a vault whose import a quit
+    /// or a crash cut off: `import_unfinished`), `deleting` (a delete
+    /// started, or a vault whose create or store copy was cut off, which the
+    /// launch sweep removes), or `importing` (a create or an import still
+    /// makes or fills it).
     pub session: Option<&'static str>,
     pub storage_mode: VaultStorageMode,
     pub order: i64,
@@ -163,12 +169,16 @@ pub struct VaultListItem {
     /// Keys the header holds: one in a steady vault, more while files wait
     /// on earlier keys.
     pub key_count: usize,
-    /// A password change pending (the row is `recovery`) or not finished,
-    /// read from the header in the clear.
+    /// A password change pending or not finished, read from the header in
+    /// the clear. Either makes the row `recovery`: a pending one opens with
+    /// the new password, and an unfinished one waits for Finish.
     pub password_change: PasswordChangeState,
     /// The row is `deleting` and no delete of it runs in this process: one
     /// that a quit or a crash stopped, which Continue goes on with.
     pub delete_unfinished: bool,
+    /// The row is `recovery` because a quit or a crash cut off the import
+    /// that filled it: an unlock keeps the files it got in.
+    pub import_unfinished: bool,
     /// A plaintext folder from an earlier session waits to be removed. Its
     /// folder path, mode, and name are locked until then.
     pub plain_leftover: bool,
@@ -317,37 +327,64 @@ fn content_hash_mismatch(vault_dir: &Path, saved: Option<&str>) -> bool {
 /// Plain-text records of each vault, as `state.json` holds them.
 type RecordsByVault = std::collections::BTreeMap<String, Vec<crate::runtime_state::PlainRecord>>;
 
-fn records_by_vault(root: &VaultRoot) -> RecordsByVault {
-    crate::runtime_state::load_runtime_state(root)
-        .map(|state| {
-            state
-                .vaults
-                .into_iter()
-                .filter(|(_, entry)| !entry.plain.is_empty())
-                .map(|(id, entry)| (id, entry.plain))
-                .collect()
-        })
-        .unwrap_or_default()
+/// What `state.json` holds that the list shows: the plain-text records of
+/// each vault, and the vaults whose create or store copy has not finished.
+struct ListedState {
+    records: RecordsByVault,
+    imports: HashSet<String>,
+}
+
+fn listed_state(root: &VaultRoot) -> ListedState {
+    let Ok(state) = crate::runtime_state::load_runtime_state(root) else {
+        return ListedState {
+            records: RecordsByVault::new(),
+            imports: HashSet::new(),
+        };
+    };
+    ListedState {
+        imports: state.unfinished_imports.iter().cloned().collect(),
+        records: state
+            .vaults
+            .into_iter()
+            .filter(|(_, entry)| !entry.plain.is_empty())
+            .map(|(id, entry)| (id, entry.plain))
+            .collect(),
+    }
 }
 
 fn list_item_from_entry(
     root: &VaultRoot,
     entry: &VaultListEntry,
     dirty: &HashSet<String>,
-    records: &RecordsByVault,
+    listed: &ListedState,
 ) -> VaultListItem {
+    let records = &listed.records;
     let saved = listed_persistence(&entry.vault_dir, &entry.id);
     let last_accessed_at = saved
         .as_ref()
         .and_then(|item| item.last_close_ok_at.clone());
     let header = probe_header(entry.vault_dir.join(crate::paths::STORE_DIR_NAME));
     let password_change = header.map_or(PasswordChangeState::None, |probe| probe.password_change);
+    // A vault not yet whole is never offered as one. One a create or a store
+    // copy makes is recorded, and a cut-off one, with nothing to keep, is
+    // removed by the launch sweep. One an import fills is marked
+    // `[importing]`, and a cut-off one is in recovery: the person keeps what
+    // got in or deletes it. While either runs, the row is `importing`.
+    let making = listed.imports.contains(&entry.id);
+    let filling = entry.config.importing.is_some();
+    let running =
+        (making || filling) && unfinished::import_running(root, &entry.id, &entry.vault_dir);
     let deleting = entry.config.deleting.is_some();
-    let session = if is_vault_open_at(&entry.vault_dir) {
+    let session = if running {
+        Some("importing")
+    } else if making {
+        Some("deleting")
+    } else if is_vault_open_at(&entry.vault_dir) {
         Some("open")
     } else if deleting {
         Some("deleting")
-    } else if password_change == PasswordChangeState::Pending
+    } else if filling
+        || password_change != PasswordChangeState::None
         || dirty.contains(&entry.id)
         || content_hash_mismatch(
             &entry.vault_dir,
@@ -358,6 +395,7 @@ fn list_item_from_entry(
     } else {
         None
     };
+    let import_unfinished = filling && session == Some("recovery");
     let plain_records = if session == Some("open") {
         Vec::new()
     } else {
@@ -387,7 +425,8 @@ fn list_item_from_entry(
         unlock_preset: header.and_then(|probe| probe.unlock_preset),
         key_count: header.map_or(0, |probe| probe.keys),
         password_change,
-        delete_unfinished: deleting && !is_vault_closing_at(&entry.vault_dir),
+        delete_unfinished: deleting && !making && !is_vault_closing_at(&entry.vault_dir),
+        import_unfinished,
         plain_leftover,
         plain_records,
         outside_backups,
@@ -404,10 +443,10 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let records = records_by_vault(root);
+    let listed = listed_state(root);
     Ok(entries
         .iter()
-        .map(|e| list_item_from_entry(root, e, &dirty, &records))
+        .map(|e| list_item_from_entry(root, e, &dirty, &listed))
         .collect())
 }
 
@@ -448,11 +487,27 @@ pub fn vault_disk_usage(root: &VaultRoot, vault_id: &str) -> Result<VaultDiskUsa
     })
 }
 
+/// The bytes of every file in the data folder's `.upriv`, for Info: links are
+/// not followed, and file contents are not read. See [`sum_regular_file_bytes`].
+pub fn data_folder_size(root: &VaultRoot) -> Result<u64> {
+    sum_regular_file_bytes(&root.upriv_dir())
+}
+
+/// The bytes of every regular file under `root`, links not followed. The
+/// folder may change while it is walked (a seal renames its index, a backup
+/// its zip, a log rotates): a file or folder gone by the time it is reached is
+/// not part of the size. Only `root` itself missing fails the walk.
 pub(crate) fn sum_regular_file_bytes(root: &Path) -> Result<u64> {
+    let gone = |error: &std::io::Error| error.kind() == std::io::ErrorKind::NotFound;
     let mut total: u64 = 0;
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        for entry in crate::host_fs::read_dir(&dir)? {
+        let entries = match crate::host_fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if dir != root && gone(&error) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
             let entry = entry?;
             let file_type = entry.file_type()?;
             if file_type.is_symlink() {
@@ -467,7 +522,11 @@ pub(crate) fn sum_regular_file_bytes(root: &Path) -> Result<u64> {
                     len
                 } else {
                     // Length from lstat. A symlink swapped in after the type check is skipped.
-                    let meta = crate::host_fs::symlink_metadata(entry.path())?;
+                    let meta = match crate::host_fs::symlink_metadata(entry.path()) {
+                        Ok(meta) => meta,
+                        Err(error) if gone(&error) => continue,
+                        Err(error) => return Err(error.into()),
+                    };
                     if meta.file_type().is_symlink() || !meta.host_is_file() {
                         continue;
                     }
@@ -505,7 +564,7 @@ pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem
             config,
         },
         &dirty,
-        &records_by_vault(root),
+        &listed_state(root),
     ))
 }
 
@@ -566,6 +625,30 @@ mod tests {
             vault_disk_usage(&root, "notes").unwrap().held_bytes,
             64 + 16
         );
+    }
+
+    #[test]
+    fn the_data_folder_size_counts_every_file_of_upriv_and_follows_no_link() {
+        let (tmp, root) = vault_root_with(&[]);
+        let before = data_folder_size(&root).unwrap();
+        assert!(before > 0, "settings.toml is in it");
+        let upriv = root.upriv_dir();
+        crate::host_fs::create_dir_all(upriv.join("vaults").join("a").join("store")).unwrap();
+        crate::host_fs::write(
+            upriv.join("vaults").join("a").join("store").join("x.blob"),
+            vec![1u8; 300],
+        )
+        .unwrap();
+        crate::host_fs::create_dir_all(upriv.join("logs")).unwrap();
+        crate::host_fs::write(upriv.join("logs").join("one.log"), vec![2u8; 40]).unwrap();
+        // Beside `.upriv`, not in it.
+        crate::host_fs::write(tmp.path().join("outside.bin"), vec![3u8; 9_000]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(tmp.path().join("outside.bin"), upriv.join("link.bin")).unwrap();
+        assert_eq!(data_folder_size(&root).unwrap(), before + 300 + 40);
+
+        crate::host_fs::remove_dir_all(&upriv).unwrap();
+        assert!(data_folder_size(&root).is_err(), "a folder gone is no size");
     }
 
     #[test]

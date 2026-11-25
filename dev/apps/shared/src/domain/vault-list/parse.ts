@@ -28,7 +28,13 @@ function parseStorageMode(raw: unknown): StorageMode {
 }
 
 function parseSession(raw: unknown): VaultSession | null {
-  if (raw === "open" || raw === "closing" || raw === "recovery" || raw === "deleting") {
+  if (
+    raw === "open" ||
+    raw === "closing" ||
+    raw === "recovery" ||
+    raw === "deleting" ||
+    raw === "importing"
+  ) {
     return raw;
   }
   return null;
@@ -81,6 +87,7 @@ export function parseVaultListItemWire(raw: unknown): VaultListItem {
     keyCount: typeof r.keyCount === "number" ? r.keyCount : undefined,
     passwordChange: parsePasswordChange(r.passwordChange),
     deleteUnfinished: r.deleteUnfinished === true,
+    importUnfinished: r.importUnfinished === true,
   };
 }
 

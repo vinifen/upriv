@@ -24,6 +24,12 @@ import {
 import { vaultRowFixture } from "./fixtures.shared";
 
 describe("resolveVaultDisplayStatus", () => {
+  it("shows a vault an import still fills as creating, so it offers no unlock", () => {
+    const status = resolveVaultDisplayStatus(vaultRowFixture({ session: "importing" }));
+    expect(status).toBe("creating");
+    expect(isVaultListRowUnlockTarget(status)).toBe(false);
+  });
+
   it("prioritizes session over persistence", () => {
     expect(
       resolveVaultDisplayStatus(
@@ -290,6 +296,17 @@ describe("vaultStatusLabelKey", () => {
       vaultStatusLabelKey("deleting", "notes", { deletingVaultIds: ["notes"] }, unfinished),
     ).toBe("vault.status.deleting");
     expect(vaultStatusLabelKey("deleting", "notes")).toBe("vault.status.deleting");
+  });
+
+  it("says a recovery is a cut-off import only for a row core marked so", () => {
+    expect(vaultStatusLabelKey("recovery", "notes", {}, { importUnfinished: true })).toBe(
+      "vault.status.import_unfinished",
+    );
+    expect(vaultStatusLabelKey("recovery", "notes")).toBe("vault.status.recovery");
+    // An open or a running pipeline shows what it is, not the mark.
+    expect(vaultStatusLabelKey("opening", "notes", {}, { importUnfinished: true })).toBe(
+      "vault.status.opening",
+    );
   });
 
   it("says Queued while the row's job waits for its lane, then the status", () => {

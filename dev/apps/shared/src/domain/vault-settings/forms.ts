@@ -7,12 +7,15 @@ export interface ChangePasswordFieldsState {
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
+  /** The vault's hint once the change is made; empty for none. Optional. */
+  passwordHint: string;
 }
 
 export const EMPTY_CHANGE_PASSWORD_FIELDS: ChangePasswordFieldsState = {
   currentPassword: "",
   newPassword: "",
   confirmPassword: "",
+  passwordHint: "",
 };
 
 export interface ChangeKdfFieldsState {
@@ -20,15 +23,12 @@ export interface ChangeKdfFieldsState {
   nextPreset: KdfUnlockPreset;
 }
 
-export function changePasswordFormIsDirty(fields: {
-  currentPassword: string;
-  newPassword: string;
-  confirmPassword: string;
-}): boolean {
+export function changePasswordFormIsDirty(fields: ChangePasswordFieldsState): boolean {
   return (
     fields.currentPassword.length > 0 ||
     fields.newPassword.length > 0 ||
-    fields.confirmPassword.length > 0
+    fields.confirmPassword.length > 0 ||
+    fields.passwordHint.length > 0
   );
 }
 

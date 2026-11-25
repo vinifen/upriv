@@ -1,7 +1,14 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { JOB_ERROR_CODES, RpcError, type I18nKey, type JobService } from "@upriv/shared";
+import {
+  CLOSING_BACKUP_STEP,
+  JOB_ERROR_CODES,
+  RpcError,
+  type I18nKey,
+  type JobProgress,
+  type JobService,
+} from "@upriv/shared";
 import { useVaultPipelineRun } from "@upriv/shared/react";
 
 function deferred() {
@@ -15,7 +22,7 @@ function deferred() {
 }
 
 function jobStub(cancel: JobService["cancel"] = vi.fn(async () => undefined)): JobService {
-  return { status: vi.fn(async () => null), cancel };
+  return { status: vi.fn(async () => null), cancel, skipBackup: async () => false };
 }
 
 function renderPipeline(jobs: JobService = jobStub(), onStopRefused = vi.fn()) {
@@ -274,6 +281,42 @@ describe("useVaultPipelineRun", () => {
     expect(onStopRefused).toHaveBeenCalledWith(refusal);
     expect(result.current.runWork?.stoppingSince).toBeNull();
     expect(result.current.run?.vaultId).toBe("vault-a");
+  });
+
+  it("shows a close's backup with how far its zip got, from when that step began", () => {
+    const { result } = renderPipeline();
+    const hang = deferred();
+    let step: (index: number, progress?: JobProgress | null) => void = () => undefined;
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "close",
+        stepCount: CLOSING_BACKUP_STEP + 2,
+        runPipeline: async (_vaultId, onStep) => {
+          step = onStep;
+          await hang.promise;
+        },
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+    });
+    expect(result.current.closeBackup).toBeNull();
+
+    act(() => step(CLOSING_BACKUP_STEP, null));
+    const started = result.current.closeBackup;
+    expect(started).toMatchObject({ vaultId: "vault-a", progress: null });
+
+    const progress = { bytesDone: 10, bytesTotal: 40, stoppable: true, step: null };
+    act(() => step(CLOSING_BACKUP_STEP, progress));
+    expect(result.current.closeBackup).toEqual({
+      vaultId: "vault-a",
+      startedAt: started?.startedAt,
+      progress,
+    });
+    // A read that says the same draws nothing again.
+    const before = result.current.run;
+    act(() => step(CLOSING_BACKUP_STEP, { ...progress }));
+    expect(result.current.run).toBe(before);
   });
 
   it("never stops a close: Close now is its stop", () => {

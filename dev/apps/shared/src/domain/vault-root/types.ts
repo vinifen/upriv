@@ -1,3 +1,4 @@
+import type { OsNames } from "../device";
 import type {
   ChoiceName,
   DataFolderChoice,
@@ -57,6 +58,8 @@ export type VaultRootResolveResult =
 /** `data_folder_list`: every device's group, and where Default is. */
 export interface DataFolderListView {
   groups: DeviceGroups<DataFolderChoice>;
+  /** The OS name of each device with a group in the list. */
+  osNames: OsNames;
   /** Default's folder on a computer. `null` on a phone, where Default is Documents/Upriv. */
   defaultFolder: string | null;
   /** The data folder the environment sets (`UPRIV_VAULT_ROOT`): it wins over the list. */

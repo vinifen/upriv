@@ -56,7 +56,7 @@ describe("useQuitCloseProgress", () => {
     mocks.answers.set("notes", [
       { state: "open" },
       { state: "closing", phase: "flush" },
-      { state: "closing", phase: "backup" },
+      { state: "closing", phase: "backup", progress: null },
       { state: "closed" },
     ]);
     const setRuntime = vi.fn();

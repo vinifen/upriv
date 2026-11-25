@@ -14,19 +14,24 @@ import {
   vaultExportToast,
   vaultRowJobWork,
   type VaultRowWork,
-  plainFolderClassI18nKey,
+  parseImportBlocked,
+  createdVaultText,
+  pipelineCompleteText,
   plainPlaceChanges,
   storageModeIsPlaintext,
   storageResetToastKey,
   BACKUP_CLOSE_TOAST_MS,
   backupCloseFailureToastKey,
+  closeBackupReasonToastKey,
   switchesMessage,
   type AttachAnswer,
   type BackupFailureReason,
+  type CloseVaultOutcome,
   type DeviceGroups,
   type FolderSwitch,
+  type ImportBlocked,
+  type ImportEnding,
   type PlainCloseSummary,
-  type PlainFolderClass,
   type PlainLeftover,
   type PlainPlaceChoice,
   type PlainRecoveryAction,
@@ -46,7 +51,6 @@ import {
   vaultCanExport,
   isVaultOpenJobPending,
   type VaultListItem,
-  type VaultPipelineKind,
   scheduleOpenFileManagerIfIdle,
   saveDirtyVaultDrafts,
   JOB_ERROR_CODES,
@@ -201,7 +205,11 @@ export function useVaultLifecycleActions({
   } | null>(null);
   /** Running or waiting closes told to finish the Close now way. */
   const closeNowAskedRef = useRef(new Set<string>());
-  const [closeNowVaultIds, setCloseNowVaultIds] = useState<readonly string[]>([]);
+  /** When each of those closes was told, so a Stop shows how long it waits. */
+  const [closeNowAskedAt, setCloseNowAskedAt] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const closeNowVaultIds = useMemo(() => [...closeNowAskedAt.keys()], [closeNowAskedAt]);
 
   const markCredentialVerify = useCallback((vaultId: string) => {
     credentialVerifyIdsRef.current.add(vaultId);
@@ -276,9 +284,12 @@ export function useVaultLifecycleActions({
   lifecycleRequestRef.current = lifecycleRequest;
   const plainCloseRef = useRef<PlainCloseSummary | null>(null);
   const backupFailureRef = useRef<BackupFailureReason | null>(null);
+  /** Why the close backed up files that did not change, and where the zip went. */
+  const backupReasonRef = useRef<Pick<CloseVaultOutcome, "backupReason" | "backupFolder"> | null>(
+    null,
+  );
   const [placeVaultId, setPlaceVaultId] = useState<string | null>(null);
   const [placeSubmitting, setPlaceSubmitting] = useState(false);
-  const [placeWarningClass, setPlaceWarningClass] = useState<PlainFolderClass | null>(null);
   /**
    * The vault's own unlocked folders while "Where should the files go?" is
    * open, so a typed folder is checked against them; `null` while they load.
@@ -511,9 +522,11 @@ export function useVaultLifecycleActions({
   const finishOpenVault = useCallback(
     (vaultId: string) => {
       closingHold.cancel(vaultId);
+      // An open that lands kept any import it found cut off.
       setVaultRuntimeState(vaultId, {
         session: "open",
         autoClosed: false,
+        importUnfinished: false,
         ...touchVaultLastAccessed(t("vault.last_accessed.just_now")),
       });
       if (settings.app.last_opened_vault !== vaultId) {
@@ -539,22 +552,16 @@ export function useVaultLifecycleActions({
     [setVaultRuntimeState],
   );
 
+  /** The toast of an open or a close, shown when it ran in the background. */
   const notifyPipelineComplete = useCallback(
-    (vaultId: string, kind: VaultPipelineKind) => {
+    (vaultId: string, kind: "open" | "close") => {
       dismissToast();
       if (!pipelineBackgroundRef.current) return;
 
       const vault = vaults.find((item) => item.id === vaultId);
       if (!vault) return;
 
-      const key =
-        kind === "open"
-          ? "toast.pipeline_complete_open"
-          : kind === "close"
-            ? "toast.pipeline_complete_close"
-            : "toast.pipeline_complete_create";
-
-      showToast(t(key, { name: vault.displayName }));
+      showToast(pipelineCompleteText(kind, vault.displayName, t));
       pipelineBackgroundRef.current = false;
     },
     [dismissToast, showToast, t, vaults],
@@ -565,6 +572,18 @@ export function useVaultLifecycleActions({
     (vaultId: string) =>
       vaultsRef.current.find((item) => item.id === vaultId)?.displayName ?? vaultId,
     [],
+  );
+
+  /**
+   * A create's toast. A create runs in the background, so its end is always
+   * told: ready, what it left out, or the person's stop with what got in.
+   */
+  const notifyCreated = useCallback(
+    (vaultId: string, ending: ImportEnding) => {
+      dismissToast();
+      showToast(createdVaultText(vaultName(vaultId), ending, t), ending.stopped ? 8000 : undefined);
+    },
+    [dismissToast, showToast, t, vaultName],
   );
 
   /** The attach's answer as its toast. A mounted folder, or a switch that is off, says nothing. */
@@ -708,6 +727,9 @@ export function useVaultLifecycleActions({
               10000,
             );
           } else {
+            if (opened?.importKept) {
+              showToast(t("toast.vault_import_kept", { name: vaultName(vaultId) }), 8000);
+            }
             const row = vaultsRef.current.find((item) => item.id === vaultId);
             if (row && !storageModeIsPlaintext(row.storageMode)) startAttach(vaultId);
           }
@@ -804,57 +826,80 @@ export function useVaultLifecycleActions({
   );
 
   /**
-   * Create or import a vault as a core job. `onRemoved` runs when the vault
-   * was not made: it failed, or the person stopped it and core removed it.
+   * Create or import a vault as a core job. It completes when the vault is
+   * made, also when the person stopped its import with files in: core keeps
+   * them, and the toast says so. `onRemoved` runs when it did not complete:
+   * it failed, or was stopped before any file got in. Core removed the vault
+   * then, unless a stopped import could not be sealed and core left it in
+   * recovery, so the row comes from the list core answers.
    */
   const startCreatePipeline = useCallback(
     (
       vaultId: string,
-      runCreate: (job: string) => Promise<void>,
+      /** Answers how its import ended: what it left out, or the person's stop. */
+      runCreate: (job: string) => Promise<ImportEnding>,
       hooks: {
         onComplete: () => void;
         onRemoved: () => void;
+        /**
+         * The import was refused for items it names: a window lists them, not
+         * a toast, and the row stays until the person answers it.
+         */
+        onBlocked: (blocked: ImportBlocked) => void;
       },
     ) => {
-      pipelineBackgroundRef.current = true;
+      let ending: ImportEnding | null = null;
       pipeline.start({
         vaultId,
         kind: "create",
         stepCount: 1,
         presentation: "background",
         failureMode: "advance",
-        runPipeline: (_id, _onStep, job) => runCreate(job),
+        runPipeline: async (_id, _onStep, job) => {
+          ending = await runCreate(job);
+        },
         onComplete: () => {
           hooks.onComplete();
-          notifyPipelineComplete(vaultId, "create");
+          if (ending) notifyCreated(vaultId, ending);
         },
-        onError: (errorI18nKey) => {
-          hooks.onRemoved();
+        onError: (errorI18nKey, error) => {
           dismissToast();
-          showToast(t(errorI18nKey), 8000);
-          pipelineBackgroundRef.current = false;
+          const blocked = parseImportBlocked(error);
+          if (blocked) {
+            hooks.onBlocked(blocked);
+          } else {
+            hooks.onRemoved();
+            showToast(t(errorI18nKey), 8000);
+          }
         },
         onStopped: () => {
           hooks.onRemoved();
           dismissToast();
           showToast(t("error.job_cancelled"));
-          pipelineBackgroundRef.current = false;
         },
       });
     },
-    [dismissToast, notifyPipelineComplete, pipeline, showToast, t],
+    [dismissToast, notifyCreated, pipeline, showToast, t],
   );
 
   const forgetCloseNow = useCallback((vaultId: string): boolean => {
     const asked = closeNowAskedRef.current.delete(vaultId);
-    if (asked) setCloseNowVaultIds((ids) => ids.filter((id) => id !== vaultId));
+    if (asked) {
+      setCloseNowAskedAt((current) => {
+        const next = new Map(current);
+        next.delete(vaultId);
+        return next;
+      });
+    }
     return asked;
   }, []);
 
   const hurryRunningClose = useCallback(
     (vaultId: string) => {
       closeNowAskedRef.current.add(vaultId);
-      setCloseNowVaultIds((ids) => (ids.includes(vaultId) ? ids : [...ids, vaultId]));
+      setCloseNowAskedAt((current) =>
+        current.has(vaultId) ? current : new Map(current).set(vaultId, Date.now()),
+      );
       void askCloseToHurry(
         () => lifecycleService.hurryClose(vaultId),
         () => closeNowAskedRef.current.has(vaultId) && pipeline.isVaultPipelineBusy(vaultId),
@@ -938,6 +983,7 @@ export function useVaultLifecycleActions({
             ? (outcome.backupFailure ?? "other")
             : null;
           backupSwitchesRef.current = outcome.backupSwitches;
+          backupReasonRef.current = outcome;
         },
         onComplete: () => {
           const immediate = forgetCloseNow(vault.id) || opts?.now === true;
@@ -957,6 +1003,8 @@ export function useVaultLifecycleActions({
           backupFailureRef.current = null;
           const backupSwitches = backupSwitchesRef.current;
           backupSwitchesRef.current = [];
+          const backupReason = backupReasonRef.current;
+          backupReasonRef.current = null;
           const reportedWithCloseAll = settleCloseAllBackup(vault.id, backupSwitches);
           closingHold.settle(
             vault.id,
@@ -992,6 +1040,17 @@ export function useVaultLifecycleActions({
                     count: String(summary.kept),
                   }),
                   8000,
+                );
+                return;
+              }
+              // A Close all stays quiet about why each vault backed up.
+              if (backupReason?.backupReason && !reportedWithCloseAll) {
+                showToast(
+                  t(closeBackupReasonToastKey(backupReason.backupReason), {
+                    name: vault.displayName,
+                    folder: backupReason.backupFolder ?? "",
+                  }),
+                  BACKUP_CLOSE_TOAST_MS,
                 );
                 return;
               }
@@ -1372,7 +1431,6 @@ export function useVaultLifecycleActions({
           const destination = await rpcVaultUnlockedDestination(vault.id, "upriv_plain");
           switch (destination.outcome) {
             case "unset":
-              setPlaceWarningClass(null);
               setPlaceVaultId(vault.id);
               return;
             case "unavailable":
@@ -1617,16 +1675,10 @@ export function useVaultLifecycleActions({
     ],
   );
 
-  const openPasswordAfterPlace = useCallback(
-    (vaultId: string) => {
-      setPlaceVaultId(null);
-      setPlaceWarningClass(null);
-      setLifecycleRequest({ vaultId });
-    },
-    [setLifecycleRequest],
-  );
-
-  /** Save "Where should the files go?" as a choice or a new row of one list, then go on. */
+  /**
+   * Save "Where should the files go?" as a choice or a new row of one list,
+   * then open the unlock window, which names that folder and its drive.
+   */
   const applyPlace = useCallback(
     async (choice: PlainPlaceChoice, path: string) => {
       if (!placeVaultId || !here) return;
@@ -1652,19 +1704,15 @@ export function useVaultLifecycleActions({
             unlockedFolder: place.changes,
           });
         }
-        const dest = await rpcVaultUnlockedDestination(vaultId, "upriv_plain");
-        if (dest.outcome === "folder" && dest.class && plainFolderClassI18nKey(dest.class)) {
-          setPlaceWarningClass(dest.class);
-          return;
-        }
-        openPasswordAfterPlace(vaultId);
+        setPlaceVaultId(null);
+        setLifecycleRequest({ vaultId });
       } catch (error) {
         showError(error, "error.unexpected");
       } finally {
         setPlaceSubmitting(false);
       }
     },
-    [getSettingsSnapshot, here, openPasswordAfterPlace, placeVaultId, replaceSettings, showError],
+    [getSettingsSnapshot, here, placeVaultId, replaceSettings, setLifecycleRequest, showError],
   );
 
   const handleVaultDelete = useCallback(
@@ -1733,6 +1781,9 @@ export function useVaultLifecycleActions({
           : undefined,
     handleLockVault,
     handleCloseNow,
+    /** Tell this vault's running or waiting close to finish the Close now way. */
+    hurryRunningClose,
+    closeNowAskedAt,
     closeNowVault,
     closeNowUnsaved: closeNowPrompt?.unsaved === true,
     closeNowAsks: settings.ui.lifecycle_confirm_close_now,
@@ -1770,17 +1821,11 @@ export function useVaultLifecycleActions({
     placeAppUnlocked: settings.unlocked_folders.devices,
     placeVaultUnlocked,
     placeSubmitting,
-    placeWarningClass,
     onPlaceClose: () => {
-      if (placeSubmitting) return;
-      setPlaceVaultId(null);
-      setPlaceWarningClass(null);
+      if (!placeSubmitting) setPlaceVaultId(null);
     },
     onPlaceContinue: (choice: PlainPlaceChoice, path: string) => {
       void applyPlace(choice, path);
-    },
-    onPlaceAcceptWarning: () => {
-      if (placeVaultId) openPasswordAfterPlace(placeVaultId);
     },
     heldOpen: heldPrompt !== null,
     heldCount: heldPrompt?.count ?? 0,

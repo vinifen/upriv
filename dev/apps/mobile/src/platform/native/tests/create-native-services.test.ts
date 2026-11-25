@@ -19,7 +19,7 @@ const state = {
   documentsGrant: DOCUMENTS as string | null,
   /** Trees that are away: mounting one at the root throws. */
   away: new Set<string>(),
-  list: { groups: {}, defaultFolder: null, explicit: null } as DataFolderListView,
+  list: { groups: {}, osNames: {}, defaultFolder: null, explicit: null } as DataFolderListView,
 };
 
 /** This phone's group selecting `selected`, with the one row `ROW`. */
@@ -99,8 +99,8 @@ beforeEach(() => {
   state.root = null;
   state.documentsGrant = DOCUMENTS;
   state.away = new Set();
-  state.list = { groups: phoneGroups(1), defaultFolder: null, explicit: null };
-  rpc.rpcDeviceInfo.mockResolvedValue({ id: HERE, system: "android" });
+  state.list = { groups: phoneGroups(1), osNames: {}, defaultFolder: null, explicit: null };
+  rpc.rpcDeviceInfo.mockResolvedValue({ id: HERE, system: "android", os: "Android 15" });
   rpc.rpcDeviceTrees.mockResolvedValue([ROW]);
   rpc.rpcDataFolderList.mockImplementation(async (newList: boolean) =>
     newList ? { ...state.list, groups: {} } : state.list,
@@ -120,6 +120,7 @@ beforeEach(() => {
     settings: createDefaultAppSettings(),
     rootPath: "/upriv-saf-root",
     onDisk: true,
+    osNames: {},
   });
   rpc.rpcAppSettingsSave.mockResolvedValue({ wrote: true, unchangedVaults: [], keptFolders: [] });
   rpc.rpcDataFolderStatus.mockResolvedValue({ state: "ok", content: "valid", details: null });
@@ -300,10 +301,10 @@ describe("the phone's exports", () => {
 
   it("reaches each folder a crash left an unfinished file in, for a second sweep", async () => {
     rpc.rpcVaultUnfinishedSweep
-      .mockResolvedValueOnce({ folders: [PICKED] })
-      .mockResolvedValueOnce({ folders: [] });
+      .mockResolvedValueOnce({ folders: [PICKED], removedVaults: ["notes"] })
+      .mockResolvedValueOnce({ folders: [], removedVaults: [] });
     const { vault } = await services();
-    await vault.sweepUnfinished();
+    await expect(vault.sweepUnfinished()).resolves.toEqual({ removedVaults: ["notes"] });
     expect(bridge.mountTree).toHaveBeenCalledWith(PICKED);
     expect(rpc.rpcVaultUnfinishedSweep).toHaveBeenCalledTimes(2);
   });

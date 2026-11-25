@@ -10,8 +10,6 @@ export {
   parsePlainLeftover,
   parsePlainRecords,
   parsePlainWipe,
-  plainFolderClassI18nKey,
-  plainRecoveryOffers,
   unreachablePlainRecord,
 } from "./parse";
 export type {

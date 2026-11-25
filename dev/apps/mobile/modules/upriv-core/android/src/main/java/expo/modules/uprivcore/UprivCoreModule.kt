@@ -352,7 +352,8 @@ private object CoreLanes {
     "data_folder_export" -> dataFolder
     "folder_status", "data_folder_search", "vault_unlocked_destination",
     "vault_unlocked_folder_attach", "backup_list",
-    "backup_delete", "backup_promote", "backup_rename", "backup_folder_forget" -> folder
+    "backup_delete", "backup_promote", "backup_rename", "backup_folder_forget",
+    "vault_disk_usage", "data_folder_size" -> folder
     else -> light
   }
 

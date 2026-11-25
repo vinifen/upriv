@@ -43,6 +43,7 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
       mode: "keep_last",
       keep_last: 1,
       skip_unchanged: true,
+      keep_current: true,
       devices: {},
     },
     kdf: { unlock_preset: DEFAULT_KDF_UNLOCK_PRESET },

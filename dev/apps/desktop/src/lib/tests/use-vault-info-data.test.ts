@@ -10,9 +10,11 @@ import {
   type VaultLifecycleService,
   type VaultKeyStatus,
   type VaultListItem,
+  type VaultRootResolveResult,
   type VaultRootService,
   type VaultSecurityService,
   type VaultService,
+  type VaultSettingsConfig,
 } from "@upriv/shared";
 import { useVaultInfoData } from "@upriv/shared/react";
 import { backupEntry, dataFolderListing } from "./backupStubs";
@@ -37,22 +39,24 @@ const vault: VaultListItem = {
 
 const backup = backupEntry("20260528120000", { sizeBytes: 10 });
 
+const FOUND: VaultRootResolveResult = { status: "found", rootPath: "/data", source: "default" };
+
 function renderInfo(shown: VaultListItem = vault) {
+  const settings = deferred<VaultSettingsConfig | null>();
+  const root = deferred<VaultRootResolveResult>();
   const backups = deferred<VaultBackupListing>();
   const diskUsage = deferred<VaultDiskUsage | null>();
   const unlocked = deferred<UnlockedFolderInfo>();
   const keys = deferred<VaultKeyStatus | null>();
   const vaultService = {
-    getSettings: async () => null,
+    getSettings: () => settings.promise,
     diskUsage: () => diskUsage.promise,
   } as unknown as VaultService;
   const backupService = { listBackups: () => backups.promise } as unknown as BackupService;
   const lifecycleService = {
     hasPasswordInSession: () => false,
   } as unknown as VaultLifecycleService;
-  const vaultRootService = {
-    resolve: async () => ({ status: "found", rootPath: "/data", source: "default" }),
-  } as unknown as VaultRootService;
+  const vaultRootService = { resolve: () => root.promise } as unknown as VaultRootService;
   const folderListService = {
     unlockedFolderInfo: () => unlocked.promise,
   } as unknown as FolderListService;
@@ -69,22 +73,49 @@ function renderInfo(shown: VaultListItem = vault) {
       vaultRootService,
       folderListService,
       securityService,
+      osNames: {},
       fallbackVaultRootBase: "/data",
     }),
   );
-  return { ...hook, backups, diskUsage, unlocked, keys };
+  return { ...hook, settings, root, backups, diskUsage, unlocked, keys };
 }
 
 describe("useVaultInfoData", () => {
-  it("shows Info before the backup list and store size are read", async () => {
+  it("shows the list row at once, before any read lands", () => {
     const { result } = renderInfo();
-    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+    expect(result.current.snapshot?.vault).toBe(vault);
+    expect(result.current.snapshot?.settings).toBe("reading");
+    expect(result.current.snapshot?.paths).toBeNull();
     expect(result.current.snapshot?.backupSections).toBeNull();
     expect(result.current.snapshot?.unlockedFolder).toBeNull();
     expect(result.current.snapshot?.runtime.storeBytes).toBe("measuring");
     expect(result.current.snapshot?.runtime.heldBytes).toBe("measuring");
     expect(result.current.snapshot?.runtime.filesBytes).toBe("measuring");
-    expect(result.current.snapshot?.storeOpenPath).toBe("/data/.upriv/vaults/notes/store");
+  });
+
+  it("fills the settings and the data folder's paths each as it lands", async () => {
+    const { result, settings, root } = renderInfo();
+    await act(async () => root.resolve(FOUND));
+    expect(result.current.snapshot?.paths?.storeOpenPath).toBe("/data/.upriv/vaults/notes/store");
+    expect(result.current.snapshot?.settings).toBe("reading");
+
+    const config = { vault: { display_name: "Notes" } } as unknown as VaultSettingsConfig;
+    await act(async () => settings.resolve(config));
+    expect(result.current.snapshot?.settings).toBe(config);
+  });
+
+  it("drops the snapshot when the data folder is gone", async () => {
+    const { result, root } = renderInfo();
+    await act(async () =>
+      root.resolve({
+        status: "selected_failed",
+        choice: { kind: "row", number: 1, name: "USB" },
+        reason: "missing",
+        ended: [],
+      }),
+    );
+    expect(result.current.snapshot).toBeNull();
+    expect(result.current.loadFailure).toMatchObject({ code: "vault_root_not_found" });
   });
 
   it("fills in each slow value as it lands", async () => {

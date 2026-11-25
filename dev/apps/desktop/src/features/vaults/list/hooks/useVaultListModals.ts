@@ -18,6 +18,7 @@ export function useVaultListModals(
   const [settingsVaultId, setSettingsVaultId] = useState<string | null>(null);
   const [settingsArea, setSettingsArea] = useState<VaultSettingsAreaId | null>(null);
   const [settingsGroupId, setSettingsGroupId] = useState<string | null>(null);
+  const [deleteGroupId, setDeleteGroupId] = useState<string | null>(null);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [dataFolderOpen, setDataFolderOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -57,6 +58,11 @@ export function useVaultListModals(
   const settingsGroup = useMemo(
     () => groups.find((group) => group.id === settingsGroupId) ?? null,
     [groups, settingsGroupId],
+  );
+
+  const deleteGroup = useMemo(
+    () => groups.find((group) => group.id === deleteGroupId) ?? null,
+    [groups, deleteGroupId],
   );
 
   const lifecycleVault = useMemo(
@@ -141,6 +147,9 @@ export function useVaultListModals(
     settingsGroupId,
     setSettingsGroupId,
     settingsGroup,
+    deleteGroupId,
+    setDeleteGroupId,
+    deleteGroup,
     appSettingsOpen,
     appSettingsDirty,
     setAppSettingsOpen: setAppSettingsOpenExclusive,

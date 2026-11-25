@@ -18,6 +18,7 @@ import {
   type RowProblem,
   type Selection,
 } from "@upriv/shared";
+import { useOsNames } from "@upriv/shared/react";
 import { useRevealFolder } from "@/components/RevealPathButton";
 import { Button, Collapse, MenuActionItem } from "@/components/ui";
 import { useTranslation } from "@/i18n";
@@ -44,6 +45,8 @@ export interface FixedChoiceOption<F extends string> {
   choice: F;
   title: string;
   description?: string;
+  /** The folder it names, shown read-only as the Files app names it (desktop parity). */
+  folder?: string | null;
   /** Its own status line. */
   status?: ReactNode;
 }
@@ -67,6 +70,12 @@ export interface FolderListProps<F extends string> {
   renderStatus?: (path: string) => ReactNode;
   /** The selected choice misses a step the caller checks. */
   selectionAttention?: boolean;
+  /**
+   * The step the selected choice still needs, inside its card under its
+   * status (a Retry, a data folder's replace choice), so the card that wears
+   * attention holds what clears it.
+   */
+  selectedFooter?: ReactNode;
   /** The choice in use now: it wears a badge. */
   inUse?: Selection<F> | null;
   /** A row whose delete asks first, and the question. */
@@ -111,6 +120,7 @@ export function FolderList<F extends string>({
   noneChecked = false,
   renderStatus,
   selectionAttention = false,
+  selectedFooter = null,
   inUse = null,
   confirmDelete,
   rowInUse,
@@ -120,6 +130,7 @@ export function FolderList<F extends string>({
   onChange,
 }: FolderListProps<F>) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const { colors, typography } = useTheme();
   const reveal = useRevealFolder();
   const [pickError, setPickError] = useState<unknown>(null);
@@ -185,33 +196,44 @@ export function FolderList<F extends string>({
       {showDevices && here ? (
         <DeviceHeading
           heading={t("folder_list.this_device")}
-          name={deviceName(here.id, here.system, t)}
+          name={deviceName(here.id, here.system, osNames, t)}
         />
       ) : null}
       <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.choices}>
         {fixed.map((option) => {
           const checked = selected === option.choice;
           return (
-            <Pressable
+            <View
               key={option.choice}
-              accessibilityRole="radio"
-              accessibilityState={{ checked, disabled: locked }}
-              accessibilityLabel={option.title}
-              disabled={locked}
-              onPress={() => select(option.choice)}
               style={rowCardStyle(colors, checked, checked && selectionAttention, locked)}
             >
-              <View style={styles.choice}>
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityState={{ checked, disabled: locked }}
+                accessibilityLabel={option.title}
+                disabled={locked}
+                onPress={() => select(option.choice)}
+                style={styles.fixedChoice}
+              >
                 <RadioMark checked={checked} />
                 <RowText
                   title={option.title}
-                  badges={inUse === option.choice ? <ListBadge kind="in_use" /> : null}
+                  badges={
+                    <>
+                      {inUse === option.choice ? <ListBadge kind="in_use" /> : null}
+                      {policy.fallback === option.choice ? <ListBadge kind="default" /> : null}
+                    </>
+                  }
                   description={option.description}
+                  folder={option.folder}
                 >
                   {option.status}
                 </RowText>
-              </View>
-            </Pressable>
+              </Pressable>
+              {checked && selectedFooter ? (
+                <View style={[styles.inset, styles.selectedFooter]}>{selectedFooter}</View>
+              ) : null}
+            </View>
           );
         })}
         {rows.map((row, index) => {
@@ -303,6 +325,9 @@ export function FolderList<F extends string>({
                   />
                 </RowMenu>
               </View>
+              {checked && selectedFooter && !problem ? (
+                <View style={[styles.inset, styles.selectedFooter]}>{selectedFooter}</View>
+              ) : null}
               <Collapse open={asking === row.number}>
                 <View style={styles.inset}>
                   <RowConfirm
@@ -323,6 +348,7 @@ export function FolderList<F extends string>({
                       }
                       folder={{
                         kind: "picked",
+                        path: row.path,
                         held: held ? t("folder_list.row.in_use") : null,
                         onPick: () =>
                           pick((picked) =>
@@ -376,6 +402,9 @@ const styles = StyleSheet.create({
   choices: { gap: spacing.sm },
   top: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   choice: { flex: 1, flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
+  // In the card's column: as tall as its text, the footer under it.
+  fixedChoice: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
   inset: { paddingLeft: ROW_INSET },
+  selectedFooter: { paddingTop: spacing.md, gap: spacing.sm },
   add: { alignSelf: "flex-end" },
 });

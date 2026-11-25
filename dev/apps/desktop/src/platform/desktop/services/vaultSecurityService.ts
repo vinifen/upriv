@@ -16,13 +16,7 @@ import {
  */
 export const desktopVaultSecurityService: VaultSecurityService = {
   changePassword(vaultId, input) {
-    return rpcVaultChangePassword(
-      vaultId,
-      input.currentPassword,
-      input.newPassword,
-      input.backUpFirst,
-      input.job,
-    );
+    return rpcVaultChangePassword(vaultId, input);
   },
 
   finishPasswordChange(vaultId, input) {

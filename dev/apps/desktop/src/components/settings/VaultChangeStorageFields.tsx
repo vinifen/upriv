@@ -28,13 +28,12 @@ interface VaultChangeStorageFieldsProps {
   /** Wrong password — ring and message on that field. */
   passwordFieldError?: string | null;
   error?: string | null;
-  /** This change is already running. */
-  busy?: boolean;
 }
 
 /**
- * The Storage screen: the two options, the folder plain text would fill on
- * this device, and the vault's password, which seals the choice.
+ * The Storage screen, as every change screen lays out: what the change does,
+ * the vault's password, which seals the choice, then the two options with
+ * the folder plain text would fill on this device.
  */
 export function VaultChangeStorageFields({
   vaultId,
@@ -44,11 +43,9 @@ export function VaultChangeStorageFields({
   onChange,
   passwordFieldError,
   error,
-  busy = false,
 }: VaultChangeStorageFieldsProps) {
   const { t } = useTranslation();
   const passwordId = useId();
-  const locked = blocked || busy;
   const destination = useUnlockedDestination(
     rpcVaultUnlockedDestination,
     vaultId,
@@ -68,8 +65,35 @@ export function VaultChangeStorageFields({
 
       <VaultSettingsStorageSection
         config={fields.storage}
-        disabled={locked}
+        disabled={blocked}
         onChange={(patch) => onChange({ storage: { ...fields.storage, ...patch } })}
+        aboveChoice={
+          <SettingsField
+            label={t("vault.change_storage.password")}
+            htmlFor={passwordId}
+            disabled={blocked}
+          >
+            <PasswordInput
+              id={passwordId}
+              value={fields.password}
+              disabled={blocked}
+              aria-invalid={passwordFieldError ? true : undefined}
+              aria-errormessage={passwordFieldError ? `${passwordId}-error` : undefined}
+              onChange={(e) => onChange({ password: e.target.value })}
+              autoComplete="current-password"
+              inputClassName={[settingsControlClass, settingsInvalidControlClass].join(" ")}
+            />
+            {passwordFieldError ? (
+              <p
+                id={`${passwordId}-error`}
+                role="alert"
+                className="text-xs text-on-error-container"
+              >
+                {passwordFieldError}
+              </p>
+            ) : null}
+          </SettingsField>
+        }
         plainNote={
           <UnlockedFolderLineView
             checking={destination.checking}
@@ -81,29 +105,6 @@ export function VaultChangeStorageFields({
       <p className="text-xs leading-relaxed text-on-surface-variant">
         {t("vault.change_storage.no_conversion")}
       </p>
-
-      <SettingsField
-        label={t("vault.change_storage.password")}
-        htmlFor={passwordId}
-        disabled={locked}
-      >
-        <PasswordInput
-          id={passwordId}
-          value={fields.password}
-          disabled={locked}
-          aria-invalid={passwordFieldError ? true : undefined}
-          aria-errormessage={passwordFieldError ? `${passwordId}-error` : undefined}
-          onChange={(e) => onChange({ password: e.target.value })}
-          autoComplete="current-password"
-          inputClassName={[settingsControlClass, settingsInvalidControlClass].join(" ")}
-        />
-        {passwordFieldError ? (
-          <p id={`${passwordId}-error`} role="alert" className="text-xs text-on-error-container">
-            {passwordFieldError}
-          </p>
-        ) : null}
-      </SettingsField>
-
       {unchanged && fields.password.length > 0 ? (
         <p className="text-xs text-on-error-container">
           {t("vault.change_storage.same_as_current")}

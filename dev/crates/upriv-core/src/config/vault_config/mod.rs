@@ -11,7 +11,8 @@ use crate::error::{Result, UprivError};
 pub use types::{
     AutoCloseWhenBusy, VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode,
     VaultBackupSection, VaultConfig, VaultDeletingSection, VaultFileManagerSection,
-    VaultIdentitySection, VaultSecuritySection, VaultSevenZipSection, VaultWipePattern,
+    VaultIdentitySection, VaultImportingSection, VaultSecuritySection, VaultSevenZipSection,
+    VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -445,6 +446,7 @@ display_name = "X"
         assert!(cfg.backup.enabled);
         assert_eq!(cfg.backup.keep_last, 1);
         assert!(cfg.backup.skip_unchanged);
+        assert!(cfg.backup.keep_current);
         assert!(!cfg.auto_close.enabled);
         assert_eq!(cfg.auto_close.idle_minutes, 15);
         assert_eq!(cfg.auto_close.when_busy, AutoCloseWhenBusy::Wait);
@@ -536,6 +538,7 @@ path = "relative/backups"
                 mode: VaultBackupMode::KeepAll,
                 keep_last: 5,
                 skip_unchanged: false,
+                keep_current: false,
                 ..VaultBackupSection::default()
             },
             security: VaultSecuritySection {
@@ -560,6 +563,9 @@ path = "relative/backups"
             deleting: Some(VaultDeletingSection {
                 outside_backups: true,
             }),
+            importing: Some(VaultImportingSection {
+                started_at: "2026-11-24T00:20:46.000Z".into(),
+            }),
         };
         let tmp = tempfile::tempdir().unwrap();
         let vaults = tmp.path().join(".upriv").join("vaults");
@@ -573,11 +579,15 @@ path = "relative/backups"
             "[file_manager]",
             "[seven_zip]",
             "[unlocked_folder]",
+            "[deleting]",
+            "[importing]",
         ] {
             assert!(raw.contains(section), "missing {section} in:\n{raw}");
         }
         crate::host_fs::write(vault_dir.join("config.toml"), &raw).unwrap();
         let loaded = load_vault_config(&vault_dir).expect("reload");
+        assert_eq!(loaded.deleting, cfg.deleting);
+        assert_eq!(loaded.importing, cfg.importing);
         assert_eq!(loaded.backup, cfg.backup);
         assert_eq!(loaded.unlocked_folder, cfg.unlocked_folder);
         assert_eq!(loaded.security, cfg.security);
@@ -589,10 +599,12 @@ path = "relative/backups"
             raw.contains("hidden = true"),
             "hidden must be serialized, got:\n{raw}"
         );
-        assert!(
-            raw.contains("skip_unchanged = false"),
-            "skip_unchanged must be serialized, got:\n{raw}"
-        );
+        for field in ["skip_unchanged = false", "keep_current = false"] {
+            assert!(
+                raw.contains(field),
+                "{field} must be serialized, got:\n{raw}"
+            );
+        }
     }
 
     #[test]

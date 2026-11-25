@@ -7,17 +7,51 @@
 import type { I18nKey } from "../../i18n/catalog";
 import type { PolicyRadioBadge } from "./policyRadioBadge";
 
-export type KdfUnlockPreset = "32mib" | "64mib" | "128mib" | "256mib" | "1gib" | "2gib";
+export type KdfUnlockPreset =
+  | "32mib"
+  | "64mib"
+  | "128mib"
+  | "256mib"
+  | "512mib"
+  | "1gib"
+  | "1536mib"
+  | "2gib"
+  | "3gib"
+  | "4gib";
 
-/** UI order: recommended → stronger → then weaker (less-secure last). */
+/** Every preset, from the least RAM to the most (core `KdfUnlockPreset::ALL`). */
 export const KDF_UNLOCK_PRESETS = [
+  "32mib",
+  "64mib",
+  "128mib",
+  "256mib",
+  "512mib",
+  "1gib",
+  "1536mib",
+  "2gib",
+  "3gib",
+  "4gib",
+] as const satisfies readonly KdfUnlockPreset[];
+
+/** The presets the RAM choice shows as radios; the rest sit in its Other list. */
+export const KDF_UNLOCK_MAIN_PRESETS = [
+  "128mib",
   "256mib",
   "1gib",
-  "2gib",
-  "128mib",
-  "64mib",
-  "32mib",
 ] as const satisfies readonly KdfUnlockPreset[];
+
+/** The Other list of the RAM choice, from the least RAM to the most. */
+export const KDF_UNLOCK_OTHER_PRESETS: readonly KdfUnlockPreset[] = KDF_UNLOCK_PRESETS.filter(
+  (preset) => !(KDF_UNLOCK_MAIN_PRESETS as readonly KdfUnlockPreset[]).includes(preset),
+);
+
+/** True when `preset` sits in the Other list, not among the radios. */
+export function kdfPresetIsOther(preset: KdfUnlockPreset): boolean {
+  return KDF_UNLOCK_OTHER_PRESETS.includes(preset);
+}
+
+/** The Other list's pick when nothing there was chosen yet: the step above the default. */
+export const DEFAULT_KDF_OTHER_PRESET: KdfUnlockPreset = "512mib";
 
 /** Create-vault default (256 MiB / 3 passes). */
 export const DEFAULT_KDF_UNLOCK_PRESET: KdfUnlockPreset = "256mib";
@@ -29,21 +63,30 @@ export interface KdfParams {
   parallelism: 1;
 }
 
+/** MiB of RAM each preset takes to unlock. */
+const KDF_PRESET_MIB: Record<KdfUnlockPreset, number> = {
+  "32mib": 32,
+  "64mib": 64,
+  "128mib": 128,
+  "256mib": 256,
+  "512mib": 512,
+  "1gib": 1024,
+  "1536mib": 1536,
+  "2gib": 2048,
+  "3gib": 3072,
+  "4gib": 4096,
+};
+
+/** Passes over the memory: 3 up to 256 MiB, 2 at 512 MiB, 1 from 1 GiB (core `time_cost`). */
+function kdfTimeCost(mib: number): number {
+  if (mib <= 256) return 3;
+  if (mib <= 512) return 2;
+  return 1;
+}
+
 export function kdfParamsFromPreset(preset: KdfUnlockPreset): KdfParams {
-  switch (preset) {
-    case "32mib":
-      return { memoryKib: 32 * 1024, timeCost: 3, parallelism: 1 };
-    case "64mib":
-      return { memoryKib: 64 * 1024, timeCost: 3, parallelism: 1 };
-    case "128mib":
-      return { memoryKib: 128 * 1024, timeCost: 3, parallelism: 1 };
-    case "256mib":
-      return { memoryKib: 256 * 1024, timeCost: 3, parallelism: 1 };
-    case "1gib":
-      return { memoryKib: 1024 * 1024, timeCost: 1, parallelism: 1 };
-    case "2gib":
-      return { memoryKib: 2048 * 1024, timeCost: 1, parallelism: 1 };
-  }
+  const mib = KDF_PRESET_MIB[preset];
+  return { memoryKib: mib * 1024, timeCost: kdfTimeCost(mib), parallelism: 1 };
 }
 
 /**
@@ -59,17 +102,9 @@ export const CONFIG_TOML_GROUPS_ANNOTATION =
 
 /** Known shipping slug, or `null` — never coerce a typo to 256 MiB. */
 export function parseKdfUnlockPreset(preset: string): KdfUnlockPreset | null {
-  if (
-    preset === "32mib" ||
-    preset === "64mib" ||
-    preset === "128mib" ||
-    preset === "256mib" ||
-    preset === "1gib" ||
-    preset === "2gib"
-  ) {
-    return preset;
-  }
-  return null;
+  return (KDF_UNLOCK_PRESETS as readonly string[]).includes(preset)
+    ? (preset as KdfUnlockPreset)
+    : null;
 }
 
 /** UI form default when the field is empty. Wire parse must use `parseKdfUnlockPreset`. */
@@ -111,18 +146,9 @@ export function createVaultChoosesStoreSettings(draft: {
   return true;
 }
 
-const KDF_PRESET_STRENGTH: Record<KdfUnlockPreset, number> = {
-  "32mib": 0,
-  "64mib": 1,
-  "128mib": 2,
-  "256mib": 3,
-  "1gib": 4,
-  "2gib": 5,
-};
-
 /** True when `next` is weaker offline guessing than `current` (an unlock-RAM change still allows it). */
 export function kdfPresetIsDowngrade(current: KdfUnlockPreset, next: KdfUnlockPreset): boolean {
-  return KDF_PRESET_STRENGTH[next] < KDF_PRESET_STRENGTH[current];
+  return KDF_PRESET_MIB[next] < KDF_PRESET_MIB[current];
 }
 
 export interface KdfUnlockOptionMeta {
@@ -158,14 +184,33 @@ export const KDF_UNLOCK_OPTION_META: Record<KdfUnlockPreset, KdfUnlockOptionMeta
     descKey: "modal.settings.option.kdf.256mib_desc",
     badge: "recommended",
   },
+  "512mib": {
+    titleKey: "modal.settings.option.kdf.512mib",
+    descKey: "modal.settings.option.kdf.512mib_desc",
+  },
   "1gib": {
     titleKey: "modal.settings.option.kdf.1gib",
     descKey: "modal.settings.option.kdf.1gib_desc",
     badge: "more-secure",
   },
+  "1536mib": {
+    titleKey: "modal.settings.option.kdf.1536mib",
+    descKey: "modal.settings.option.kdf.1536mib_desc",
+    badge: "more-secure",
+  },
   "2gib": {
     titleKey: "modal.settings.option.kdf.2gib",
     descKey: "modal.settings.option.kdf.2gib_desc",
+    badge: "more-secure",
+  },
+  "3gib": {
+    titleKey: "modal.settings.option.kdf.3gib",
+    descKey: "modal.settings.option.kdf.3gib_desc",
+    badge: "more-secure",
+  },
+  "4gib": {
+    titleKey: "modal.settings.option.kdf.4gib",
+    descKey: "modal.settings.option.kdf.4gib_desc",
     badge: "more-secure",
   },
 };

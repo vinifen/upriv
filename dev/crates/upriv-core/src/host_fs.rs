@@ -1407,6 +1407,17 @@ impl DirEntry {
         }
     }
 
+    /// When the entry last changed: from the disk, or from the listing.
+    /// `None` when neither says.
+    pub fn modified(&self) -> Option<std::time::SystemTime> {
+        match &self.kind {
+            DirEntryKind::Disk(entry) => entry.metadata().and_then(|meta| meta.modified()).ok(),
+            DirEntryKind::Named { modified_ms, .. } => u64::try_from((*modified_ms)?)
+                .ok()
+                .map(|ms| std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms)),
+        }
+    }
+
     pub fn file_type(&self) -> io::Result<EntryFileType> {
         match &self.kind {
             DirEntryKind::Disk(entry) => Ok(EntryFileType::from_disk(entry.file_type()?)),

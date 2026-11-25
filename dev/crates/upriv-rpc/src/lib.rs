@@ -22,13 +22,13 @@ use upriv_core::logging::{
 use upriv_core::{
     change_vault_kdf, change_vault_password, change_vault_storage, close_state, close_vault,
     close_vault_auto, close_vault_now, create_vault_as_job, create_vault_group_with_sort,
-    data_folder_lost, delete_vault_group, discover_bootstrap_root, finish_import_session,
-    finish_password_change, hurry_close, known_vault_ids, list_vaults, load_app_settings,
-    load_vault_config, load_vault_groups, open_import_session, rebuild_vault, rename_vault,
-    reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
+    data_folder_lost, data_folder_size, delete_vault_group, discover_bootstrap_root,
+    finish_import_session, finish_password_change, hurry_close, known_vault_ids, list_vaults,
+    load_app_settings, load_vault_config, load_vault_groups, open_import_session, rebuild_vault,
+    rename_vault, reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session, suggested_vault_root, update_key_copies,
     update_vault_group, vault_disk_usage, vault_key_status, vault_list_item, AppSettings,
-    CloseState, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
+    CloseState, ImportEnd, IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot,
     ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup, VaultListItem,
     VaultPlainFiles, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultStorage, VaultStorageMode,
     VaultWelcome,
@@ -149,6 +149,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
         "vault_disk_usage" => vault_disk_usage_rpc(req.params),
+        "data_folder_size" => data_folder_size_rpc(),
         "vault_key_status" => vault_key_status_rpc(req.params),
         "vault_config_save" => vault_config_save(req.params),
         "vault_rename" => vault_rename(req.params),
@@ -193,6 +194,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "data_folder_export" => data_folder_ops::export(req.params),
         "job_status" => job_ops::status(req.params),
         "job_cancel" => job_ops::cancel(req.params),
+        "job_skip_backup" => job_ops::skip_backup(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -273,6 +275,7 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
             };
             let source = source.as_str();
             upriv_core::data_folder_entered(root.root());
+            upriv_core::note_os_name(root.root());
             log_app_start("vault_root_resolve");
             log_vault_root_ready(source, &root_path);
             // Probe can run more than once on Gate launch — keep at DEBUG.
@@ -435,6 +438,7 @@ fn app_settings_get() -> RpcResponse {
                 "settings": loaded.settings,
                 "rootPath": root_path,
                 "onDisk": loaded.on_disk,
+                "osNames": loaded.settings.os_names,
             }))
         }
         Err(error) => map_core_err(error),
@@ -948,6 +952,7 @@ fn vault_list_item_json(item: &VaultListItem) -> Value {
         "keyCount": item.key_count,
         "passwordChange": item.password_change,
         "deleteUnfinished": item.delete_unfinished,
+        "importUnfinished": item.import_unfinished,
         "plainLeftover": item.plain_leftover,
         "plainRecords": item.plain_records,
         "outsideBackups": item.outside_backups,
@@ -978,8 +983,9 @@ struct VaultCreateParams {
     #[serde(default)]
     welcome: Option<VaultWelcomeParams>,
     job: String,
-    /// A phone import fills this vault next (`vault_ingest_*`); it stays
-    /// recorded as unfinished until `vault_close` with `reason: "import"`.
+    /// A phone import fills this vault next (`vault_ingest_*`); it keeps its
+    /// `[importing]` mark until `vault_close` with `reason: "import"` (every
+    /// file in) or `"import_stopped"` (the person stopped it with files in).
     #[serde(default)]
     for_import: bool,
 }
@@ -1071,6 +1077,8 @@ struct VaultChangePasswordParams {
     new_password: SecretString,
     /// The **Back up first** switch.
     back_up_first: bool,
+    /// The vault's hint once the change is made; empty for none.
+    password_hint: String,
     job: String,
 }
 
@@ -1090,6 +1098,7 @@ fn vault_change_password(params: Value) -> RpcResponse {
         parsed.current_password.as_bytes(),
         parsed.new_password.as_bytes(),
         parsed.back_up_first,
+        &parsed.password_hint,
         &parsed.job,
     ) {
         Ok(changed) => ok(json!(changed)),
@@ -1263,12 +1272,16 @@ fn vault_close(params: Value) -> RpcResponse {
         "user" => close_vault(&root, id),
         "auto" => close_vault_auto(&root, id),
         "now" => close_vault_now(&root, id),
-        // A phone import whose files are all in.
-        "import" => finish_import_session(&root, id),
+        // A phone import whose files are all in, or that the person stopped:
+        // the files that got in stay.
+        "import" => finish_import_session(&root, id, ImportEnd::Whole),
+        "import_stopped" => finish_import_session(&root, id, ImportEnd::Stopped),
         other => {
             return err(
                 "invalid_request",
-                format!("vault_close reason must be user, auto, now, or import, got {other}"),
+                format!(
+                    "vault_close reason must be user, auto, now, import, or import_stopped, got {other}"
+                ),
             );
         }
     };
@@ -1277,6 +1290,8 @@ fn vault_close(params: Value) -> RpcResponse {
             "backupFailed": outcome.backup_failed,
             "backupFailure": outcome.backup_failure,
             "backupSwitches": outcome.backup_switches,
+            "backupReason": outcome.backup_reason,
+            "backupFolder": outcome.backup_folder,
             "plain": outcome.plain,
         })),
         Err(error) => map_core_err(error),
@@ -1299,7 +1314,9 @@ struct VaultIdParams {
 
 /// Where a vault's close stands: `state` is `open`, `closing`, or `closed`,
 /// and `phase` (`flush` or `backup`) is the step of a running close, `null`
-/// otherwise. Light: it answers while the close, or the quit, holds its lane.
+/// otherwise. In `backup`, `progress` is how far its zip got, as `job_status`
+/// answers it; `null` otherwise. Light: it answers while the close, or the
+/// quit, holds its lane.
 fn vault_close_phase(params: Value) -> RpcResponse {
     let parsed: VaultIdParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1311,11 +1328,14 @@ fn vault_close_phase(params: Value) -> RpcResponse {
     };
     match close_state(&root, parsed.id.trim()) {
         Ok(state) => {
-            let phase = match state {
-                CloseState::Closing(phase) => Some(phase.as_str()),
-                CloseState::Open | CloseState::Closed => None,
+            let (phase, progress) = match state {
+                CloseState::Closing(step) => (
+                    Some(step.phase.as_str()),
+                    step.backup.map(job_ops::running_status),
+                ),
+                CloseState::Open | CloseState::Closed => (None, None),
             };
-            ok(json!({ "state": state.as_str(), "phase": phase }))
+            ok(json!({ "state": state.as_str(), "phase": phase, "progress": progress }))
         }
         Err(error) => map_core_err(error),
     }
@@ -1334,6 +1354,19 @@ fn vault_close_hurry(params: Value) -> RpcResponse {
     };
     match hurry_close(&root, parsed.id.trim()) {
         Ok(running) => ok(json!({ "running": running })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// The bytes of every file in the data folder's `.upriv`, for System Info:
+/// `{ bytes }`. A walk of every file, so it runs on the folder lane.
+fn data_folder_size_rpc() -> RpcResponse {
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match data_folder_size(&root) {
+        Ok(bytes) => ok(json!({ "bytes": bytes })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1690,14 +1723,16 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             ("password_change_space_short", None)
         }
         upriv_core::UprivError::VaultDeleting => ("vault_deleting", None),
+        upriv_core::UprivError::VaultImportUnfinished => ("vault_import_unfinished", None),
         upriv_core::UprivError::VaultLocked(p) => ("vault_locked", Some(p.as_path())),
         upriv_core::UprivError::VaultMountFailed(_) => ("vault_mount_failed", None),
         upriv_core::UprivError::ImportArchiveNotFound(p) => {
             ("import_archive_not_found", Some(p.as_path()))
         }
-        upriv_core::UprivError::ImportSourceUnreadable(p) => {
-            ("import_source_unreadable", Some(p.as_path()))
+        upriv_core::UprivError::ImportSourceUnreadable { path, .. } => {
+            ("import_source_unreadable", Some(path.as_path()))
         }
+        upriv_core::UprivError::ImportBlocked { .. } => ("import_blocked", None),
         upriv_core::UprivError::VaultMustBeClosed => ("vault_must_be_closed", None),
         upriv_core::UprivError::VaultBusy => ("vault_busy", None),
         upriv_core::UprivError::PasswordUnchanged => ("password_unchanged", None),
@@ -1741,7 +1776,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             | "unlock_ram_unchanged"
             | "storage_unchanged"
             | "job_cancelled"
-            | "job_not_stoppable" => LogLevel::Warn,
+            | "job_not_stoppable"
+            | "import_blocked" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         // `message` stays on the RPC response for the person at the screen.
@@ -1768,6 +1804,22 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::PlainNamesUnsupported { count, examples } => {
             Some(json!({ "count": count, "examples": examples }))
         }
+        // The paths go to the screen only; `rpc_error` above logs the code.
+        upriv_core::UprivError::ImportBlocked {
+            count,
+            items,
+            whole,
+        } => {
+            let items: Vec<Value> = items
+                .iter()
+                .map(|item| json!({ "path": item.path, "reason": item.reason.as_str() }))
+                .collect();
+            Some(json!({ "count": count, "items": items, "whole": whole }))
+        }
+        upriv_core::UprivError::ImportSourceUnreadable { path, reason } => Some(json!({
+            "path": path.to_string_lossy(),
+            "reason": reason.as_str(),
+        })),
         upriv_core::UprivError::PlainSpaceShort { needed, available }
         | upriv_core::UprivError::DataFolderExportSpaceShort { needed, available }
         | upriv_core::UprivError::PasswordChangeSpaceShort { needed, available } => {
@@ -1877,6 +1929,57 @@ mod error_mapping_tests {
     }
 
     #[test]
+    fn a_blocked_import_names_its_items_in_details_and_logs_only_its_code() {
+        let response = super::map_core_err_response(
+            upriv_core::UprivError::ImportBlocked {
+                count: 700,
+                items: vec![upriv_core::ImportBlockedItem {
+                    path: "Work/db".into(),
+                    reason: upriv_core::ImportBlockReason::Permission,
+                }],
+                whole: false,
+            },
+            false,
+        );
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "import_blocked");
+        assert_eq!(
+            error.details,
+            Some(json!({
+                "count": 700,
+                "items": [{ "path": "Work/db", "reason": "permission" }],
+                "whole": false,
+            }))
+        );
+        assert!(!error.message.contains("Work/db"));
+        assert_eq!(
+            super::rpc_error_log_fields("import_blocked"),
+            [("code", "import_blocked")]
+        );
+    }
+
+    #[test]
+    fn an_unreadable_import_source_says_why_in_details() {
+        let response = super::map_core_err_response(
+            upriv_core::UprivError::ImportSourceUnreadable {
+                path: "/home/a/db".into(),
+                reason: upriv_core::ImportBlockReason::Permission,
+            },
+            false,
+        );
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "import_source_unreadable");
+        assert_eq!(
+            error.details,
+            Some(json!({ "path": "/home/a/db", "reason": "permission" }))
+        );
+        assert_eq!(
+            super::rpc_error_log_fields("import_source_unreadable"),
+            [("code", "import_source_unreadable")]
+        );
+    }
+
+    #[test]
     fn a_held_file_that_cannot_be_put_back_has_its_own_code() {
         let response = super::map_core_err_response(
             upriv_core::UprivError::VaultHeldNotFound("x.blob".into()),
@@ -1973,6 +2076,7 @@ mod contract_tests {
         "vault_export_capabilities",
         "vault_config_get",
         "vault_disk_usage",
+        "data_folder_size",
         "vault_key_status",
         "vault_config_save",
         "vault_rename",
@@ -2017,6 +2121,7 @@ mod contract_tests {
         "data_folder_export",
         "job_status",
         "job_cancel",
+        "job_skip_backup",
     ];
 
     #[test]
@@ -2081,7 +2186,12 @@ mod contract_tests {
         assert_eq!(error_code(&unnamed), Some("invalid_request"));
         let unknown = call("job_cancel", json!({ "job": "x", "by": "admin" }));
         assert_eq!(error_code(&unknown), Some("invalid_request"));
-        for method in ["job_status", "job_cancel"] {
+        // No backup runs for a job that never started: nothing to stop.
+        let skip = call("job_skip_backup", json!({ "job": "rpc-never-started" }));
+        assert_eq!(skip.result, Some(json!({ "stopping": false })));
+        let malformed = call("job_skip_backup", json!({ "job": "a/b" }));
+        assert_eq!(error_code(&malformed), Some("invalid_request"));
+        for method in ["job_status", "job_cancel", "job_skip_backup"] {
             assert_eq!(
                 error_code(&call(method, json!({}))),
                 Some("invalid_request")
@@ -2366,6 +2476,7 @@ mod contract_tests {
             file_manager: Default::default(),
             seven_zip: Default::default(),
             deleting: None,
+            importing: None,
         };
         upriv_core::create_vault(
             &root,

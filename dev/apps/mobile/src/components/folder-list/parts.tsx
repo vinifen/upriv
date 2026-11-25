@@ -43,10 +43,11 @@ export function RadioMark({ checked }: { checked: boolean }) {
   );
 }
 
-type BadgeKind = "in_use" | "unsaved" | "selected_there";
+type BadgeKind = "in_use" | "default" | "unsaved" | "selected_there";
 
 const BADGE_KEYS: Record<BadgeKind, I18nKey> = {
   in_use: "folder_list.badge.in_use",
+  default: "modal.settings.badge.default",
   unsaved: "folder_list.badge.unsaved",
   selected_there: "folder_list.badge.selected_there",
 };
@@ -58,6 +59,8 @@ function badgeColors(kind: BadgeKind, colors: ThemeColors) {
         backgroundColor: colorAlpha(colors.vaultStatusOpen, 0.2),
         color: colors.vaultStatusOpen,
       };
+    case "default":
+      return { backgroundColor: colorAlpha(colors.accent, 0.15), color: colors.accent };
     case "unsaved":
       return { backgroundColor: colorAlpha(colors.accent, 0.18), color: colors.accent };
     case "selected_there":
@@ -66,8 +69,8 @@ function badgeColors(kind: BadgeKind, colors: ThemeColors) {
 }
 
 /**
- * A word beside a choice's name (desktop `ListBadge` parity): In use, Not
- * saved, or Chosen there.
+ * A word beside a choice's name (desktop `ListBadge` parity): In use,
+ * Default, Not saved, or Chosen there.
  */
 export function ListBadge({ kind }: { kind: BadgeKind }) {
   const { t } = useTranslation();

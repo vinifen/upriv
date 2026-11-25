@@ -70,6 +70,8 @@ export const VAULT_ERROR_CODES = {
   PASSWORD_CHANGE_SPACE_SHORT: "password_change_space_short",
   /** The vault is being deleted, or a delete of it did not finish. */
   VAULT_DELETING: "vault_deleting",
+  /** An import has not finished the vault: still filling it, or the launch sweep removes it. */
+  VAULT_IMPORT_UNFINISHED: "vault_import_unfinished",
   VAULT_LOCKED: "vault_locked",
   MOUNT_FAILED: "vault_mount_failed",
   /** Windows directory mount needs NTFS or ReFS. exFAT and FAT cannot hold it. */
@@ -78,6 +80,11 @@ export const VAULT_ERROR_CODES = {
   IMPORT_ARCHIVE_NOT_FOUND: "import_archive_not_found",
   /** File-manager OS path is relative, missing, a symlink, or inside `store/`. */
   IMPORT_SOURCE_UNREADABLE: "import_source_unreadable",
+  /**
+   * Items of the file or folder chosen for a new vault cannot be imported, so
+   * nothing was (`details.count`, `details.items`): `parseImportBlocked`.
+   */
+  IMPORT_BLOCKED: "import_blocked",
   /** Export, a password or unlock-RAM change, or Finish refused while the vault is open or closing. */
   VAULT_MUST_BE_CLOSED: "vault_must_be_closed",
   /** Open refused while export, a password change, or an unlock-RAM change holds the vault. */

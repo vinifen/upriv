@@ -53,7 +53,7 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     const outcome = await waitForClose(
       rpcVaultClose(vaultId, reason),
       () => rpcVaultClosePhase(vaultId),
-      { onBackup: () => onStep(CLOSING_BACKUP_STEP) },
+      { onBackup: (progress) => onStep(CLOSING_BACKUP_STEP, progress) },
     );
     onStep(CLOSING_DONE_STEP);
     return outcome;

@@ -209,28 +209,33 @@ describe("useVaultChangeScreens", () => {
     expect(opts.passwordChange.change).not.toHaveBeenCalled();
 
     act(() => result.current.password.edit({ confirmPassword: "new-pass-word-1" }));
+    act(() => result.current.password.edit({ passwordHint: "the new one" }));
     act(() => result.current.password.setBackUpFirst(false));
     act(() => result.current.password.submit());
-    expect(opts.passwordChange.change).toHaveBeenCalledWith(
-      "notes",
-      "old-pass-word",
-      "new-pass-word-1",
-      false,
-    );
+    expect(opts.passwordChange.change).toHaveBeenCalledWith("notes", {
+      currentPassword: "old-pass-word",
+      newPassword: "new-pass-word-1",
+      backUpFirst: false,
+      passwordHint: "the new one",
+    });
   });
 
-  it("opens an unfinished change on Finish, and starts Finish with its password", () => {
-    const opts = options({ area: "password", passwordChangeUnfinished: true });
+  it("finishes an unfinished change on its recovery row with its password", () => {
+    const opts = options({
+      area: "password",
+      passwordChangeUnfinished: true,
+      vaultListStatus: "recovery",
+    });
     const { result } = render(opts);
     expect(result.current.password.mode).toBe("finish");
     expect(result.current.password.labelKey).toBe("vault.change_password.finish");
     expect(result.current.password.confirmKey).toBe("modal.settings.area.password_finish_confirm");
     act(() => result.current.password.editFinishPassword("new-pass-word"));
     expect(result.current.password.dirty).toBe(true);
+    expect(result.current.password.canSubmit).toBe(true);
     act(() => result.current.password.submit());
     expect(opts.passwordChange.finish).toHaveBeenCalledWith("notes", "new-pass-word");
-    act(() => result.current.password.toggleMode());
-    expect(result.current.password.mode).toBe("change");
+    expect(opts.dismissConfirm).toHaveBeenCalled();
   });
 
   it("starts Unlock RAM from the header's cost and waits for another cost", () => {
@@ -243,5 +248,30 @@ describe("useVaultChangeScreens", () => {
     expect(result.current.kdf.canSubmit).toBe(true);
     act(() => result.current.kdf.submit());
     expect(opts.unlockRamChange.change).toHaveBeenCalledWith("notes", "pw", "1gib");
+  });
+
+  it("shows the new cost, emptied, once an unlock-RAM change is made", () => {
+    const opts = options({ area: "kdf" });
+    const { result, rerender } = render(opts);
+    act(() => result.current.kdf.edit({ password: "pw", nextPreset: "1gib" }));
+    // The list row takes the new cost before the outcome reaches the window.
+    rerender({ ...opts, unlockPreset: "1gib" });
+    rerender({
+      ...opts,
+      unlockPreset: "1gib",
+      unlockRamChange: {
+        ...opts.unlockRamChange,
+        outcome: {
+          vaultId: "notes",
+          nextPreset: "1gib",
+          seq: 1,
+          result: { keyCopies: "done" },
+          error: null,
+          stopped: false,
+        },
+      },
+    });
+    expect(result.current.kdf.fields).toEqual({ password: "", nextPreset: "1gib" });
+    expect(result.current.kdf.report).not.toBeNull();
   });
 });

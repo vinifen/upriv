@@ -11,7 +11,16 @@ export interface DeviceInfo {
    */
   id: string | null;
   system: DeviceSystem;
+  /** The name this device's OS gives itself; `null` when it gives none. */
+  os: string | null;
 }
+
+/**
+ * The name each device's OS gave itself, by device ID: `[os_names]` of the
+ * data folder's `settings.toml`, or of the data folder list. Each device
+ * writes only its own line.
+ */
+export type OsNames = Readonly<Record<string, string>>;
 
 /**
  * A device a record names: its ID (or the run that wrote it, while it had

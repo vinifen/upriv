@@ -62,10 +62,8 @@ function show(appChoices: boolean, onContinue = vi.fn()) {
       appUnlocked: APP,
       vaultUnlocked: VAULT,
       submitting: false,
-      warningClass: null,
       onClose: () => {},
       onContinue,
-      onAcceptWarning: () => {},
     }),
   );
   return onContinue;

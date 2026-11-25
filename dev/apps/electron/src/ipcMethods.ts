@@ -58,6 +58,7 @@ export const ELECTRON_IPC_METHODS = [
   "vault_close_hurry",
   "vault_config_get",
   "vault_disk_usage",
+  "data_folder_size",
   "vault_key_status",
   "vault_config_save",
   "vault_rename",
@@ -103,4 +104,5 @@ export const ELECTRON_IPC_METHODS = [
   "data_folder_export",
   "job_status",
   "job_cancel",
+  "job_skip_backup",
 ] as const;

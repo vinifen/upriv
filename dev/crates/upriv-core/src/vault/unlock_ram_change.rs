@@ -60,7 +60,7 @@ pub fn change_vault_kdf(
             if probe_unlock_preset(&store_dir) == Some(preset) {
                 return Err(UprivError::UnlockRamUnchanged);
             }
-            job.set_step(JobStep::Unlocking);
+            job.begin(JobStep::Unlocking, 0);
             let mut store = with_unlock_lock(|| {
                 unlock_counted(vault_dir, password, |unlocked| {
                     steady(vault_dir, vault_id, unlocked)
@@ -76,7 +76,7 @@ pub fn change_vault_kdf(
             let kdf = HeaderKdf::fresh(preset);
             let kek = with_unlock_lock(|| kdf.derive_kek(password))?;
             job.final_step()?;
-            job.set_step(JobStep::Finishing);
+            job.begin(JobStep::Finishing, 0);
             let generation = next_generation(&store.store_dir(), &store.header)?;
             let keys = store.keys.draft().seal(generation, kdf, &kek)?;
             store.commit(keys, kek, CommitRecord::Rewritten)?;

@@ -1,10 +1,14 @@
-import { useCallback, useId, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import { Select, SwitchRow } from "@/components/ui";
 import {
   AUTO_CLOSE_WHEN_BUSY,
   COMPRESSION_PRESETS,
+  DEFAULT_KDF_OTHER_PRESET,
+  KDF_UNLOCK_MAIN_PRESETS,
   KDF_UNLOCK_OPTION_META,
-  KDF_UNLOCK_PRESETS,
+  KDF_UNLOCK_OTHER_PRESETS,
+  kdfPresetIsOther,
+  ENCRYPTED_FOLDER_SWITCHES,
   POLICY_RADIO_BADGE_I18N,
   APP_BACKUP_LIST,
   APP_UNLOCKED_LIST,
@@ -16,11 +20,14 @@ import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
+  besideFolder,
   compressionPresetFromSevenZip,
+  dataFolderBackupsFolder,
   encryptedFolderOn,
   encryptedFolderUnchosen,
   folderStatusLine,
   isPhoneSystem,
+  selectionFolder,
   selectionHere,
   selectionLabel,
   sevenZipPatchFromCompressionPreset,
@@ -43,7 +50,7 @@ import {
   liveDisplayNameError,
   displayNameErrorI18nKey,
 } from "@upriv/shared";
-import { useFolderStatuses } from "@upriv/shared/react";
+import { useDataFolderPath, useFolderStatuses } from "@upriv/shared/react";
 import { FolderList, StatusLine } from "@/components/folder-list";
 import { useTranslation } from "@/i18n";
 import { useFolderListService, useVaultRootService } from "@/platform/services";
@@ -260,6 +267,8 @@ interface VaultSettingsStorageSectionProps extends SectionPatchProps<"storage"> 
   disabledLine?: string | null;
   /** Under the plain-text option: where its files would be written on this device. */
   plainNote?: ReactNode;
+  /** Between the intro and the options: the Storage screen's password. */
+  aboveChoice?: ReactNode;
 }
 
 /**
@@ -273,6 +282,7 @@ export function VaultSettingsStorageSection({
   disabled = false,
   disabledLine = null,
   plainNote,
+  aboveChoice,
 }: VaultSettingsStorageSectionProps) {
   const { t } = useTranslation();
   const storageModeGroup = useId();
@@ -280,6 +290,7 @@ export function VaultSettingsStorageSection({
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">{t("modal.storage.intro")}</p>
+      {aboveChoice}
 
       <SettingsField
         label={t("modal.storage.field.mode")}
@@ -383,6 +394,20 @@ export function usePickFolder() {
   );
 }
 
+/**
+ * The folders the fixed choices stand for on this device: Beside the data
+ * folder, and where the Data folder choice keeps `vaultId`'s backups (every
+ * vault's, for `null`). `null` until the data folder in use answers.
+ */
+export function useFixedFolders(here: HereDevice | null, vaultId: string | null) {
+  const dataFolder = useDataFolderPath(useVaultRootService());
+  if (!here || !dataFolder) return { beside: null, dataFolderBackups: null };
+  return {
+    beside: besideFolder(here.system, dataFolder),
+    dataFolderBackups: dataFolderBackupsFolder(here.system, dataFolder, vaultId),
+  };
+}
+
 interface VaultSettingsUnlockedFolderSectionProps extends SectionPatchProps<"unlocked_folder"> {
   /** As loaded; an empty list for a vault being created. */
   saved: VaultSettingsConfig["unlocked_folder"];
@@ -391,7 +416,7 @@ interface VaultSettingsUnlockedFolderSectionProps extends SectionPatchProps<"unl
   vaultId: string | null;
   /** The app's unlocked folders: what Use the app's means here. */
   appUnlocked: AppUnlockedFolders;
-  /** A plain-text vault writes its files there and has no switch. */
+  /** A plain-text vault writes its files there: its switch shows, unavailable. */
   plaintext: boolean;
   /** Why this device's group cannot change now (`unlocked_folder` gate); `null` when it can. */
   lockedHint?: string | null;
@@ -418,7 +443,7 @@ export function VaultSettingsUnlockedFolderSection({
   showUnchosen = true,
 }: VaultSettingsUnlockedFolderSectionProps) {
   const { t } = useTranslation();
-  const switchId = useId();
+  const switchGroup = useId();
   const driver = useUnlockedFolderDriver();
   const { renderStatus, openIn } = useRowStatuses("unlocked", config.devices, here, vaultId);
   const pickFolder = usePickFolder();
@@ -430,11 +455,11 @@ export function VaultSettingsUnlockedFolderSection({
   const rowInUse = (row: FolderRow) =>
     savedRows.some((old) => old.number === row.number && old.path.trim() === row.path.trim()) &&
     openIn(row.path).length > 0;
-  const appChoice = selectionLabel(
-    selectionHere(appUnlocked.devices, hereId, APP_UNLOCKED_LIST),
-    hereId ? appUnlocked.devices[hereId] : undefined,
-    t,
-  );
+  const appSelection = selectionHere(appUnlocked.devices, hereId, APP_UNLOCKED_LIST);
+  const appGroup = hereId ? appUnlocked.devices[hereId] : undefined;
+  const appChoice = selectionLabel(appSelection, appGroup, t);
+  const folders = useFixedFolders(here, vaultId);
+  const appFolder = selectionFolder(appSelection, appGroup, () => folders.beside);
   const inheritState = t(
     appUnlocked.encrypted_vaults
       ? "modal.settings.option.unlocked_folder.encrypted.on"
@@ -454,71 +479,78 @@ export function VaultSettingsUnlockedFolderSection({
 
   return (
     <SettingsFormGrid>
-      <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t(
+      <SettingsField
+        label={t("modal.settings.field.unlocked_folder.encrypted")}
+        hint={t(
           plaintext
-            ? "modal.settings.section.unlocked_folder_intro_plain"
-            : "modal.settings.section.unlocked_folder_intro",
-        )}
-      </p>
-      {plaintext ? null : (
-        <SettingsField
-          label={t("modal.settings.field.unlocked_folder.encrypted")}
-          hint={t(
-            phone
+            ? "modal.settings.field.unlocked_folder.plain"
+            : phone
               ? "modal.settings.field.unlocked_folder.phone"
               : "modal.settings.field.unlocked_folder.encrypted_help",
-          )}
-          htmlFor={switchId}
-          disabled={phone}
+        )}
+        disabled={plaintext || phone}
+      >
+        <div
+          role="radiogroup"
+          aria-label={t("modal.settings.field.unlocked_folder.encrypted")}
+          className="grid gap-2"
         >
-          <Select
-            id={switchId}
-            value={config.encrypted}
-            disabled={phone || !driver.known || driver.busy || lockedHint !== null}
-            aria-label={t("modal.settings.field.unlocked_folder.encrypted")}
-            onChange={(value) => setEncrypted(value as EncryptedFolderSwitch)}
-            options={[
-              {
-                value: "inherit",
-                label: t("modal.settings.option.unlocked_folder.encrypted.inherit", {
-                  state: inheritState,
-                }),
-              },
-              { value: "on", label: t("modal.settings.option.unlocked_folder.encrypted.on") },
-              { value: "off", label: t("modal.settings.option.unlocked_folder.encrypted.off") },
-            ]}
-          />
-          <UnlockedFolderDriverNotice
-            kind={driver.kind}
-            missing={folderWanted && driver.missing}
-            busy={driver.busy}
-            onInstall={driver.ensureInstalled}
-          />
-        </SettingsField>
-      )}
-      <FolderList
+          {ENCRYPTED_FOLDER_SWITCHES.map((value) => (
+            <PolicyRadioOption
+              key={value}
+              groupName={switchGroup}
+              value={value}
+              checked={config.encrypted === value}
+              // The chosen option wants a folder its driver cannot give yet.
+              attention={folderWanted && driver.missing}
+              disabled={plaintext || phone || !driver.known || driver.busy || lockedHint !== null}
+              title={t(`modal.settings.option.unlocked_folder.encrypted.${value}`, {
+                state: inheritState,
+              })}
+              description={t(`modal.settings.option.unlocked_folder.encrypted.${value}_desc`)}
+              onSelect={() => setEncrypted(value)}
+            />
+          ))}
+        </div>
+        <UnlockedFolderDriverNotice
+          kind={driver.kind}
+          missing={folderWanted && driver.missing}
+          busy={driver.busy}
+          onInstall={driver.ensureInstalled}
+        />
+      </SettingsField>
+      <SettingsField
         label={t("modal.settings.field.unlocked_folder.list")}
-        policy={VAULT_UNLOCKED_LIST}
-        groups={config.devices}
-        saved={saved.devices}
-        here={here}
-        lockedHint={lockedHint}
-        selectionMissing={unchosen ? t("modal.settings.field.unlocked_folder.unchosen") : null}
-        fixed={[
-          {
-            choice: "inherit",
-            title: t("folder_list.choice.inherit"),
-            description: t("folder_list.choice.inherit_now", { choice: appChoice }),
-          },
-        ]}
-        renderStatus={renderStatus}
-        rowInUse={rowInUse}
-        // A vault being created has nothing saved yet.
-        markUnsaved={vaultId !== null}
-        pickFolder={pickFolder}
-        onChange={(devices) => onChange({ devices })}
-      />
+        hint={t(
+          plaintext
+            ? "modal.settings.field.unlocked_folder.list_help_plain"
+            : "modal.settings.field.unlocked_folder.list_help",
+        )}
+      >
+        <FolderList
+          label={t("modal.settings.field.unlocked_folder.list")}
+          policy={VAULT_UNLOCKED_LIST}
+          groups={config.devices}
+          saved={saved.devices}
+          here={here}
+          lockedHint={lockedHint}
+          selectionMissing={unchosen ? t("modal.settings.field.unlocked_folder.unchosen") : null}
+          fixed={[
+            {
+              choice: "inherit",
+              title: t("folder_list.choice.inherit"),
+              description: t("folder_list.choice.inherit_now", { choice: appChoice }),
+              folder: appFolder,
+            },
+          ]}
+          renderStatus={renderStatus}
+          rowInUse={rowInUse}
+          // A vault being created has nothing saved yet.
+          markUnsaved={vaultId !== null}
+          pickFolder={pickFolder}
+          onChange={(devices) => onChange({ devices })}
+        />
+      </SettingsField>
     </SettingsFormGrid>
   );
 }
@@ -540,7 +572,6 @@ export function VaultSettingsKdfSection({
   archivePreset = null,
 }: VaultSettingsKdfSectionProps) {
   const { t } = useTranslation();
-  const groupName = useId();
 
   return (
     <SettingsFormGrid>
@@ -549,30 +580,11 @@ export function VaultSettingsKdfSection({
         hint={t("modal.settings.section.kdf_intro")}
         disabled={!choosesPreset}
       >
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.kdf.unlock_preset")}
-          className="grid gap-2"
-        >
-          {KDF_UNLOCK_PRESETS.map((preset) => {
-            const meta = KDF_UNLOCK_OPTION_META[preset];
-            const selected = choosesPreset ? config.unlock_preset : archivePreset;
-            return (
-              <PolicyRadioOption
-                key={preset}
-                groupName={groupName}
-                value={preset}
-                checked={selected === preset}
-                disabled={!choosesPreset}
-                title={t(meta.titleKey)}
-                description={t(meta.descKey)}
-                badge={meta.badge}
-                tone={meta.tone}
-                onSelect={() => onChange({ unlock_preset: preset })}
-              />
-            );
-          })}
-        </div>
+        <KdfPresetChoice
+          value={choosesPreset ? config.unlock_preset : archivePreset}
+          disabled={!choosesPreset}
+          onChange={(unlock_preset) => onChange({ unlock_preset })}
+        />
       </SettingsField>
       {!choosesPreset ? (
         <p className="text-sm leading-relaxed text-on-surface-variant">
@@ -580,6 +592,88 @@ export function VaultSettingsKdfSection({
         </p>
       ) : null}
     </SettingsFormGrid>
+  );
+}
+
+interface KdfPresetChoiceProps {
+  /** The chosen preset; `null` checks no option. */
+  value: KdfUnlockPreset | null;
+  disabled?: boolean;
+  onChange: (preset: KdfUnlockPreset) => void;
+}
+
+/**
+ * The unlock RAM, at create and on the Unlock RAM screen: three presets as
+ * radios, and Another amount, whose list holds every other step from 32 MiB
+ * to 4 GiB. The list shows always and waits until its option is chosen;
+ * choosing that option takes the amount the list shows.
+ */
+export function KdfPresetChoice({ value, disabled = false, onChange }: KdfPresetChoiceProps) {
+  const { t } = useTranslation();
+  const groupName = useId();
+  const otherChosen = value !== null && kdfPresetIsOther(value);
+  /** What the list shows while another option is chosen: the last amount picked there. */
+  const [otherPick, setOtherPick] = useState<KdfUnlockPreset>(
+    value !== null && otherChosen ? value : DEFAULT_KDF_OTHER_PRESET,
+  );
+  const shownOther = value !== null && otherChosen ? value : otherPick;
+  const otherMeta = KDF_UNLOCK_OPTION_META[shownOther];
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={t("modal.settings.field.kdf.unlock_preset")}
+      className="grid gap-2"
+    >
+      {KDF_UNLOCK_MAIN_PRESETS.map((preset) => {
+        const meta = KDF_UNLOCK_OPTION_META[preset];
+        return (
+          <PolicyRadioOption
+            key={preset}
+            groupName={groupName}
+            value={preset}
+            checked={value === preset}
+            disabled={disabled}
+            title={t(meta.titleKey)}
+            description={t(meta.descKey)}
+            badge={meta.badge}
+            tone={meta.tone}
+            onSelect={() => onChange(preset)}
+          />
+        );
+      })}
+      <PolicyRadioOption
+        groupName={groupName}
+        value="other"
+        checked={otherChosen}
+        disabled={disabled}
+        title={t("modal.settings.option.kdf.other")}
+        description={t("modal.settings.option.kdf.other_desc")}
+        badge={otherChosen ? otherMeta.badge : undefined}
+        tone={otherChosen ? otherMeta.tone : undefined}
+        onSelect={() => onChange(shownOther)}
+        footer={
+          <div className="space-y-1.5">
+            <Select
+              value={shownOther}
+              disabled={disabled}
+              aria-label={t("modal.settings.option.kdf.other")}
+              options={KDF_UNLOCK_OTHER_PRESETS.map((preset) => ({
+                value: preset,
+                label: t(KDF_UNLOCK_OPTION_META[preset].titleKey),
+              }))}
+              onChange={(preset) => {
+                setOtherPick(preset);
+                onChange(preset);
+              }}
+            />
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t(otherMeta.descKey)}
+            </p>
+          </div>
+        }
+      />
+    </div>
   );
 }
 
@@ -623,6 +717,7 @@ export function VaultSettingsCloseSection({
               checked={autoClose.when_busy === value}
               disabled={!autoClose.enabled}
               title={t(`modal.settings.field.auto_close.when_busy.${value}`)}
+              description={t(`modal.settings.field.auto_close.when_busy.${value}_desc`)}
               onSelect={() => onAutoCloseChange({ when_busy: value })}
             />
           ))}
@@ -667,18 +762,19 @@ export function VaultSettingsBackupSection({
   appBackups,
 }: VaultSettingsBackupSectionProps) {
   const { t } = useTranslation();
-  const modeId = useId();
+  const whenGroup = useId();
+  const modeGroup = useId();
   const keepId = useId();
   const enabledId = useId();
-  const skipId = useId();
+  const keepCurrentId = useId();
   const { renderStatus } = useRowStatuses("backup", config.devices, here, vaultId);
   const pickFolder = usePickFolder();
   const hereId = here?.id ?? null;
-  const appChoice = selectionLabel(
-    selectionHere(appBackups.devices, hereId, APP_BACKUP_LIST),
-    hereId ? appBackups.devices[hereId] : undefined,
-    t,
-  );
+  const appSelection = selectionHere(appBackups.devices, hereId, APP_BACKUP_LIST);
+  const appGroup = hereId ? appBackups.devices[hereId] : undefined;
+  const appChoice = selectionLabel(appSelection, appGroup, t);
+  const folders = useFixedFolders(here, vaultId);
+  const appFolder = selectionFolder(appSelection, appGroup, () => folders.dataFolderBackups);
 
   return (
     <SettingsFormGrid>
@@ -688,45 +784,80 @@ export function VaultSettingsBackupSection({
         onChange={(enabled) => onChange({ enabled })}
         label={t("modal.settings.field.backup.enabled")}
       />
-      <SwitchRow
-        id={skipId}
-        checked={config.skip_unchanged}
-        disabled={!config.enabled}
-        onChange={(skip_unchanged) => onChange({ skip_unchanged })}
-        label={t("modal.settings.field.backup.skip_unchanged")}
-        hint={t("modal.settings.field.backup.skip_unchanged_help")}
-      />
-      <SettingsField
-        label={t("modal.settings.field.backup.mode")}
-        htmlFor={modeId}
-        disabled={!config.enabled}
-      >
-        <Select
-          id={modeId}
-          value={config.mode}
-          disabled={!config.enabled}
-          aria-label={t("modal.settings.field.backup.mode")}
-          onChange={(mode) => onChange({ mode: mode as VaultSettingsConfig["backup"]["mode"] })}
-          options={[
-            { value: "keep_last", label: t("modal.settings.option.backup.keep_last") },
-            { value: "keep_all", label: t("modal.settings.option.backup.keep_all") },
-          ]}
-        />
+      <SettingsField label={t("modal.settings.field.backup.when")} disabled={!config.enabled}>
+        <div
+          role="radiogroup"
+          aria-label={t("modal.settings.field.backup.when")}
+          className="grid gap-2"
+        >
+          <PolicyRadioOption
+            groupName={whenGroup}
+            value="changed"
+            checked={config.skip_unchanged}
+            disabled={!config.enabled}
+            title={t("modal.settings.option.backup.changed")}
+            description={t("modal.settings.option.backup.changed_desc")}
+            onSelect={() => onChange({ skip_unchanged: true })}
+            footer={
+              <SwitchRow
+                id={keepCurrentId}
+                checked={config.keep_current}
+                disabled={!config.enabled}
+                onChange={(keep_current) => onChange({ keep_current })}
+                label={t("modal.settings.field.backup.keep_current")}
+                hint={t("modal.settings.field.backup.keep_current_help")}
+              />
+            }
+          />
+          <PolicyRadioOption
+            groupName={whenGroup}
+            value="every_close"
+            checked={!config.skip_unchanged}
+            disabled={!config.enabled}
+            title={t("modal.settings.option.backup.every_close")}
+            description={t("modal.settings.option.backup.every_close_desc")}
+            onSelect={() => onChange({ skip_unchanged: false })}
+          />
+        </div>
       </SettingsField>
-      <SettingsField
-        label={t("modal.settings.field.backup.keep_last")}
-        htmlFor={keepId}
-        disabled={!config.enabled || config.mode !== "keep_last"}
-      >
-        <IntegerInput
-          id={keepId}
-          min={1}
-          max={99}
-          value={config.keep_last}
-          disabled={!config.enabled || config.mode !== "keep_last"}
-          onChange={(keep_last) => onChange({ keep_last })}
-          className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-        />
+      <SettingsField label={t("modal.settings.field.backup.mode")} disabled={!config.enabled}>
+        <div
+          role="radiogroup"
+          aria-label={t("modal.settings.field.backup.mode")}
+          className="grid gap-2"
+        >
+          <PolicyRadioOption
+            groupName={modeGroup}
+            value="keep_last"
+            checked={config.mode === "keep_last"}
+            disabled={!config.enabled}
+            title={t("modal.settings.option.backup.keep_last")}
+            description={t("modal.settings.option.backup.keep_last_desc")}
+            onSelect={() => onChange({ mode: "keep_last" })}
+            footer={
+              <SettingsField label={t("modal.settings.field.backup.keep_last")} htmlFor={keepId}>
+                <IntegerInput
+                  id={keepId}
+                  min={1}
+                  max={99}
+                  value={config.keep_last}
+                  disabled={!config.enabled}
+                  onChange={(keep_last) => onChange({ keep_last })}
+                  className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+                />
+              </SettingsField>
+            }
+          />
+          <PolicyRadioOption
+            groupName={modeGroup}
+            value="keep_all"
+            checked={config.mode === "keep_all"}
+            disabled={!config.enabled}
+            title={t("modal.settings.option.backup.keep_all")}
+            description={t("modal.settings.option.backup.keep_all_desc")}
+            onSelect={() => onChange({ mode: "keep_all" })}
+          />
+        </div>
       </SettingsField>
       <SettingsField
         label={t("modal.settings.field.backup.folder")}
@@ -743,11 +874,13 @@ export function VaultSettingsBackupSection({
               choice: "inherit",
               title: t("folder_list.choice.inherit"),
               description: t("folder_list.choice.inherit_now", { choice: appChoice }),
+              folder: appFolder,
             },
             {
               choice: "data_folder",
               title: t("folder_list.choice.data_folder"),
               description: t("modal.settings.field.backup.folder_data_desc"),
+              folder: folders.dataFolderBackups,
             },
           ]}
           renderStatus={renderStatus}

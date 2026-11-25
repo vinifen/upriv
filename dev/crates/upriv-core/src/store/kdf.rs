@@ -51,28 +51,78 @@ pub enum KdfUnlockPreset {
     M128,
     #[serde(rename = "256mib")]
     M256,
+    #[serde(rename = "512mib")]
+    M512,
     #[serde(rename = "1gib")]
     G1,
+    #[serde(rename = "1536mib")]
+    M1536,
     #[serde(rename = "2gib")]
     G2,
+    #[serde(rename = "3gib")]
+    G3,
+    #[serde(rename = "4gib")]
+    G4,
 }
 
 impl KdfUnlockPreset {
+    /// Every preset, from the least RAM to the most.
+    pub const ALL: [Self; 10] = [
+        Self::M32,
+        Self::M64,
+        Self::M128,
+        Self::M256,
+        Self::M512,
+        Self::G1,
+        Self::M1536,
+        Self::G2,
+        Self::G3,
+        Self::G4,
+    ];
+
+    /// The id the wire and `config.toml` comments use (`256mib`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::M32 => "32mib",
+            Self::M64 => "64mib",
+            Self::M128 => "128mib",
+            Self::M256 => "256mib",
+            Self::M512 => "512mib",
+            Self::G1 => "1gib",
+            Self::M1536 => "1536mib",
+            Self::G2 => "2gib",
+            Self::G3 => "3gib",
+            Self::G4 => "4gib",
+        }
+    }
+
+    /// The preset an id names; `None` for any other text.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.as_str() == id)
+    }
+
     pub fn memory_kib(self) -> u32 {
         match self {
             Self::M32 => 32 * 1024,
             Self::M64 => 64 * 1024,
             Self::M128 => 128 * 1024,
             Self::M256 => 256 * 1024,
+            Self::M512 => 512 * 1024,
             Self::G1 => 1024 * 1024,
+            Self::M1536 => 1536 * 1024,
             Self::G2 => 2048 * 1024,
+            Self::G3 => 3072 * 1024,
+            Self::G4 => 4096 * 1024,
         }
     }
 
+    /// Passes over the memory: fewer as the memory grows, so the unlock time
+    /// grows slower than the RAM.
     pub fn time_cost(self) -> u32 {
         match self {
             Self::M32 | Self::M64 | Self::M128 | Self::M256 => 3,
-            Self::G1 | Self::G2 => 1,
+            Self::M512 => 2,
+            Self::G1 | Self::M1536 | Self::G2 | Self::G3 | Self::G4 => 1,
         }
     }
 
@@ -84,16 +134,9 @@ impl KdfUnlockPreset {
         if parallelism != 1 {
             return None;
         }
-        [
-            Self::M32,
-            Self::M64,
-            Self::M128,
-            Self::M256,
-            Self::G1,
-            Self::G2,
-        ]
-        .into_iter()
-        .find(|preset| preset.memory_kib() == memory_kib && preset.time_cost() == time_cost)
+        Self::ALL
+            .into_iter()
+            .find(|preset| preset.memory_kib() == memory_kib && preset.time_cost() == time_cost)
     }
 }
 
@@ -105,8 +148,8 @@ pub type Kek = Zeroizing<[u8; KEK_LEN]>;
 
 /// Shipping min `m` (32 MiB preset). Smaller header values are refuse-closed (not a cheaper wrap).
 pub const MIN_KDF_MEMORY_KIB: u32 = 32 * 1024;
-/// Shipping max `m` (2 GiB preset). Larger header values are treated as DoS, not a cheaper wrap.
-pub const MAX_KDF_MEMORY_KIB: u32 = 2048 * 1024;
+/// Shipping max `m` (4 GiB preset). Larger header values are treated as DoS, not a cheaper wrap.
+pub const MAX_KDF_MEMORY_KIB: u32 = 4096 * 1024;
 /// Cap `t` so a malicious header cannot spin forever. Shipping presets use 1 or 3.
 pub const MAX_KDF_TIME_COST: u32 = 16;
 
@@ -168,11 +211,54 @@ mod tests {
         assert_eq!(Version::V0x13 as u32, 0x13);
     }
 
+    /// Every preset reads back from its header params, stays in bounds, and
+    /// takes more RAM than the one before it.
+    #[test]
+    fn presets_grow_and_read_back_from_their_params() {
+        for pair in KdfUnlockPreset::ALL.windows(2) {
+            assert!(pair[0].memory_kib() < pair[1].memory_kib());
+        }
+        for preset in KdfUnlockPreset::ALL {
+            assert!(kdf_params_in_bounds(
+                preset.memory_kib(),
+                preset.time_cost(),
+                preset.parallelism()
+            ));
+            assert_eq!(
+                KdfUnlockPreset::from_params(
+                    preset.memory_kib(),
+                    preset.time_cost(),
+                    preset.parallelism()
+                ),
+                Some(preset)
+            );
+        }
+        assert_eq!(
+            KdfUnlockPreset::ALL
+                .last()
+                .map(|preset| preset.memory_kib()),
+            Some(MAX_KDF_MEMORY_KIB)
+        );
+    }
+
+    /// The id the wire uses is the serde name, and reads back.
+    #[test]
+    fn preset_ids_match_the_wire_and_read_back() {
+        for preset in KdfUnlockPreset::ALL {
+            assert_eq!(
+                serde_json::to_value(preset).unwrap(),
+                serde_json::Value::String(preset.as_str().into())
+            );
+            assert_eq!(KdfUnlockPreset::from_id(preset.as_str()), Some(preset));
+        }
+        assert_eq!(KdfUnlockPreset::from_id("8gib"), None);
+    }
+
     #[test]
     fn derive_kek_rejects_out_of_bounds_params_before_argon2() {
         let salt = [0u8; SALT_LEN];
         assert!(derive_kek(b"x", &salt, 8 * 1024, 3, 1).is_err());
-        assert!(derive_kek(b"x", &salt, 4096 * 1024, 3, 1).is_err());
+        assert!(derive_kek(b"x", &salt, MAX_KDF_MEMORY_KIB + 1024, 1, 1).is_err());
         assert!(derive_kek(b"x", &salt, 32 * 1024, 3, 2).is_err());
         assert!(derive_kek(b"x", &salt, 32 * 1024, 0, 1).is_err());
         assert!(derive_kek(b"x", &salt, 32 * 1024, 17, 1).is_err());

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { CreateVaultInput, VaultListItem } from "@upriv/shared";
+import {
+  JOB_ERROR_CODES,
+  RpcError,
+  VAULT_ERROR_CODES,
+  parseImportBlocked,
+  type CreateVaultInput,
+  type VaultListItem,
+} from "@upriv/shared";
 import {
   contentTreeFromFolderPick,
   contentTreeFromPickedFile,
@@ -172,7 +179,7 @@ describe("importContentTree", () => {
         steps.push(`file:${path}:${uri}`);
         if (failAt === "file") throw new Error("file");
       },
-      close: () => run("close"),
+      close: (_id, stopped) => run(stopped ? "close:stopped" : "close"),
       abort: () => run("abort"),
     };
   }
@@ -180,8 +187,58 @@ describe("importContentTree", () => {
   it("creates, streams, and closes without opening a file manager", async () => {
     const steps: string[] = [];
     const created = await importContentTree(input, tree, io(steps), JOB);
-    expect(created.id).toBe("notes");
+    expect(created).toEqual({ vault: { id: "notes" }, leftOut: 0, stopped: false });
     expect(steps).toEqual(["create", "open", "dir:empty", "file:a.txt:content://doc/a", "close"]);
+  });
+
+  const twoFiles = contentTreeFromFolderPick({
+    folderName: "Photos",
+    releaseSafTree: "content://tree/photos",
+    files: [
+      { relativePath: "Photos/a.txt", uri: "content://doc/a" },
+      { relativePath: "Photos/b.txt", uri: "content://doc/b" },
+    ],
+  });
+
+  /** The person's Stop reaches the import at the file `at`. */
+  function stoppedAt(steps: string[], at: string, base = io(steps)): ContentTreeImportIo {
+    return {
+      ...base,
+      addFile: async (_id, path) => {
+        steps.push(`file:${path}`);
+        if (path === at) throw new RpcError(JOB_ERROR_CODES.CANCELLED, "stopped");
+      },
+    };
+  }
+
+  it("keeps the files that got in when the person stops it", async () => {
+    const steps: string[] = [];
+    const created = await importContentTree(input, twoFiles, stoppedAt(steps, "b.txt"), JOB);
+    expect(created).toEqual({ vault: { id: "notes" }, leftOut: 0, stopped: true });
+    expect(steps).toEqual(["create", "open", "file:a.txt", "file:b.txt", "close:stopped"]);
+  });
+
+  it("deletes the new vault when the stop comes before any file got in", async () => {
+    const steps: string[] = [];
+    await expect(
+      importContentTree(input, twoFiles, stoppedAt(steps, "a.txt"), JOB),
+    ).rejects.toMatchObject({ code: JOB_ERROR_CODES.CANCELLED });
+    expect(steps).toEqual(["create", "open", "file:a.txt", "abort"]);
+  });
+
+  it("never deletes a stopped import whose close fails", async () => {
+    const steps: string[] = [];
+    const failingClose: ContentTreeImportIo = {
+      ...stoppedAt(steps, "b.txt"),
+      close: async () => {
+        steps.push("close:stopped");
+        throw new Error("disk full");
+      },
+    };
+    await expect(importContentTree(input, twoFiles, failingClose, JOB)).rejects.toThrow(
+      "disk full",
+    );
+    expect(steps).not.toContain("abort");
   });
 
   it("sends the welcome note unless the picked root already has a README", async () => {
@@ -215,6 +272,68 @@ describe("importContentTree", () => {
     const steps: string[] = [];
     await expect(importContentTree(input, tree, io(steps, "file"), JOB)).rejects.toThrow("file");
     expect(steps).toEqual(["create", "open", "dir:empty", "file:a.txt:content://doc/a", "abort"]);
+  });
+
+  it("names a document it cannot read and leaves no vault", async () => {
+    const steps: string[] = [];
+    const unreadable: ContentTreeImportIo = {
+      ...io(steps),
+      addFile: async (_id, path) => {
+        steps.push(`file:${path}`);
+        throw new RpcError(VAULT_ERROR_CODES.IMPORT_SOURCE_UNREADABLE, "could not read");
+      },
+    };
+    const error = await importContentTree(input, tree, unreadable, JOB).catch((e: unknown) => e);
+    expect(parseImportBlocked(error)).toEqual({
+      count: 1,
+      items: [{ path: "Photos/a.txt", reason: "unreadable" }],
+      whole: false,
+    });
+    expect(steps).toEqual(["create", "open", "dir:empty", "file:a.txt", "abort"]);
+
+    const file = contentTreeFromPickedFile({
+      path: "content://doc/note",
+      uri: "content://doc/note",
+      fileName: "note.txt",
+    });
+    const single = await importContentTree(input, file, unreadable, JOB).catch((e: unknown) => e);
+    expect(parseImportBlocked(single)).toEqual({
+      count: 1,
+      items: [{ path: "note.txt", reason: "unreadable" }],
+      whole: true,
+    });
+  });
+
+  it("leaves out a document it cannot read when the person chose that, and counts it", async () => {
+    const steps: string[] = [];
+    const two = contentTreeFromFolderPick({
+      folderName: "Photos",
+      releaseSafTree: "content://tree/photos",
+      files: [
+        { relativePath: "Photos/a.txt", uri: "content://doc/a" },
+        { relativePath: "Photos/b.txt", uri: "content://doc/b" },
+      ],
+    });
+    const firstUnreadable: ContentTreeImportIo = {
+      ...io(steps),
+      addFile: async (_id, path) => {
+        steps.push(`file:${path}`);
+        if (path === "a.txt") {
+          throw new RpcError(VAULT_ERROR_CODES.IMPORT_SOURCE_UNREADABLE, "could not read");
+        }
+      },
+    };
+    const leaveOut = {
+      ...input,
+      importPackage: {
+        kind: "os_tree" as const,
+        archivePath: "content://tree/photos",
+        leaveOut: true,
+      },
+    };
+    const created = await importContentTree(leaveOut, two, firstUnreadable, JOB);
+    expect(created.leftOut).toBe(1);
+    expect(steps).toEqual(["create", "open", "file:a.txt", "file:b.txt", "close"]);
   });
 
   it("returns the cleanup error when deleting the failed vault also fails", async () => {

@@ -8,6 +8,7 @@ import {
   choiceNameLabel,
   dataFolderChangeMessage,
   isRpcError,
+  jobStepCopy,
   newJobId,
   type ChoiceName,
   type FolderState,
@@ -21,7 +22,7 @@ import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
-import { Button, ElapsedTime, Modal, Select, type SelectOption } from "@/components/ui";
+import { Button, JobProgressBar, Modal, Select, type SelectOption } from "@/components/ui";
 import { ModalFooterActions } from "@/components/ui/ModalFooterActions";
 import { Toast } from "@/components/ui/Toast";
 import { DataFolderListSection } from "./DataFolderListSection";
@@ -288,9 +289,13 @@ export function VaultRootSetupScreen({
       <View style={styles.body}>
         <SetupBody screen={screen} newList={newList} />
         {kind === "selected_failed" && search?.state === "running" ? (
-          <View>
-            <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.searching")}</Text>
-            <ElapsedTime startedAt={search.startedAt} />
+          <View style={styles.searching}>
+            <JobProgressBar
+              progress={null}
+              startedAt={search.startedAt}
+              label={t("modal.vault_root_setup.searching")}
+              copy={jobStepCopy(null, "modal.vault_root_setup.searching")}
+            />
           </View>
         ) : null}
         {kind === "selected_failed" && search?.state === "found_none" ? (
@@ -357,5 +362,6 @@ function SetupBody({ screen, newList }: { screen: SetupScreen; newList: boolean 
 
 const styles = StyleSheet.create({
   body: { gap: spacing.md },
+  searching: { gap: spacing.xs },
   localeSelect: { flexShrink: 0, maxWidth: 256 },
 });

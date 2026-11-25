@@ -1,4 +1,5 @@
 import {
+  ENCRYPTED_FOLDER_SWITCHES,
   VAULT_BACKUP_LIST,
   VAULT_UNLOCKED_LIST,
   parseDeviceGroups,
@@ -191,6 +192,7 @@ export function parseEmbeddedVaultSettings(
   }
   const enabled = bool(settings.backup.enabled);
   const skipUnchanged = bool(settings.backup.skip_unchanged);
+  const keepCurrent = bool(settings.backup.keep_current);
   const hidden = bool(settings.vault.hidden);
   const autoEnabled = bool(settings.auto_close.enabled);
   const encryptNames = bool(settings.seven_zip.encrypt_file_names);
@@ -199,6 +201,7 @@ export function parseEmbeddedVaultSettings(
   if (
     enabled === null ||
     skipUnchanged === null ||
+    keepCurrent === null ||
     hidden === null ||
     autoEnabled === null ||
     encryptNames === null ||
@@ -222,7 +225,7 @@ export function parseEmbeddedVaultSettings(
       storage: { mode, plain_files: plainFiles },
       unlocked_folder: {
         encrypted:
-          oneOf<EncryptedFolderSwitch>(str(unlocked.encrypted) ?? "", ["inherit", "on", "off"]) ??
+          oneOf<EncryptedFolderSwitch>(str(unlocked.encrypted) ?? "", ENCRYPTED_FOLDER_SWITCHES) ??
           "inherit",
         devices: parseDeviceGroups(unlocked.devices, VAULT_UNLOCKED_LIST),
       },
@@ -231,6 +234,7 @@ export function parseEmbeddedVaultSettings(
         mode: backupMode,
         keep_last: keepLast,
         skip_unchanged: skipUnchanged,
+        keep_current: keepCurrent,
         devices: parseDeviceGroups(settings.backup.devices, VAULT_BACKUP_LIST),
       },
       security: {

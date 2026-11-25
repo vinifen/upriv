@@ -8,7 +8,8 @@ import {
 } from "../closePhase";
 
 const flush: VaultCloseState = { state: "closing", phase: "flush" };
-const backup: VaultCloseState = { state: "closing", phase: "backup" };
+const progress = { bytesDone: 10, bytesTotal: 40, stoppable: true, step: null };
+const backup: VaultCloseState = { state: "closing", phase: "backup", progress };
 
 describe("parseVaultCloseHurry", () => {
   it("is true only when a running close heard it", () => {
@@ -60,8 +61,22 @@ function deferred<T>() {
 describe("parseVaultCloseState", () => {
   it("reads open, closing at its step, and closed", () => {
     expect(parseVaultCloseState({ state: "open", phase: null })).toEqual({ state: "open" });
-    expect(parseVaultCloseState({ state: "closing", phase: "flush" })).toEqual(flush);
-    expect(parseVaultCloseState({ state: "closing", phase: "backup" })).toEqual(backup);
+    expect(parseVaultCloseState({ state: "closing", phase: "flush", progress: null })).toEqual(
+      flush,
+    );
+    expect(
+      parseVaultCloseState({
+        state: "closing",
+        phase: "backup",
+        progress: { running: true, bytesDone: 10, bytesTotal: 40, stoppable: true, step: null },
+      }),
+    ).toEqual(backup);
+    // A backup that has not measured its zip yet.
+    expect(parseVaultCloseState({ state: "closing", phase: "backup", progress: null })).toEqual({
+      state: "closing",
+      phase: "backup",
+      progress: null,
+    });
     expect(parseVaultCloseState({ state: "closed", phase: null })).toEqual({ state: "closed" });
   });
 
@@ -81,23 +96,31 @@ describe("waitForClose", () => {
     vi.useRealTimers();
   });
 
-  it("reports backup once, then stops asking", async () => {
+  it("reports the backup at each read with how far its zip got, until the close settles", async () => {
     const work = deferred<string>();
-    const answers: (VaultCloseState | null)[] = [flush, backup];
-    const readProgress = vi.fn(async () => answers.shift() ?? backup);
+    const further = { ...progress, bytesDone: 30 };
+    const answers: (VaultCloseState | null)[] = [
+      flush,
+      backup,
+      { state: "closing", phase: "backup", progress: further },
+    ];
+    const readProgress = vi.fn(async () => answers.shift() ?? null);
     const onBackup = vi.fn();
 
     const watched = waitForClose(work.promise, readProgress, { onBackup }, 100);
     await vi.advanceTimersByTimeAsync(0);
     expect(onBackup).not.toHaveBeenCalled();
-    expect(readProgress).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(100);
-    expect(onBackup).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(readProgress).toHaveBeenCalledTimes(2);
+    expect(onBackup).toHaveBeenLastCalledWith(progress);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onBackup).toHaveBeenLastCalledWith(further);
+    expect(onBackup).toHaveBeenCalledTimes(2);
 
     work.resolve("closed");
     await expect(watched).resolves.toBe("closed");
+    const reads = readProgress.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(readProgress.mock.calls.length).toBe(reads);
   });
 
   it("does not report backup after the close settled", async () => {

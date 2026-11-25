@@ -28,6 +28,7 @@ import {
   createDraftFromImportPackage,
   createVaultImportPackage,
   dataFolderCanExport,
+  unfinishedVaultsRemovedText,
   fileNameOfPath,
   vaultCanSaveBackupNow,
   vaultDeleteHold,
@@ -58,6 +59,7 @@ import {
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
   type VaultExportRun,
+  type ImportBlockedReport,
   type VaultListItem,
   type VaultListSort,
   type VaultListSortDirection,
@@ -74,6 +76,7 @@ import {
   useFileManagerSelector,
   useOperationLimit,
   usePasswordChangeJob,
+  useRefreshWhileImporting,
   useStorageChangeJob,
   useUnfinishedSweep,
   useUnlockRamChangeJob,
@@ -537,8 +540,6 @@ export function useVaultListScreen() {
     vaultService,
   ]);
 
-  useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch);
-
   useEffect(() => {
     syncWithVaultList(vaults);
   }, [syncWithVaultList, vaults]);
@@ -554,6 +555,22 @@ export function useVaultListScreen() {
   const lifecycleService = useVaultLifecycleService();
   const jobs = useJobService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
+  /**
+   * A create refused for the items it names, until its window is closed. Its
+   * row stays, as creating, until the person answers.
+   */
+  const [refusedImport, setRefusedImport] = useState<
+    (ImportBlockedReport & { vaultId: string }) | null
+  >(null);
+  /**
+   * What "Import without them" runs again while that window is open, with no
+   * password when nothing can be imported without them. Kept out of render
+   * state since it holds the new vault's password; dropped when the window
+   * closes.
+   */
+  const refusedRetryRef = useRef<{ result: CreateVaultResult; password: string | null } | null>(
+    null,
+  );
   const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId, saved) => {
       const done = t("toast.backup_now_saved", { name: vaultName(vaultId) });
@@ -577,6 +594,13 @@ export function useVaultListScreen() {
       (error: unknown) => showError(error, "toast.refresh_failed"),
     );
   }, [applyVaultList, showError, vaultService]);
+
+  // The vaults whose create or store copy a crash cut off go, and the toast
+  // names them.
+  useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch, (removed) => {
+    showToast(unfinishedVaultsRemovedText(removed.map(vaultName), t), 8000);
+    reloadVaults();
+  });
 
   const changeSeqRef = useRef(0);
   /** The settings window shows this screen of the vault, so it shows the outcome itself. */
@@ -791,6 +815,16 @@ export function useVaultListScreen() {
     blockOpenVaultIdsRef,
     onStorageReset: (vaultId) => updateVaultStorageMode(vaultId, "encrypted_dir"),
   });
+  const closeBackup = lifecycle.pipeline.closeBackup;
+  const closeBackupVaultId = closeBackup?.vaultId ?? null;
+  const closeBackupSeenRef = useRef<string | null>(null);
+  // A close's backup that ended put a zip in place: the open Backups window lists it.
+  useEffect(() => {
+    if (closeBackupSeenRef.current !== null && closeBackupVaultId === null) {
+      setBackupListRefresh((token) => token + 1);
+    }
+    closeBackupSeenRef.current = closeBackupVaultId;
+  }, [closeBackupVaultId]);
   openWithPasswordRef.current = lifecycle.openWithPassword;
   // The Export window follows its vault's export while one runs.
   const shownExportJob =
@@ -833,6 +867,16 @@ export function useVaultListScreen() {
     [showHiddenVaults, vaults],
   );
   const passwordJob = passwordChange.job;
+  const changeBackup = passwordChange.backupStep;
+  const changeBackupVaultId = changeBackup?.vaultId ?? null;
+  const changeBackupSeenRef = useRef<string | null>(null);
+  // Back up first that ended may have put a zip in place: the open Backups window lists it.
+  useEffect(() => {
+    if (changeBackupSeenRef.current !== null && changeBackupVaultId === null) {
+      setBackupListRefresh((token) => token + 1);
+    }
+    changeBackupSeenRef.current = changeBackupVaultId;
+  }, [changeBackupVaultId]);
   const unlockRamJob = unlockRamChange.job;
   const storageJob = storageChange.job;
   const rebuildJob = rebuild.job;
@@ -861,6 +905,10 @@ export function useVaultListScreen() {
     }
     return {
       ...lifecycle.pipelineListStatus,
+      // A refused create waits for its window's answer, still creating.
+      creatingVaultIds: refusedImport
+        ? [...(lifecycle.pipelineListStatus.creatingVaultIds ?? []), refusedImport.vaultId]
+        : lifecycle.pipelineListStatus.creatingVaultIds,
       closingVaultIds: [
         ...new Set([
           ...(lifecycle.pipelineListStatus.closingVaultIds ?? []),
@@ -882,7 +930,11 @@ export function useVaultListScreen() {
       storageChangeVaultIds: storageJob ? [storageJob.vaultId] : undefined,
       deletingVaultIds: runningDelete ? [runningDelete.vaultId] : undefined,
       deleteNowVaultIds: deleteNowIds,
-      backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
+      // A password change writing its Back up first zip shows as backing up.
+      backupJobVaultIds: [
+        ...(backupNowJob ? [backupNowJob.vaultId] : []),
+        ...(changeBackupVaultId !== null ? [changeBackupVaultId] : []),
+      ],
       backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
       dataFolderExporting: dataFolderExport.job !== null,
       rowWork,
@@ -890,16 +942,20 @@ export function useVaultListScreen() {
   }, [
     backupExport.job,
     backupNowJob,
+    changeBackupVaultId,
     dataFolderExport.job,
     deleteNowIds,
     lifecycle.pipelineListStatus,
     passwordJob,
     quitClose,
     rebuildJob,
+    refusedImport,
     runningDelete,
     storageJob,
     unlockRamJob,
   ]);
+
+  useRefreshWhileImporting(vaults, pipelineListStatus.creatingVaultIds ?? [], reloadVaults);
 
   /** Stop the work a row shows, whichever owner runs it. */
   const stopRowWork = useCallback(
@@ -1011,48 +1067,43 @@ export function useVaultListScreen() {
     [logService],
   );
 
-  const handleCreateVault = useCallback(
-    (result: CreateVaultResult, password: string) => {
-      // Another vault being created only queues this one. The same id still in
-      // flight is taken.
-      if (
-        vaults.some((vault) => vault.id === result.vaultId) ||
-        lifecycle.pipeline.isVaultPipelineBusy(result.vaultId)
-      ) {
-        throw new RpcError(
-          VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
-          `vault already exists: ${result.vaultId}`,
-        );
+  /** The vault a create listed was not made: its row and the group it would join go. */
+  const dropCreatePlaceholder = useCallback(
+    (vaultId: string) => {
+      const pendingEffect = pendingCreateGroupsRef.current.get(vaultId);
+      pendingCreatesRef.current.delete(vaultId);
+      pendingCreateGroupsRef.current.delete(vaultId);
+      removeVault(vaultId);
+      if (pendingEffect) {
+        setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
       }
+    },
+    [removeVault, setGroups],
+  );
 
-      const placeholder = buildCreatingVaultListItem(result);
-      pendingCreatesRef.current.set(result.vaultId, placeholder);
-      addVault(placeholder);
-
-      const groupEffect = buildPendingCreateGroupEffect(
-        result.groupAssignment,
-        result.vaultId,
-        groupsRef.current,
-      );
-      if (groupEffect) {
-        pendingCreateGroupsRef.current.set(result.vaultId, groupEffect);
-        setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
-      }
-
+  /**
+   * Run the create of a vault whose row is listed. `leaveOut`: the person
+   * chose to import without the items that cannot be imported.
+   */
+  const runCreate = useCallback(
+    (result: CreateVaultResult, password: string, leaveOut: boolean) => {
       const welcome = buildVaultWelcomeFiles(result, { t, locale });
+      const importPackage = createVaultImportPackage(result, password);
       lifecycle.startCreatePipeline(
         result.vaultId,
         async (job) => {
-          await vaultService.createVault(
+          const created = await vaultService.createVault(
             {
               password,
               unlockPreset: result.unlockPreset,
               settings: result.settings,
-              importPackage: createVaultImportPackage(result, password),
+              importPackage:
+                importPackage && leaveOut ? { ...importPackage, leaveOut } : importPackage,
               welcome,
             },
             job,
           );
+          return created;
         },
         {
           onComplete: () => {
@@ -1126,35 +1177,70 @@ export function useVaultListScreen() {
               }
             })();
           },
+          // Core may have kept a stopped import in recovery: its answer says.
           onRemoved: () => {
-            const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
-            pendingCreatesRef.current.delete(result.vaultId);
-            pendingCreateGroupsRef.current.delete(result.vaultId);
-            removeVault(result.vaultId);
-            if (pendingEffect) {
-              setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
-            }
+            dropCreatePlaceholder(result.vaultId);
+            reloadVaults();
+          },
+          onBlocked: (blocked) => {
+            refusedRetryRef.current = { result, password: blocked.whole ? null : password };
+            setRefusedImport({
+              vaultId: result.vaultId,
+              vaultName: result.displayName,
+              blocked,
+              stage: "refused",
+            });
           },
         },
       );
     },
     [
-      addVault,
       applyGroupListResult,
       applyVaultList,
+      dropCreatePlaceholder,
       lifecycle,
       locale,
       recordVaultHiddenIfNeeded,
       reloadGroups,
-      removeVault,
-      setGroups,
+      reloadVaults,
       showError,
       t,
       touchSessionWrite,
       vaultGroupService,
       vaultService,
-      vaults,
     ],
+  );
+
+  const handleCreateVault = useCallback(
+    (result: CreateVaultResult, password: string) => {
+      // Another vault being created only queues this one. The same id still in
+      // flight is taken.
+      if (
+        vaults.some((vault) => vault.id === result.vaultId) ||
+        lifecycle.pipeline.isVaultPipelineBusy(result.vaultId)
+      ) {
+        throw new RpcError(
+          VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
+          `vault already exists: ${result.vaultId}`,
+        );
+      }
+
+      const placeholder = buildCreatingVaultListItem(result);
+      pendingCreatesRef.current.set(result.vaultId, placeholder);
+      addVault(placeholder);
+
+      const groupEffect = buildPendingCreateGroupEffect(
+        result.groupAssignment,
+        result.vaultId,
+        groupsRef.current,
+      );
+      if (groupEffect) {
+        pendingCreateGroupsRef.current.set(result.vaultId, groupEffect);
+        setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
+      }
+      runCreate(result, password, false);
+    },
+    [addVault, lifecycle.pipeline, runCreate, setGroups, vaults],
   );
 
   const settingsVaultId = modals.settingsVaultId;
@@ -1251,6 +1337,7 @@ export function useVaultListScreen() {
   const blockingUiOpen = Boolean(
     modals.createVaultOpen ||
     modals.settingsGroupId ||
+    modals.deleteGroupId ||
     modals.appSettingsOpen ||
     modals.dataFolderOpen ||
     modals.logsOpen ||
@@ -1441,14 +1528,14 @@ export function useVaultListScreen() {
   );
 
   const handleDeleteGroup = useCallback(async () => {
-    if (!modals.settingsGroup) return;
+    if (!modals.deleteGroup) return;
     const generation = ++groupsMutateGenRef.current;
-    await vaultGroupService.delete(modals.settingsGroup.id);
+    await vaultGroupService.delete(modals.deleteGroup.id);
     if (groupsMutateGenRef.current !== generation) return;
     const listed = await vaultGroupService.list();
     if (groupsMutateGenRef.current !== generation) return;
     applyGroupListResult(listed);
-    modals.setSettingsGroupId(null);
+    modals.setDeleteGroupId(null);
   }, [applyGroupListResult, modals, vaultGroupService]);
 
   const handleToggleGroupCollapsed = useCallback(
@@ -1548,6 +1635,24 @@ export function useVaultListScreen() {
     [applyGroupListResult, reloadGroups, vaultGroupService],
   );
 
+  const openSettings = (vaultId: string, area: VaultSettingsAreaId) => {
+    // One change of each kind at a time: another vault's screen waits.
+    if (area === "password" && passwordJob && passwordJob.vaultId !== vaultId) {
+      showToast(t("vault.password_change.busy"));
+      return;
+    }
+    if (area === "kdf" && unlockRamJob && unlockRamJob.vaultId !== vaultId) {
+      showToast(t("vault.unlock_ram_change.busy"));
+      return;
+    }
+    if (area === "storage" && storageJob && storageJob.vaultId !== vaultId) {
+      showToast(t("vault.change_storage.busy"));
+      return;
+    }
+    modals.setSettingsVaultId(vaultId);
+    modals.setSettingsArea(area);
+  };
+
   return {
     isReady: isReady && daemonReady,
     openFromVault,
@@ -1634,25 +1739,10 @@ export function useVaultListScreen() {
       onOpenBackups: modals.setBackupVaultId,
       onOpenNote: modals.setNoteVaultId,
       onOpenVaultInfo: modals.setVaultInfoVaultId,
-      onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => {
-        // One change of each kind at a time: another vault's screen waits.
-        if (area === "password" && passwordJob && passwordJob.vaultId !== vaultId) {
-          showToast(t("vault.password_change.busy"));
-          return;
-        }
-        if (area === "kdf" && unlockRamJob && unlockRamJob.vaultId !== vaultId) {
-          showToast(t("vault.unlock_ram_change.busy"));
-          return;
-        }
-        if (area === "storage" && storageJob && storageJob.vaultId !== vaultId) {
-          showToast(t("vault.change_storage.busy"));
-          return;
-        }
-        modals.setSettingsVaultId(vaultId);
-        modals.setSettingsArea(area);
-      },
+      onOpenSettings: openSettings,
       onOpenDelete: modals.setDeleteVaultId,
       onOpenGroupSettings: modals.setSettingsGroupId,
+      onOpenGroupDelete: modals.setDeleteGroupId,
       onToggleGroupCollapsed: handleToggleGroupCollapsed,
       onExportVault: (vault: VaultListItem) => {
         if (dataFolderExport.job) {
@@ -1717,6 +1807,18 @@ export function useVaultListScreen() {
       recoveryOpen: modals.recoveryVaultId !== null,
       onRecoveryClose: () => modals.setRecoveryVaultId(null),
       onRecoveryAction: lifecycle.handleRecoveryAction,
+      onRecoveryFinishPasswordChange: () => {
+        const vaultId = modals.recoveryVaultId;
+        if (!vaultId) return;
+        modals.setRecoveryVaultId(null);
+        openSettings(vaultId, "password");
+      },
+      onRecoveryDelete: () => {
+        const vaultId = modals.recoveryVaultId;
+        if (!vaultId) return;
+        modals.setRecoveryVaultId(null);
+        modals.setDeleteVaultId(vaultId);
+      },
       recoveryLeftover: lifecycle.recoveryLeftover,
       placeOpen: lifecycle.placeOpen,
       placeVaultName: lifecycle.placeVaultName,
@@ -1724,10 +1826,8 @@ export function useVaultListScreen() {
       placeAppUnlocked: lifecycle.placeAppUnlocked,
       placeVaultUnlocked: lifecycle.placeVaultUnlocked,
       placeSubmitting: lifecycle.placeSubmitting,
-      placeWarningClass: lifecycle.placeWarningClass,
       onPlaceClose: lifecycle.onPlaceClose,
       onPlaceContinue: lifecycle.onPlaceContinue,
-      onPlaceAcceptWarning: lifecycle.onPlaceAcceptWarning,
       heldOpen: lifecycle.heldOpen,
       heldCount: lifecycle.heldCount,
       heldPaths: lifecycle.heldPaths,
@@ -1757,6 +1857,22 @@ export function useVaultListScreen() {
       toast: toastState,
       onDismiss: dismissToast,
     },
+    importBlocked: {
+      report: refusedImport,
+      onLeaveOut: () => {
+        const retry = refusedRetryRef.current;
+        refusedRetryRef.current = null;
+        setRefusedImport(null);
+        if (retry?.password != null) runCreate(retry.result, retry.password, true);
+        else if (retry) dropCreatePlaceholder(retry.result.vaultId);
+      },
+      onClose: () => {
+        const retry = refusedRetryRef.current;
+        refusedRetryRef.current = null;
+        setRefusedImport(null);
+        if (retry) dropCreatePlaceholder(retry.result.vaultId);
+      },
+    },
     note: {
       vault: modals.noteVault,
       open: modals.noteVaultId !== null,
@@ -1776,7 +1892,22 @@ export function useVaultListScreen() {
         backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id
           ? backupJob.job
           : null,
+      closeBackup:
+        closeBackup !== null && closeBackup.vaultId === modals.backupVault?.id
+          ? {
+              ...closeBackup,
+              stoppingSince: lifecycle.closeNowAskedAt.get(closeBackup.vaultId) ?? null,
+            }
+          : null,
       onStopSave: backupJob.stop,
+      onStopCloseBackup: () => {
+        if (closeBackup) lifecycle.hurryRunningClose(closeBackup.vaultId);
+      },
+      changeBackup:
+        changeBackup !== null && changeBackup.vaultId === modals.backupVault?.id
+          ? changeBackup
+          : null,
+      onStopChangeBackup: passwordChange.skipBackup,
       onSaveNow: () => {
         const vault = modals.backupVault;
         if (!vault) return;
@@ -1859,13 +1990,21 @@ export function useVaultListScreen() {
       open: modals.settingsGroupId !== null,
       onClose: () => modals.setSettingsGroupId(null),
       onSave: handleSaveGroup,
-      onDelete: handleDeleteGroup,
       onBusyTimeout: () => {
         groupsMutateGenRef.current += 1;
       },
       vaults: visibleVaults,
       includeHidden: showHiddenVaults,
       groups,
+    },
+    groupDelete: {
+      group: modals.deleteGroup,
+      open: modals.deleteGroupId !== null,
+      onClose: () => modals.setDeleteGroupId(null),
+      onDelete: handleDeleteGroup,
+      onBusyTimeout: () => {
+        groupsMutateGenRef.current += 1;
+      },
     },
     appSettings: {
       open: modals.appSettingsOpen,

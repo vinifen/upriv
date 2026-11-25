@@ -1,4 +1,5 @@
 import type { AppSettingsConfig } from "../../domain/app-settings";
+import type { OsNames } from "../../domain/device";
 import type { AppListChanges, ListsSaved } from "../../domain/folder-lists";
 
 /** Result of `AppSettingsService.load()` — includes disk awareness from the daemon. */
@@ -8,6 +9,8 @@ export interface AppSettingsLoadResult {
   onDisk: boolean;
   /** Data folder used when loading; null when there is none yet. */
   rootPath: string | null;
+  /** The OS name each device wrote into this data folder (`[os_names]`). */
+  osNames: OsNames;
 }
 
 /** What a save did. */

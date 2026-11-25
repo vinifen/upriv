@@ -124,20 +124,17 @@ describe("hidden vaults", () => {
     const sections = buildSystemInfoSections(
       {
         app: { version: "0.1.0-beta", distribution: "dev", versionOffline: true },
-        device: { id: null, system: "linux" },
+        device: { id: null, system: "linux", os: null },
+        osNames: {},
         root: { status: "found", rootPath: "/data", source: "default" },
-        dataFolders: { groups: {}, defaultFolder: "/data", explicit: null },
+        dataFolders: { groups: {}, osNames: {}, defaultFolder: "/data", explicit: null },
+        dataFolderBytes: "measuring",
         inventory: { vaultsTotal: 1, vaultsOpen: 0, groupsTotal: 0 },
         ui: settings.ui,
         logging: settings.logging,
         unlockedFolders: settings.unlocked_folders,
         backups: settings.backups,
         lastOpenedVault: "",
-        paths: {
-          logsDir: "/data/.upriv/logs",
-          logsOpenPath: "/data/.upriv/logs",
-          appHome: "/data",
-        },
       },
       t,
     );

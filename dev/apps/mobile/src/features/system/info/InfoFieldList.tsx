@@ -1,15 +1,20 @@
-import { Linking, StyleSheet, Text, View } from "react-native";
+import { Animated, Linking, StyleSheet, Text, View } from "react-native";
 import type { InfoField } from "@upriv/shared";
 import { RevealPathButton } from "@/components/RevealPathButton";
+import { usePulseOpacity } from "@/hooks/usePulseOpacity";
+import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
-import { spacing } from "@/theme/tokens";
+import { colorAlpha, spacing } from "@/theme/tokens";
 
 interface InfoFieldListProps {
   fields: InfoField[];
 }
 
+/** Label and value rows (desktop parity); a value still being read shows a skeleton bar. */
 export function InfoFieldList({ fields }: InfoFieldListProps) {
   const { colors, typography } = useTheme();
+  const { t } = useTranslation();
+  const pulse = usePulseOpacity();
 
   return (
     <View style={styles.list}>
@@ -18,29 +23,44 @@ export function InfoFieldList({ fields }: InfoFieldListProps) {
           <Text style={[typography.caption, styles.label, { color: colors.onSurfaceVariant }]}>
             {field.label}
           </Text>
-          <View style={styles.valueRow}>
-            <Text
-              selectable
-              accessibilityRole={field.href ? "link" : "text"}
-              onPress={
-                field.href
-                  ? () => {
-                      void Linking.openURL(field.href ?? "");
-                    }
-                  : undefined
-              }
+          {field.loading ? (
+            <Animated.View
+              accessible
+              accessibilityRole="progressbar"
+              accessibilityLabel={t("modal.info.loading")}
               style={[
-                typography.mono,
-                styles.value,
-                { color: colors.onSurface },
-                field.href ? styles.link : undefined,
+                styles.skeleton,
+                {
+                  backgroundColor: colorAlpha(colors.onSurfaceVariant, 0.22),
+                  opacity: pulse,
+                },
               ]}
-            >
-              {field.value}
-            </Text>
-            {/* The app home is private app storage: the Files app cannot open it. */}
-            {field.id === "app_home" ? null : <RevealPathButton path={field.openPath} />}
-          </View>
+            />
+          ) : (
+            <View style={styles.valueRow}>
+              <Text
+                selectable
+                accessibilityRole={field.href ? "link" : "text"}
+                onPress={
+                  field.href
+                    ? () => {
+                        void Linking.openURL(field.href ?? "");
+                      }
+                    : undefined
+                }
+                style={[
+                  typography.mono,
+                  styles.value,
+                  { color: colors.onSurface },
+                  field.href ? styles.link : undefined,
+                ]}
+              >
+                {field.value}
+              </Text>
+              {/* The app home is private app storage: the Files app cannot open it. */}
+              {field.id === "app_home" ? null : <RevealPathButton path={field.openPath} />}
+            </View>
+          )}
         </View>
       ))}
     </View>
@@ -68,5 +88,11 @@ const styles = StyleSheet.create({
   },
   link: {
     textDecorationLine: "underline",
+  },
+  skeleton: {
+    width: "40%",
+    height: 12,
+    marginTop: 4,
+    borderRadius: 4,
   },
 });

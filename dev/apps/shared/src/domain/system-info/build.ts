@@ -8,8 +8,19 @@ import {
   selectionLabel,
   type DeviceGroups,
 } from "../folder-lists";
-import type { AppDistribution } from "../vault-root";
-import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
+import {
+  vaultRootLogsDisplayPath,
+  vaultRootUprivOpenPath,
+  type AppDistribution,
+} from "../vault-root";
+import {
+  loadingField,
+  withOpenPath,
+  type InfoField,
+  type InfoSection,
+  type InfoTranslate,
+} from "../info";
+import { formatBytes } from "../format/bytes";
 import type { SystemInfoSnapshot } from "./types";
 
 const DISTRIBUTION_KEYS: Record<AppDistribution, I18nKey> = {
@@ -83,35 +94,121 @@ export function buildSystemInfoSections(
     device,
     root,
     dataFolders,
+    dataFolderBytes,
     inventory,
     ui,
     logging,
     unlockedFolders,
     backups,
     lastOpenedVault,
-    paths,
   } = snapshot;
-  const here = device.id;
+  const here = device?.id ?? null;
   const groupHere = <F extends string>(groups: DeviceGroups<F>) =>
     here ? groups[here] : undefined;
-  const dataFolderInUse =
-    root.status === "found" && root.source === "explicit"
-      ? t("modal.info.value.root_source.explicit")
-      : selectionLabel(
-          selectionHere(dataFolders.groups, here, DATA_FOLDER_LIST),
-          groupHere(dataFolders.groups),
-          t,
-        );
-  const rowCounts = t("modal.info.value.rows_here", {
-    data: rowsHere(dataFolders.groups, here),
-    unlocked: rowsHere(unlockedFolders.devices, here),
-    backups: rowsHere(backups.devices, here),
-  });
+  /** A row that needs `ready` read first: loading until then. */
+  const once = (ready: boolean, id: string, label: string, value: () => string): InfoField =>
+    ready ? { id, label, value: value() } : loadingField(id, label);
+  const found = root?.status === "found" ? root : null;
 
-  const distribution = app.distribution != null ? t(DISTRIBUTION_KEYS[app.distribution]) : "—";
+  const dataFolderInUseLabel = t("modal.info.field.data_folder_in_use");
+  const dataFolderInUse: InfoField =
+    root && dataFolders && device
+      ? {
+          id: "data_folder_in_use",
+          label: dataFolderInUseLabel,
+          value:
+            found?.source === "explicit"
+              ? t("modal.info.value.root_source.explicit")
+              : selectionLabel(
+                  selectionHere(dataFolders.groups, here, DATA_FOLDER_LIST),
+                  groupHere(dataFolders.groups),
+                  t,
+                ),
+        }
+      : loadingField("data_folder_in_use", dataFolderInUseLabel);
+  const rowsHereLabel = t("modal.info.field.rows_here");
+  const rowCounts: InfoField =
+    dataFolders && device
+      ? {
+          id: "rows_here",
+          label: rowsHereLabel,
+          value: t("modal.info.value.rows_here", {
+            data: rowsHere(dataFolders.groups, here),
+            unlocked: rowsHere(unlockedFolders.devices, here),
+            backups: rowsHere(backups.devices, here),
+          }),
+        }
+      : loadingField("rows_here", rowsHereLabel);
 
-  const rootFields =
-    root.status === "found"
+  const appFields: InfoField[] = app
+    ? [
+        { id: "version", label: t("modal.info.field.version"), value: app.version },
+        {
+          id: "distribution",
+          label: t("modal.info.field.distribution"),
+          value: app.distribution != null ? t(DISTRIBUTION_KEYS[app.distribution]) : "—",
+        },
+        {
+          id: "version_source",
+          label: t("modal.info.field.version_source"),
+          value: t(app.versionOffline ? "modal.info.value.offline" : "modal.info.value.online"),
+        },
+      ]
+    : [
+        loadingField("version", t("modal.info.field.version")),
+        loadingField("distribution", t("modal.info.field.distribution")),
+        loadingField("version_source", t("modal.info.field.version_source")),
+      ];
+
+  const deviceFields: InfoField[] = device
+    ? [
+        {
+          id: "device_name",
+          label: t("modal.info.field.device_name"),
+          value: deviceName(device.id, device.system, snapshot.osNames, t),
+        },
+        {
+          id: "device_system",
+          label: t("modal.info.field.device_system"),
+          value: t(deviceSystemI18nKey(device.system)),
+        },
+        {
+          id: "device_os",
+          label: t("modal.info.field.device_os"),
+          value: device.os ?? t("modal.info.value.device_os.none"),
+        },
+        {
+          id: "device_id",
+          label: t("modal.info.field.device_id"),
+          // The hashed ID itself: the key of this device's group in every list.
+          value: device.id ?? t("modal.info.value.device_id.unknown"),
+        },
+      ]
+    : [
+        loadingField("device_name", t("modal.info.field.device_name")),
+        loadingField("device_system", t("modal.info.field.device_system")),
+        loadingField("device_os", t("modal.info.field.device_os")),
+        loadingField("device_id", t("modal.info.field.device_id")),
+      ];
+
+  // Measured on its own, so a slow drive holds back this row alone.
+  const sizeLabel = t("modal.info.field.data_folder_size");
+  const sizeField: InfoField =
+    dataFolderBytes === "measuring"
+      ? loadingField("data_folder_size", sizeLabel)
+      : {
+          id: "data_folder_size",
+          label: sizeLabel,
+          value: formatBytes(dataFolderBytes ?? undefined),
+        };
+
+  const rootFields: InfoField[] = !root
+    ? [
+        loadingField("root_status", t("modal.info.field.root_status")),
+        loadingField("root_path", t("modal.info.field.root_path")),
+        sizeField,
+      ]
+    : root.status === "found"
       ? [
           {
             id: "root_status",
@@ -127,6 +224,7 @@ export function buildSystemInfoSections(
             label: t("modal.info.field.root_source"),
             value: t(ROOT_SOURCE_KEYS[root.source]),
           },
+          sizeField,
         ]
       : [
           {
@@ -141,14 +239,8 @@ export function buildSystemInfoSections(
       id: "app",
       title: t("modal.info.section.app"),
       fields: [
-        { id: "version", label: t("modal.info.field.version"), value: app.version },
-        { id: "distribution", label: t("modal.info.field.distribution"), value: distribution },
-        {
-          id: "version_source",
-          label: t("modal.info.field.version_source"),
-          value: t(app.versionOffline ? "modal.info.value.offline" : "modal.info.value.online"),
-        },
-        ...(device.system === "windows"
+        ...appFields,
+        ...(device?.system === "windows"
           ? [
               {
                 id: "winfsp",
@@ -163,41 +255,12 @@ export function buildSystemInfoSections(
     {
       id: "this_device",
       title: t("modal.info.section.this_device"),
-      fields: [
-        {
-          id: "device_name",
-          label: t("modal.info.field.device_name"),
-          value: deviceName(device.id, device.system, t),
-        },
-        {
-          id: "device_system",
-          label: t("modal.info.field.device_system"),
-          value: t(deviceSystemI18nKey(device.system)),
-        },
-        {
-          id: "device_id",
-          label: t("modal.info.field.device_id"),
-          // The hashed ID itself: the key of this device's group in every list.
-          value: device.id ?? t("modal.info.value.device_id.unknown"),
-        },
-      ],
+      fields: deviceFields,
     },
     {
       id: "data_folder",
       title: t("modal.info.section.data_folder"),
-      fields: [
-        {
-          id: "data_folder_in_use",
-          label: t("modal.info.field.data_folder_in_use"),
-          value: dataFolderInUse,
-        },
-        ...rootFields,
-        {
-          id: "rows_here",
-          label: t("modal.info.field.rows_here"),
-          value: rowCounts,
-        },
-      ],
+      fields: [dataFolderInUse, ...rootFields, rowCounts],
     },
     {
       id: "inventory",
@@ -327,11 +390,6 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.lifecycle_confirm_lock),
         },
         {
-          id: "lifecycle_row_runs_button",
-          label: t("modal.info.field.lifecycle_row_runs_button"),
-          value: yesNo(t, ui.lifecycle_row_runs_button),
-        },
-        {
           id: "always_show_hidden_vaults",
           label: t("modal.info.field.always_show_hidden_vaults"),
           value: yesNo(t, ui.always_show_hidden_vaults),
@@ -368,16 +426,19 @@ export function buildSystemInfoSections(
       id: "folders",
       title: t("modal.info.section.folders"),
       fields: [
-        {
-          id: "unlocked_folder_in_use",
-          label: t("modal.info.field.unlocked_folder_in_use"),
-          value: selectionLabel(
-            selectionHere(unlockedFolders.devices, here, APP_UNLOCKED_LIST),
-            groupHere(unlockedFolders.devices),
-            t,
-          ),
-        },
-        ...(isPhoneSystem(device.system)
+        once(
+          device !== null,
+          "unlocked_folder_in_use",
+          t("modal.info.field.unlocked_folder_in_use"),
+          () =>
+            selectionLabel(
+              selectionHere(unlockedFolders.devices, here, APP_UNLOCKED_LIST),
+              groupHere(unlockedFolders.devices),
+              t,
+            ),
+        ),
+        // A phone mounts no encrypted vault's folder, so it has no row.
+        ...(device && isPhoneSystem(device.system)
           ? []
           : [
               {
@@ -386,15 +447,17 @@ export function buildSystemInfoSections(
                 value: yesNo(t, unlockedFolders.encrypted_vaults),
               },
             ]),
-        {
-          id: "backup_folder_in_use",
-          label: t("modal.info.field.backup_folder_in_use"),
-          value: selectionLabel(
-            selectionHere(backups.devices, here, APP_BACKUP_LIST),
-            groupHere(backups.devices),
-            t,
-          ),
-        },
+        once(
+          device !== null,
+          "backup_folder_in_use",
+          t("modal.info.field.backup_folder_in_use"),
+          () =>
+            selectionLabel(
+              selectionHere(backups.devices, here, APP_BACKUP_LIST),
+              groupHere(backups.devices),
+              t,
+            ),
+        ),
         {
           id: "last_opened_vault",
           label: t("modal.app_settings.field.last_opened_vault"),
@@ -406,14 +469,27 @@ export function buildSystemInfoSections(
       id: "paths",
       title: t("modal.info.section.paths"),
       fields: [
-        withOpenPath(
-          { id: "app_home", label: t("modal.info.field.app_home"), value: paths.appHome },
-          paths.appHome,
-        ),
-        withOpenPath(
-          { id: "logs_path", label: t("modal.info.field.logs_path"), value: paths.logsDir },
-          paths.logsOpenPath,
-        ),
+        // The app home holds the data folder list; on a computer it is Default's folder.
+        dataFolders
+          ? withOpenPath(
+              {
+                id: "app_home",
+                label: t("modal.info.field.app_home"),
+                value: dataFolders.defaultFolder ?? "—",
+              },
+              dataFolders.defaultFolder,
+            )
+          : loadingField("app_home", t("modal.info.field.app_home")),
+        root === null
+          ? loadingField("logs_path", t("modal.info.field.logs_path"))
+          : withOpenPath(
+              {
+                id: "logs_path",
+                label: t("modal.info.field.logs_path"),
+                value: found ? vaultRootLogsDisplayPath(found.rootPath) : "—",
+              },
+              found ? vaultRootUprivOpenPath(found.rootPath, "logs") : null,
+            ),
       ],
     },
   ];

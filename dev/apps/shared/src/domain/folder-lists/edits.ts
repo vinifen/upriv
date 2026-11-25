@@ -12,8 +12,9 @@ import {
 
 /**
  * The pure edits a draft makes to one list. Each returns new groups and never
- * changes the ones it was given. Only what differs from the defaults is kept:
- * a group that holds nothing is dropped.
+ * changes the ones it was given. A group is made the first time it holds
+ * something and stays until Remove device takes it (`removeGroup`): deleting
+ * its rows or selecting the default again keeps it.
  */
 
 /** The current device as a list edits it: it has an ID. */
@@ -65,7 +66,8 @@ export function otherGroups<F extends string>(
     .sort(([aId, a], [bId, b]) => a.system.localeCompare(b.system) || aId.localeCompare(bId));
 }
 
-function holdsSomething<F extends string>(
+/** Rows, or a selection other than the list's default: what a group is made for. */
+export function holdsSomething<F extends string>(
   group: DeviceGroup<F>,
   policy: FolderListPolicy<F>,
 ): boolean {
@@ -78,10 +80,8 @@ function withGroup<F extends string>(
   group: DeviceGroup<F>,
   policy: FolderListPolicy<F>,
 ): DeviceGroups<F> {
-  const next = { ...groups };
-  if (holdsSomething(group, policy)) next[id] = group;
-  else delete next[id];
-  return next;
+  if (!groups[id] && !holdsSomething(group, policy)) return groups;
+  return { ...groups, [id]: group };
 }
 
 function editGroup<F extends string>(
@@ -226,7 +226,11 @@ export function selectHere<F extends string>(
   );
 }
 
-/** Remove another device's group. The current device's rows go one by one. */
+/**
+ * Remove device: drop another device's group, its rows and its selection.
+ * Only this list's setting goes; that device keeps working with the list's
+ * default. The current device's group is never removed here.
+ */
 export function removeGroup<F extends string>(
   groups: DeviceGroups<F>,
   id: DeviceId,

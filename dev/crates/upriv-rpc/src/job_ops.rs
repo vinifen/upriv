@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::logging::{log_event, LogLevel};
-use upriv_core::{cancel_job, job_status, JobStop};
+use upriv_core::{cancel_job, job_status, skip_job_backup, JobStatus, JobStop};
 
 use super::{err, map_core_err, ok, RpcResponse};
 
@@ -54,13 +54,7 @@ pub(super) fn status(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     ok(match job_status(&parsed.job) {
-        Some(status) => json!({
-            "running": true,
-            "bytesDone": status.bytes_done,
-            "bytesTotal": status.bytes_total,
-            "stoppable": status.stoppable,
-            "step": status.step.map(|step| step.as_str()),
-        }),
+        Some(status) => running_status(status),
         None => json!({
             "running": false,
             "bytesDone": 0,
@@ -68,6 +62,18 @@ pub(super) fn status(params: Value) -> RpcResponse {
             "stoppable": true,
             "step": null,
         }),
+    })
+}
+
+/// A running job's progress, as `job_status` and a close's backup
+/// (`vault_close_phase`) answer it.
+pub(super) fn running_status(status: JobStatus) -> Value {
+    json!({
+        "running": true,
+        "bytesDone": status.bytes_done,
+        "bytesTotal": status.bytes_total,
+        "stoppable": status.stoppable,
+        "step": status.step.map(|step| step.as_str()),
     })
 }
 
@@ -92,6 +98,27 @@ pub(super) fn cancel(params: Value) -> RpcResponse {
     );
     match stopped {
         Ok(stop) => ok(json!({ "stopping": stop == JobStop::Stopping })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Stop the backup the job writes before its change (a password change's
+/// Back up first) and let the job go on without it. `stopping: false` when
+/// the job is not writing one now: it has none, or it went past it.
+pub(super) fn skip_backup(params: Value) -> RpcResponse {
+    let parsed: JobParams = match parse(params) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+    match skip_job_backup(&parsed.job) {
+        Ok(stopping) => {
+            log_event(
+                LogLevel::Info,
+                "job_backup_skip",
+                &[("outcome", if stopping { "stopping" } else { "none" })],
+            );
+            ok(json!({ "stopping": stopping }))
+        }
         Err(error) => map_core_err(error),
     }
 }

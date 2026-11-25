@@ -31,7 +31,7 @@ use super::files_zip::FILES_ZIP_EXPAND_FACTOR;
 use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
-use super::import_job::fill_new_vault;
+use super::import_job::{fill_new_vault, ImportedVault};
 use super::package::{imported_vault_name, Package, PackageWalk, Placed};
 use super::seven_zip_pack::{seven_zip_decode_threads, sevenz_member_name_unsafe, sevenz_password};
 
@@ -393,7 +393,7 @@ fn import_reader<R: Read + Seek>(
     archive_len: u64,
     extras: ImportExtras<'_>,
     job: &Job,
-) -> Result<String> {
+) -> Result<ImportedVault> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
@@ -452,7 +452,7 @@ pub fn import_logical_seven_zip(
     archive_password: &[u8],
     extras: ImportExtras<'_>,
     job_id: &str,
-) -> Result<String> {
+) -> Result<ImportedVault> {
     let vault_id = config.vault.id.clone();
     Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
         let reader = open_archive_reader(archive_bytes, archive_password, job)?;
@@ -481,7 +481,7 @@ pub fn import_logical_seven_zip_path(
     archive_password: &[u8],
     extras: ImportExtras<'_>,
     job_id: &str,
-) -> Result<String> {
+) -> Result<ImportedVault> {
     let vault_id = config.vault.id.clone();
     Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
         let (reader, len) = open_archive_path(archive_path, archive_password, job)?;

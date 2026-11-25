@@ -75,6 +75,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
         },
         unlocked_folders: parsed.unlocked_folders,
         backups: parsed.backups,
+        os_names: parsed.os_names,
     };
     Ok(LoadedAppSettings {
         settings,
@@ -95,6 +96,21 @@ pub(crate) fn update_app_settings(
     write_settings_toml_only(root, &settings)
 }
 
+/// Note this device's OS name in `settings.toml` at `root`, from a fresh read
+/// under the settings write lock. Written only when its line says something
+/// else.
+pub(crate) fn note_os_name_in_settings(root: &Path) -> Result<()> {
+    let _guard = lock_settings_write();
+    let mut settings = load_app_settings_at(root)?.settings;
+    if settings
+        .os_names
+        .note_here(crate::device::this_device(), crate::os_name::this_os_name())
+    {
+        write_settings_toml_only(root, &settings)?;
+    }
+    Ok(())
+}
+
 /// Write settings.toml at `root` from `settings`, with `lists` applied to the
 /// lists as the file holds them now. The settings lock is let go before any
 /// vault's file is written, so a vault that saves a switch meanwhile never
@@ -109,6 +125,8 @@ pub fn save_app_settings_at(
         let _guard = lock_settings_write();
         let saved = load_app_settings_at(root)?.settings;
         let mut after = settings.clone();
+        // Each device writes its own OS name: a save keeps the file's.
+        after.os_names = saved.os_names.clone();
         let leaving = apply_app_lists(&vault_root, &saved, &mut after, lists)?;
         write_settings_toml_only(root, &after)?;
         leaving
@@ -162,6 +180,34 @@ mod tests {
         let loaded = load_app_settings_at(dir.path()).unwrap();
         assert_eq!(loaded.settings.ui.locale, "pt-BR");
         assert!(loaded.on_disk);
+    }
+
+    #[test]
+    fn each_device_notes_its_own_os_name_and_a_save_keeps_every_name() {
+        let dir = tempfile::tempdir().unwrap();
+        initialize_vault_root(dir.path()).unwrap();
+        let settings_path = dir.path().join(".upriv/settings.toml");
+        let laptop = crate::device::DeviceId::from_machine_id(b"laptop");
+        let mut raw = crate::host_fs::read_to_string(&settings_path).unwrap();
+        raw.push_str(&format!(
+            "\n[os_names]\n{} = \"Windows 11 Pro\"\n",
+            laptop.as_str()
+        ));
+        crate::host_fs::write(&settings_path, raw).unwrap();
+
+        note_os_name_in_settings(dir.path()).unwrap();
+        let noted = load_app_settings_at(dir.path()).unwrap().settings.os_names;
+        assert_eq!(noted.get(&laptop), Some("Windows 11 Pro"));
+        if let Some(here) = crate::device::this_device().id.as_ref() {
+            assert_eq!(noted.get(here), crate::os_name::this_os_name());
+        }
+
+        // A save from the UI carries no names: the file keeps its own.
+        save_app_settings(dir.path(), &AppSettings::default()).unwrap();
+        assert_eq!(
+            load_app_settings_at(dir.path()).unwrap().settings.os_names,
+            noted
+        );
     }
 
     #[test]

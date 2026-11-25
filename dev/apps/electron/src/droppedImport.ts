@@ -60,14 +60,34 @@ export async function readDroppedImportPaths(inputPaths: unknown): Promise<Dropp
   return { files: out, truncated, symlinks: [] };
 }
 
+/** Keep in sync with `@upriv/shared` `IMPORT_BLOCKED_LIST_MAX`. */
+const BLOCKED_LIST_MAX = 500;
+
+/** Why an item of a drop cannot be imported (`@upriv/shared` `ImportBlockReason`). */
+export type DroppedBlockReason = "permission" | "missing" | "unreadable" | "special" | "link";
+
+export type DroppedBlockedItem = {
+  /** From the dropped item, its own name first. */
+  path: string;
+  reason: DroppedBlockReason;
+};
+
 export type DroppedImportStatResult = {
   files: DroppedImportStat[];
-  /** Roots whose `lstat` failed. An empty directory is readable and stays out of this list. */
-  unreadable: string[];
+  /**
+   * Dropped paths whose own `lstat` failed, with why. The renderer may still
+   * hold their bytes from the drop. An empty directory is readable and stays
+   * out of this list.
+   */
+  unreadable: { osPath: string; reason: DroppedBlockReason }[];
+  /**
+   * The other items of the drop that cannot be imported: the first
+   * `BLOCKED_LIST_MAX` the walk met. `blockedCount` counts every one.
+   */
+  blocked: DroppedBlockedItem[];
+  blockedCount: number;
   /** True when free memory or depth stopped the walk before every file was listed. */
   truncated: boolean;
-  /** A symlink was in the tree. `files` is empty; the import must not continue. */
-  symlinks: string[];
 };
 
 type StatBudget = {
@@ -75,7 +95,24 @@ type StatBudget = {
   /** One in-process copy of the path list. The renderer clones it again over IPC. */
   retainedBytes: number;
   truncated: boolean;
+  blocked: DroppedBlockedItem[];
+  blockedCount: number;
 };
+
+/** Why `error`, from reading an item, keeps it out (as core's `read_reason`). */
+function blockReason(error: unknown): DroppedBlockReason {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "EACCES" || code === "EPERM") return "permission";
+  if (code === "ENOENT" || code === "ENOTDIR") return "missing";
+  return "unreadable";
+}
+
+function block(budget: StatBudget, relative: string, reason: DroppedBlockReason): void {
+  budget.blockedCount += 1;
+  if (budget.blocked.length < BLOCKED_LIST_MAX) {
+    budget.blocked.push({ path: relative.replace(/\\/g, "/"), reason });
+  }
+}
 
 /** Bytes for one path pair in one heap (UTF-16 strings plus a small object). */
 function statEntryBytes(relativePath: string, osPath: string): number {
@@ -160,31 +197,40 @@ export async function classifyDroppedPath(input: unknown): Promise<DroppedPathKi
 /**
  * List dropped files as path + size only. File bytes stay on disk.
  * Stops when the path list would crowd out the reserve, or when a directory
- * is deeper than `MAX_DEPTH`. A symlink refuses the listing.
+ * is deeper than `MAX_DEPTH`. Every item that cannot be imported is named
+ * with why, so nothing is left out unseen: a folder that cannot be listed, a
+ * file this user cannot read, a socket, pipe, or device, and a dropped link.
+ * Links inside a dropped folder are skipped, never followed, as a new
+ * vault's import does.
  */
 export async function statDroppedImportPaths(
   inputPaths: unknown,
 ): Promise<DroppedImportStatResult> {
-  if (!Array.isArray(inputPaths)) {
-    return { files: [], unreadable: [], truncated: false, symlinks: [] };
-  }
-  const budget: StatBudget = { files: [], retainedBytes: 0, truncated: false };
-  const unreadable: string[] = [];
-  const found = { symlink: null as string | null };
-  for (const raw of inputPaths) {
+  const budget: StatBudget = {
+    files: [],
+    retainedBytes: 0,
+    truncated: false,
+    blocked: [],
+    blockedCount: 0,
+  };
+  const unreadable: DroppedImportStatResult["unreadable"] = [];
+  for (const raw of Array.isArray(inputPaths) ? inputPaths : []) {
     if (budget.truncated) break;
     if (typeof raw !== "string") continue;
     const trimmed = raw.trim();
     if (!trimmed) continue;
     const abs = path.resolve(trimmed);
     if (!path.isAbsolute(abs)) continue;
-    const status = await walkDroppedStats(abs, path.basename(abs), 0, budget, found);
-    if (status === "symlink" && found.symlink) {
-      return { files: [], unreadable, truncated: false, symlinks: [found.symlink] };
-    }
-    if (status === "unreadable") unreadable.push(abs);
+    const status = await walkDroppedStats(abs, path.basename(abs), 0, budget);
+    if (typeof status === "object") unreadable.push({ osPath: abs, reason: status.unreadable });
   }
-  return { files: budget.files, unreadable, truncated: budget.truncated, symlinks: [] };
+  return {
+    files: budget.files,
+    unreadable,
+    blocked: budget.blocked,
+    blockedCount: budget.blockedCount,
+    truncated: budget.truncated,
+  };
 }
 
 export async function readDroppedPathRange(
@@ -331,14 +377,14 @@ async function walkDroppedPath(
   return false;
 }
 
-type WalkStatus = "ok" | "unreadable" | "stop" | "symlink";
+/** A dropped path whose own `lstat` failed answers why; the walk goes on. */
+type WalkStatus = "ok" | "stop" | { unreadable: DroppedBlockReason };
 
 async function walkDroppedStats(
   abs: string,
   relative: string,
   depth: number,
   budget: StatBudget,
-  found: { symlink: string | null },
 ): Promise<WalkStatus> {
   if (budget.truncated) return "stop";
   if (depth > MAX_DEPTH) {
@@ -350,12 +396,14 @@ async function walkDroppedStats(
   let st;
   try {
     st = await fs.lstat(abs);
-  } catch {
-    return "unreadable";
+  } catch (error) {
+    if (depth === 0) return { unreadable: blockReason(error) };
+    block(budget, relative, blockReason(error));
+    return "ok";
   }
   if (st.isSymbolicLink()) {
-    found.symlink = abs;
-    return "symlink";
+    if (depth === 0) block(budget, relative, "link");
+    return "ok";
   }
 
   if (st.isDirectory()) {
@@ -368,8 +416,8 @@ async function walkDroppedStats(
     let names: string[];
     try {
       names = await fs.readdir(abs);
-    } catch {
-      budget.truncated = true;
+    } catch (error) {
+      block(budget, relative, blockReason(error));
       return "ok";
     }
     for (const name of names) {
@@ -378,14 +426,22 @@ async function walkDroppedStats(
         path.posix.join(relative, name),
         depth + 1,
         budget,
-        found,
       );
-      if (status === "symlink" || status === "stop") return status;
+      if (status === "stop") return status;
     }
     return "ok";
   }
 
-  if (!st.isFile()) return "ok";
+  if (!st.isFile()) {
+    block(budget, relative, "special");
+    return "ok";
+  }
+  try {
+    await fs.access(abs, fsConstants.R_OK);
+  } catch (error) {
+    block(budget, relative, blockReason(error));
+    return "ok";
+  }
   const relativePath = relative.replace(/\\/g, "/");
   if (!canAppendStat(budget, relativePath, abs)) {
     budget.truncated = true;

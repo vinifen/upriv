@@ -34,7 +34,7 @@ use super::embedded_settings::EmbeddedVaultSettings;
 use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
-use super::import_job::fill_new_vault;
+use super::import_job::{fill_new_vault, ImportedVault};
 use super::package::{imported_vault_name, is_os_junk, Package};
 use super::seven_zip_pack::sevenz_member_name_unsafe;
 use super::zip_io::{buffered_zip_reader, StoreEnvelope};
@@ -464,7 +464,7 @@ fn import_reader<R: Read + Seek>(
     source_len: u64,
     extras: ImportExtras<'_>,
     job: &Job,
-) -> Result<String> {
+) -> Result<ImportedVault> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
@@ -505,7 +505,7 @@ pub fn import_logical_files_zip(
     zip_bytes: &[u8],
     extras: ImportExtras<'_>,
     job_id: &str,
-) -> Result<String> {
+) -> Result<ImportedVault> {
     let vault_id = config.vault.id.clone();
     Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
         import_reader(
@@ -530,7 +530,7 @@ pub fn import_logical_files_zip_path(
     zip_path: &Path,
     extras: ImportExtras<'_>,
     job_id: &str,
-) -> Result<String> {
+) -> Result<ImportedVault> {
     if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }

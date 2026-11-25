@@ -18,7 +18,7 @@ import {
   type VaultListItem,
   type VaultPipelineListStatus,
 } from "@upriv/shared";
-import { useVaultInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useOsNames, useVaultInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 
 interface VaultInfoModalProps {
   vault: VaultListItem | null;
@@ -54,6 +54,7 @@ export function VaultInfoModal({
     vaultRootService,
     folderListService,
     securityService,
+    osNames: useOsNames(),
     fallbackVaultRootBase: "",
   });
 

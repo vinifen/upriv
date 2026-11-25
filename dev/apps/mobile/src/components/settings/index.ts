@@ -7,6 +7,7 @@ export {
   DisplayNameFieldError,
 } from "./settingsFields";
 export { IntegerInput } from "./IntegerInput";
+export { KdfPresetChoice } from "./KdfPresetChoice";
 export { PolicyRadioOption } from "./PolicyRadioOption";
 export { SettingsAccordionSection } from "./SettingsAccordionSection";
 export { UnlockedFolderLineView } from "./UnlockedFolderLineView";

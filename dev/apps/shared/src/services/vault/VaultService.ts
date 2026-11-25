@@ -3,6 +3,7 @@ import type { VaultExportRequest, VaultExportResult, VaultListItem } from "../..
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { ListsSaved, VaultListChanges } from "../../domain/folder-lists";
 import type { VaultDeleteOutcome, VaultRow } from "../../domain/vault";
+import type { ImportEnding } from "../../domain/vault-create/importBlocked";
 import type { VaultWelcomeFiles } from "../../domain/vault-create/welcomeReadme";
 import type { VaultDiskUsage } from "../../domain/vault-info";
 
@@ -19,6 +20,20 @@ export interface VaultImportPackage {
   archivePassword?: string;
   /** A `.7z` or `.zip` of files: keep the file manager layout it carries. */
   keepWorkspace?: boolean;
+  /**
+   * A file or folder (`os_tree`): import without the items that cannot be
+   * imported, as the person chose after the import named them.
+   */
+  leaveOut?: boolean;
+}
+
+/**
+ * A vault a create made, and how its import ended: the items it left out
+ * (`leaveOut` only), and whether the person stopped it, keeping the files
+ * that got in.
+ */
+export interface CreatedVault extends ImportEnding {
+  vault: VaultListItem;
 }
 
 export interface CreateVaultInput {
@@ -68,10 +83,12 @@ export interface VaultService {
   /**
    * Scratch create: writes `config.toml` + seeded `store/` (password is not stored).
    * `input.importPackage` routes to an import instead. `input.welcome` adds
-   * `README.md` and the layout that opens it. Runs as the job `job`: a stop
-   * removes the new vault and rejects with `job_cancelled`.
+   * `README.md` and the layout that opens it. Runs as the job `job`. A stop
+   * of an import that fills the vault (files, a folder, a `.7z`, a `.zip` of
+   * files) with files in keeps them: it resolves with `stopped`. Any other
+   * stop removes the new vault and rejects with `job_cancelled`.
    */
-  createVault(input: CreateVaultInput, job: string): Promise<VaultListItem>;
+  createVault(input: CreateVaultInput, job: string): Promise<CreatedVault>;
 
   /** Load `vaults/<id>/config.toml` equivalent. */
   getSettings(vaultId: string): Promise<VaultSettingsConfig | undefined>;
@@ -138,8 +155,10 @@ export interface VaultService {
   exportCapabilities(): Promise<{ sevenZip: boolean }>;
 
   /**
-   * Clear what a crash left from a job: delete the vaults an import never
-   * finished and remove the unfinished export files. Core logs the outcome.
+   * Clear what a crash left from a job: delete the vaults whose create or
+   * store copy never finished and remove the unfinished export files.
+   * Answers the ids of the vaults it deleted; core logs the outcome. A vault
+   * whose import was cut off is not one: it stays, in recovery.
    */
-  sweepUnfinished(): Promise<void>;
+  sweepUnfinished(): Promise<{ removedVaults: string[] }>;
 }

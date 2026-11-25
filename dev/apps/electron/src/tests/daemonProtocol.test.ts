@@ -11,6 +11,7 @@ import {
   MAX_STDOUT_BUFFER_CHARS,
   SHUTDOWN_METHOD,
   SHUTDOWN_NOW_TIMEOUT_MS,
+  DaemonRpcError,
   formatRpcError,
   parseDaemonStdoutLine,
   rpcTimeoutErrorMessage,
@@ -77,5 +78,17 @@ describe("daemon protocol helpers", () => {
         throw new Error("wrong_password: wrong password");
       }),
     ).resolves.toEqual({ ok: false, error: "wrong_password: wrong password" });
+  });
+
+  it("keeps the details core sent with a failed daemon answer", async () => {
+    const details = { count: 1, items: [{ path: "Work/db", reason: "permission" }] };
+    await expect(
+      settleInvoke(async () => {
+        throw new DaemonRpcError(
+          { code: "import_blocked", message: "1 items", details },
+          "daemon RPC failed",
+        );
+      }),
+    ).resolves.toEqual({ ok: false, error: "import_blocked: 1 items", details });
   });
 });

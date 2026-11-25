@@ -77,12 +77,11 @@ export function appListChanges(
   const unlocked = listChanges(
     saved.unlocked_folders.devices,
     draft.unlocked_folders.devices,
-    hereId,
     APP_UNLOCKED_LIST,
   );
   return {
     unlockedFolders: locks.unlockedHere ? withoutHere(unlocked, hereId) : unlocked,
-    backups: listChanges(saved.backups.devices, draft.backups.devices, hereId, APP_BACKUP_LIST),
+    backups: listChanges(saved.backups.devices, draft.backups.devices, APP_BACKUP_LIST),
   };
 }
 
@@ -102,12 +101,11 @@ export function vaultListChanges(
   const unlocked = listChanges(
     saved.unlocked_folder.devices,
     draft.unlocked_folder.devices,
-    hereId,
     VAULT_UNLOCKED_LIST,
   );
   return {
     unlockedFolder: locks.unlockedHere ? withoutHere(unlocked, hereId) : unlocked,
-    backup: listChanges(saved.backup.devices, draft.backup.devices, hereId, VAULT_BACKUP_LIST),
+    backup: listChanges(saved.backup.devices, draft.backup.devices, VAULT_BACKUP_LIST),
   };
 }
 

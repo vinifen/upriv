@@ -19,8 +19,9 @@ import { Warning } from "@/components/settings/settingsFields";
 import { VaultSettingsStorageSection } from "./vaultSettingsForm";
 
 /**
- * The Storage screen: the two options, the folder plain text would fill on
- * this device, and the vault's password, which seals the choice.
+ * The Storage screen, as every change screen lays out (desktop parity): what
+ * the change does, the vault's password, which seals the choice, then the two
+ * options with the folder plain text would fill on this device.
  */
 export function VaultChangeStorageFields({
   vaultId,
@@ -30,7 +31,6 @@ export function VaultChangeStorageFields({
   onChange,
   passwordFieldError,
   error,
-  busy = false,
 }: {
   vaultId: string;
   /** The copy in `config.toml`, which the screen starts from. */
@@ -42,11 +42,8 @@ export function VaultChangeStorageFields({
   /** Wrong password: shown under that field. */
   passwordFieldError?: string | null;
   error?: string | null;
-  /** This change is already running. */
-  busy?: boolean;
 }) {
   const { t } = useTranslation();
-  const locked = blocked || busy;
   const destination = useUnlockedDestination(
     rpcVaultUnlockedDestination,
     vaultId,
@@ -58,13 +55,27 @@ export function VaultChangeStorageFields({
 
   return (
     <View style={{ gap: spacing.md }}>
+      {blocked ? (
+        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("action.change_storage"))}</FieldHint>
+      ) : null}
       <VaultSettingsStorageSection
         config={fields.storage}
-        disabled={locked}
-        disabledLine={
-          blocked ? t(requireVaultConfigEditLockedI18nKey("action.change_storage")) : null
-        }
+        disabled={blocked}
         onChange={(patch) => onChange({ storage: { ...fields.storage, ...patch } })}
+        aboveChoice={
+          <>
+            <FieldLabel disabled={blocked}>{t("vault.change_storage.password")}</FieldLabel>
+            <PasswordInput
+              value={fields.password}
+              disabled={blocked}
+              invalid={Boolean(passwordFieldError)}
+              onChangeText={(password) => onChange({ password })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {passwordFieldError ? <Warning>{passwordFieldError}</Warning> : null}
+          </>
+        }
         plainNote={
           <UnlockedFolderLineView
             checking={destination.checking}
@@ -74,16 +85,6 @@ export function VaultChangeStorageFields({
         }
       />
       <FieldHint>{t("vault.change_storage.no_conversion")}</FieldHint>
-      <FieldLabel disabled={locked}>{t("vault.change_storage.password")}</FieldLabel>
-      <PasswordInput
-        value={fields.password}
-        disabled={locked}
-        invalid={Boolean(passwordFieldError)}
-        onChangeText={(password) => onChange({ password })}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
-      {passwordFieldError ? <Warning>{passwordFieldError}</Warning> : null}
       {unchanged && fields.password.length > 0 ? (
         <Warning>{t("vault.change_storage.same_as_current")}</Warning>
       ) : null}

@@ -18,9 +18,9 @@ import {
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
-import { ElapsedTime, TextWidthProbe } from "@/components/ui";
+import { ElapsedTime } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { disarmRowButton, useRowArming, useRowButtonStack } from "@upriv/shared/react";
+import { disarmRowButton, useRowArming } from "@upriv/shared/react";
 import { claimRowArmTouch } from "@/hooks/useRowArmingDismiss";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
@@ -33,7 +33,6 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
-import { VaultPasswordChangeLine } from "./VaultPasswordChangeLine";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
 import { VaultFileManagerIndicator } from "@/features/vaults/file-manager";
@@ -123,9 +122,9 @@ export function VaultRow({
   const density = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
   const blockTitleSize = VAULT_ROW_DENSITY.blocks.titleSize;
   const { chrome, onLayout: onChromeLayout } = useVaultRowChrome();
-  const { stacked, measure } = useRowButtonStack();
-  // A row with its buttons on their own line has the room for the full look.
-  const comfortable = chrome === "comfortable" || stacked;
+  // One line at every width: a narrow row drops the name circle and the
+  // button labels, and the name truncates.
+  const comfortable = chrome === "comfortable";
   const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
   const lastAccessedText =
@@ -135,11 +134,7 @@ export function VaultRow({
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
   const claimTouch = () => claimRowArmTouch(vault.id);
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const rowClick = vaultRowClick(role, {
-    open: isOpen,
-    resumeOpen,
-    runsButton: appSettings.ui.lifecycle_row_runs_button,
-  });
+  const rowClick = vaultRowClick(role, { open: isOpen, resumeOpen });
   const activateRow = () => {
     if (isDragging || rowClick === null) return;
     if (rowClick === "file_manager") onOpenFileManager(vault);
@@ -195,7 +190,6 @@ export function VaultRow({
 
   const handleLayout = (event: LayoutChangeEvent) => {
     onChromeLayout(event);
-    measure("rowWidth", event.nativeEvent.layout.width);
     dropTargetProps?.onLayout?.();
   };
 
@@ -223,25 +217,14 @@ export function VaultRow({
 
   const identity = (
     <View style={styles.identity}>
-      <View
-        style={styles.titleRow}
-        onLayout={(event) => measure("slotWidth", event.nativeEvent.layout.width)}
-      >
-        <TextWidthProbe
-          text={vault.displayName}
-          style={[styles.title, { fontSize: density.titleSize }]}
-          onWidth={(width) => measure("textWidth", width)}
-        />
+      <View style={styles.titleRow}>
         <Text
           style={[styles.title, { color: colors.onSurface, fontSize: density.titleSize }]}
           numberOfLines={1}
         >
           {vault.displayName}
         </Text>
-        <View
-          style={styles.titleMarks}
-          onLayout={(event) => measure("besideWidth", event.nativeEvent.layout.width)}
-        >
+        <View style={styles.titleMarks}>
           <VaultPlaintextIndicator storageMode={vault.storageMode} />
           <VaultLastOpenedIndicator active={isLastOpened} />
           <VaultFileManagerIndicator vaultId={vault.id} />
@@ -255,7 +238,6 @@ export function VaultRow({
           {lastAccessedOrElapsed}
         </View>
       </View>
-      <VaultPasswordChangeLine vault={vault} />
       <VaultPlainRecordLine
         vault={vault}
         onRetry={onPlainRecordRetry}
@@ -287,7 +269,6 @@ export function VaultRow({
           {lastAccessedOrElapsed}
         </View>
       </View>
-      <VaultPasswordChangeLine vault={vault} />
       <VaultPlainRecordLine
         vault={vault}
         onRetry={onPlainRecordRetry}
@@ -371,7 +352,6 @@ export function VaultRow({
       accessibilityLabel={activateLabel}
       style={[
         styles.row,
-        stacked ? styles.rowStacked : null,
         nested ? styles.memberRow : null,
         {
           paddingVertical: density.paddingY,
@@ -419,7 +399,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     overflow: "visible",
   },
-  rowStacked: { flexDirection: "column", alignItems: "stretch", gap: spacing.sm },
   memberRow: { marginBottom: 0 },
   rowTop: {
     flexGrow: 1,

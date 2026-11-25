@@ -196,8 +196,47 @@ mod local {
     }
 
     /// Every file's overwrite on the disk, with one flush of the drive's cache
+    /// for all of them. One file is a plain flush of that file. Nothing else
+    /// the file system holds unwritten goes out with them: plain text an open
+    /// just wrote would hold the batch, and a close hurried meanwhile, until a
+    /// slow drive took all of it.
+    #[cfg(target_os = "linux")]
+    fn make_durable(files: &[&std::fs::File]) -> io::Result<()> {
+        match files {
+            [] => Ok(()),
+            [only] => only.sync_all(),
+            [.., last] => {
+                files.iter().try_for_each(|file| write_out(file))?;
+                last.sync_data()
+            }
+        }
+    }
+
+    /// Send `file`'s bytes to the drive and wait for them, without a flush of
+    /// the drive's cache. A file system that cannot do that flushes the file.
+    #[cfg(target_os = "linux")]
+    fn write_out(file: &std::fs::File) -> io::Result<()> {
+        let flags = libc::SYNC_FILE_RANGE_WAIT_BEFORE
+            | libc::SYNC_FILE_RANGE_WRITE
+            | libc::SYNC_FILE_RANGE_WAIT_AFTER;
+        // SAFETY: the descriptor is open for the life of `file`, and the call
+        // reads no memory of this process. A length of 0 runs to the end.
+        match check(unsafe { libc::sync_file_range(file.as_raw_fd(), 0, 0, flags) }) {
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
+                ) =>
+            {
+                file.sync_data()
+            }
+            other => other,
+        }
+    }
+
+    /// Every file's overwrite on the disk, with one flush of the drive's cache
     /// for all of them. One file is a plain flush of that file.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "android")]
     fn make_durable(files: &[&std::fs::File]) -> io::Result<()> {
         match files {
             [] => Ok(()),

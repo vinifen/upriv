@@ -10,11 +10,9 @@ import { useDeviceService, useFolderListService, useVaultRootService } from "@/p
 import {
   besideFolder,
   folderStatusLine,
-  plainFolderClassI18nKey,
   plainPlaceProblem,
   type AppUnlockedChoice,
   type DeviceGroups,
-  type PlainFolderClass,
   type PlainPlaceChoice,
   type RowProblem,
   type StatusLine as StatusLineValue,
@@ -31,11 +29,8 @@ interface PlainPlaceModalProps {
   /** The vault's own unlocked folders; `null` while they load. */
   vaultUnlocked: DeviceGroups<VaultUnlockedChoice> | null;
   submitting: boolean;
-  /** Set after a choice was saved and the folder is not a normal local disk. */
-  warningClass: PlainFolderClass | null;
   onClose: () => void;
   onContinue: (choice: PlainPlaceChoice, path: string) => void;
-  onAcceptWarning: () => void;
 }
 
 /**
@@ -44,7 +39,9 @@ interface PlainPlaceModalProps {
  * a folder added to the app's list, or one added to this vault's own list.
  * A typed or picked folder is checked as it changes, by the rules of the row
  * it becomes and then on the disk once it settles; Continue waits until it
- * passes, then saves it as that list's choice on this device.
+ * passes, then saves it as that list's choice on this device. The unlock
+ * window that follows names the folder, and warns when its drive is
+ * removable, network, or cloud.
  */
 export function PlainPlaceModal({
   open,
@@ -53,10 +50,8 @@ export function PlainPlaceModal({
   appUnlocked,
   vaultUnlocked,
   submitting,
-  warningClass,
   onClose,
   onContinue,
-  onAcceptWarning,
 }: PlainPlaceModalProps) {
   const { t } = useTranslation();
   const { toast, showError, dismiss } = useErrorToast();
@@ -64,7 +59,6 @@ export function PlainPlaceModal({
   const folderLists = useFolderListService();
   const here = hereDevice(useDeviceInfo(useDeviceService()));
   const group = useId();
-  const warningKey = warningClass ? plainFolderClassI18nKey(warningClass) : null;
   const [choice, setChoice] = useState<PlainPlaceChoice | null>(null);
   /** The data folder in use: `undefined` while it is being worked out, `null` when there is none. */
   const [dataFolder, setDataFolder] = useState<string | null | undefined>(undefined);
@@ -202,90 +196,81 @@ export function PlainPlaceModal({
             <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
               {t("action.cancel")}
             </Button>
-            {warningKey ? (
-              <Button variant="primary" size="sm" disabled={submitting} onClick={onAcceptWarning}>
-                {t("plain.confirm.action")}
-              </Button>
-            ) : (
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={submitting || !canContinue || !choice}
-                onClick={() => {
-                  if (!choice || !canContinue) return;
-                  const path =
-                    choice === "app_folder" ? appPath : choice === "vault_folder" ? vaultPath : "";
-                  onContinue(choice, path.trim());
-                }}
-              >
-                {t("action.continue")}
-              </Button>
-            )}
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={submitting || !canContinue || !choice}
+              onClick={() => {
+                if (!choice || !canContinue) return;
+                const path =
+                  choice === "app_folder" ? appPath : choice === "vault_folder" ? vaultPath : "";
+                onContinue(choice, path.trim());
+              }}
+            >
+              {t("action.continue")}
+            </Button>
           </div>
         }
       >
         <div className="space-y-4">
           <p className="text-sm leading-relaxed text-on-surface-variant">{t("plain.place.body")}</p>
-          {warningKey ? (
-            <p className="text-sm leading-relaxed text-on-surface-variant">{t(warningKey)}</p>
-          ) : (
-            <div role="radiogroup" aria-label={t("plain.place.title")} className="grid gap-2">
-              {!appChoices ? (
-                <p className="text-sm leading-relaxed text-on-surface-variant">
-                  {t("plain.place.app_locked")}
-                </p>
-              ) : null}
-              <PolicyRadioOption
-                groupName={group}
-                value="beside"
-                checked={choice === "beside"}
-                attention={besideMissing}
-                title={t("plain.place.beside")}
-                description={t("plain.place.beside_desc")}
-                disabled={submitting || !appChoices}
-                onSelect={() => setChoice("beside")}
-                footer={<PathField value={besidePath ?? ""} readOnly />}
-              />
-              <PolicyRadioOption
-                groupName={group}
-                value="app_folder"
-                checked={choice === "app_folder"}
-                attention={appCheck.attention}
-                title={t("plain.place.app_folder")}
-                description={t("plain.place.app_folder_desc")}
-                disabled={submitting || !appChoices}
-                onSelect={() => setChoice("app_folder")}
-                footer={
-                  <PlacePathEditor
-                    value={appPath}
-                    line={appCheck.line}
-                    disabled={submitting}
-                    onChange={setAppPath}
-                    onPick={() => pickInto(setAppPath, appPath)}
-                  />
-                }
-              />
-              <PolicyRadioOption
-                groupName={group}
-                value="vault_folder"
-                checked={choice === "vault_folder"}
-                attention={vaultCheck.attention}
-                title={t("plain.place.vault_folder")}
-                description={t("plain.place.vault_folder_desc")}
-                disabled={submitting}
-                onSelect={() => setChoice("vault_folder")}
-                footer={
-                  <PlacePathEditor
-                    value={vaultPath}
-                    line={vaultCheck.line}
-                    disabled={submitting}
-                    onChange={setVaultPath}
-                    onPick={() => pickInto(setVaultPath, vaultPath)}
-                  />
-                }
-              />
-            </div>
-          )}
+          <div role="radiogroup" aria-label={t("plain.place.title")} className="grid gap-2">
+            {!appChoices ? (
+              <p className="text-sm leading-relaxed text-on-surface-variant">
+                {t("plain.place.app_locked")}
+              </p>
+            ) : null}
+            <PolicyRadioOption
+              groupName={group}
+              value="beside"
+              checked={choice === "beside"}
+              attention={besideMissing}
+              title={t("plain.place.beside")}
+              badge="default"
+              description={t("plain.place.beside_desc")}
+              disabled={submitting || !appChoices}
+              onSelect={() => setChoice("beside")}
+              footer={<PathField value={besidePath ?? ""} readOnly />}
+            />
+            <PolicyRadioOption
+              groupName={group}
+              value="app_folder"
+              checked={choice === "app_folder"}
+              attention={appCheck.attention}
+              title={t("plain.place.app_folder")}
+              description={t("plain.place.app_folder_desc")}
+              disabled={submitting || !appChoices}
+              onSelect={() => setChoice("app_folder")}
+              footer={
+                <PlacePathEditor
+                  value={appPath}
+                  line={appCheck.line}
+                  disabled={submitting}
+                  onChange={setAppPath}
+                  onPick={() => pickInto(setAppPath, appPath)}
+                />
+              }
+            />
+            <PolicyRadioOption
+              groupName={group}
+              value="vault_folder"
+              checked={choice === "vault_folder"}
+              attention={vaultCheck.attention}
+              title={t("plain.place.vault_folder")}
+              description={t("plain.place.vault_folder_desc")}
+              disabled={submitting}
+              onSelect={() => setChoice("vault_folder")}
+              footer={
+                <PlacePathEditor
+                  value={vaultPath}
+                  line={vaultCheck.line}
+                  disabled={submitting}
+                  onChange={setVaultPath}
+                  onPick={() => pickInto(setVaultPath, vaultPath)}
+                />
+              }
+            />
+          </div>
         </div>
       </Modal>
       <Toast toast={toast} onDismiss={dismiss} className="z-[160]" />

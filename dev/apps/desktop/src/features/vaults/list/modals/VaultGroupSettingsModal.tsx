@@ -46,10 +46,10 @@ interface VaultGroupSettingsModalProps {
   open: boolean;
   onClose: () => void;
   onSave: (patch: VaultGroupSettingsSavePatch) => Promise<void> | void;
-  onDelete: () => Promise<void> | void;
   onBusyTimeout?: () => void;
 }
 
+/** Group settings, the first entry of the group's Settings menu; Delete group is its last. */
 export function VaultGroupSettingsModal({
   group,
   vaults,
@@ -58,7 +58,6 @@ export function VaultGroupSettingsModal({
   open,
   onClose,
   onSave,
-  onDelete,
   onBusyTimeout,
 }: VaultGroupSettingsModalProps) {
   const { t } = useTranslation();
@@ -76,8 +75,6 @@ export function VaultGroupSettingsModal({
     useState<VaultListSortDirection>("asc");
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
-  /** The Delete group window shows in place of the settings. */
-  const [deleteOpen, setDeleteOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const limit = useOperationLimit(busy);
 
@@ -92,7 +89,6 @@ export function VaultGroupSettingsModal({
       setGroupedVaultSortDirection("asc");
       setHidden(false);
       setBusy(false);
-      setDeleteOpen(false);
       setError(null);
       return;
     }
@@ -116,7 +112,6 @@ export function VaultGroupSettingsModal({
 
   const validation = validateDisplayName(displayName);
   const canSave = Boolean(group) && !validation && !busy;
-  const canConfirmDelete = group !== null && !busy;
 
   const toggleGroupedVault = (vaultId: string) => {
     setGroupedVaults((current) =>
@@ -152,62 +147,7 @@ export function VaultGroupSettingsModal({
     }
   };
 
-  const remove = async () => {
-    if (!canConfirmDelete) return;
-    const generation = ++busyGen.current;
-    setBusy(true);
-    setError(null);
-    try {
-      await onDelete();
-      if (generation !== busyGen.current) return;
-      onClose();
-    } catch (caught) {
-      if (generation !== busyGen.current) return;
-      setError(t(desktopErrorI18nKey(caught)));
-      setBusy(false);
-    }
-  };
-
   if (!open || !group) return null;
-
-  if (deleteOpen) {
-    return (
-      <Modal
-        open={open}
-        title={t("vault.group.settings.delete")}
-        titleIcon="trash"
-        contextTitle={group.displayName}
-        onClose={() => {
-          if (!busy) setDeleteOpen(false);
-        }}
-        dismissible={!busy}
-        panelClassName="max-w-md"
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="md" onClick={() => setDeleteOpen(false)} disabled={busy}>
-              {t("action.cancel")}
-            </Button>
-            <Button
-              variant="danger"
-              size="md"
-              disabled={!canConfirmDelete}
-              onClick={() => void remove()}
-            >
-              {t("vault.group.settings.delete")}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-on-surface-variant">{t("vault.group.settings.delete_help")}</p>
-          <p className="text-sm text-on-surface-variant">
-            {t("vault.group.settings.delete_confirm")}
-          </p>
-          {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
-        </div>
-      </Modal>
-    );
-  }
 
   return (
     <Modal
@@ -219,26 +159,13 @@ export function VaultGroupSettingsModal({
       dismissible={!busy}
       panelClassName="max-w-3xl"
       footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button
-            variant="ghost"
-            size="md"
-            disabled={busy}
-            onClick={() => {
-              setError(null);
-              setDeleteOpen(true);
-            }}
-          >
-            {t("vault.group.settings.delete_entry")}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="md" onClick={close} disabled={busy}>
+            {t("action.cancel")}
           </Button>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="md" onClick={close} disabled={busy}>
-              {t("action.cancel")}
-            </Button>
-            <Button variant="primary" size="md" disabled={!canSave} onClick={() => void save()}>
-              {t("vault.group.settings.save")}
-            </Button>
-          </div>
+          <Button variant="primary" size="md" disabled={!canSave} onClick={() => void save()}>
+            {t("vault.group.settings.save")}
+          </Button>
         </div>
       }
     >

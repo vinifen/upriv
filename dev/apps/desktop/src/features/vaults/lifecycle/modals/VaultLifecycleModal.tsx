@@ -1,14 +1,14 @@
 import { useEffect, useId, useState } from "react";
-import { Button, ElapsedTime, JobStopButton, Modal, PasswordInput } from "@/components/ui";
+import { Button, JobProgressBar, JobStopButton, Modal, PasswordInput } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
 import {
+  jobStepCopy,
   lifecycleBusyLabelKey,
   offersVaultRebuild,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
   unlockFolderLine,
-  vaultRowWorkClock,
   VAULT_ERROR_CODES,
   type UnlockedDestination,
   type VaultListItem,
@@ -115,6 +115,7 @@ export function VaultLifecycleModal({
   const rebuildOffered = !submitting && error !== null && offersVaultRebuild(verifyErrorKey);
   const headerLost =
     verifyErrorKey === requireVaultErrorI18nKey(VAULT_ERROR_CODES.HEADER_UNREADABLE);
+  const busyKey = lifecycleBusyLabelKey("unlock", pipelineStep);
 
   return (
     <Modal
@@ -127,22 +128,13 @@ export function VaultLifecycleModal({
       panelClassName="max-w-md"
       footer={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {submitting ? (
-            <>
-              <span className="text-sm text-on-surface-variant" role="status">
-                {work?.startedAt != null
-                  ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
-                  : t("vault.status.queued")}
-              </span>
-              {work?.stop ? (
-                <JobStopButton
-                  size="sm"
-                  stoppingSince={work.stoppingSince}
-                  stoppable={work.stop !== "final"}
-                  onStop={onStop}
-                />
-              ) : null}
-            </>
+          {submitting && work?.stop ? (
+            <JobStopButton
+              size="sm"
+              stoppingSince={work.stoppingSince}
+              stoppable={work.stop !== "final"}
+              onStop={onStop}
+            />
           ) : rebuildOffered ? (
             <Button variant="primary" size="sm" onClick={() => onRebuild(password)}>
               {t("unlock.rebuild")}
@@ -189,8 +181,14 @@ export function VaultLifecycleModal({
             {t(headerLost ? "unlock.rebuild_header_help" : "unlock.rebuild_help")}
           </p>
         ) : null}
+        {/* Stop counts its own wait; the bar shows the step until then. */}
         {submitting && work?.stop !== "stopping" ? (
-          <ElapsedTime startedAt={vaultRowWorkClock(work)} />
+          <JobProgressBar
+            progress={null}
+            startedAt={work?.startedAt ?? null}
+            label={t("unlock.title")}
+            copy={jobStepCopy(null, busyKey)}
+          />
         ) : null}
       </div>
     </Modal>

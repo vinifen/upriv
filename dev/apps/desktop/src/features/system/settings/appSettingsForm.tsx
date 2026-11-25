@@ -8,6 +8,7 @@ import {
   SettingsField,
   SettingsFormGrid,
   UnlockedFolderDriverNotice,
+  useFixedFolders,
   usePickFolder,
   useRowStatuses,
   useUnlockedFolderDriver,
@@ -86,7 +87,6 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const confirmCloseNowId = useId();
   const confirmStopId = useId();
   const confirmLockId = useId();
-  const rowRunsButtonId = useId();
 
   return (
     <SettingsFormGrid>
@@ -171,13 +171,6 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         onChange={(lifecycle_confirm_lock) => onChange({ lifecycle_confirm_lock })}
         label={t("modal.app_settings.field.lifecycle_confirm_lock")}
         hint={t("modal.app_settings.field.lifecycle_confirm_lock_help")}
-      />
-      <SwitchRow
-        id={rowRunsButtonId}
-        checked={config.lifecycle_row_runs_button}
-        onChange={(lifecycle_row_runs_button) => onChange({ lifecycle_row_runs_button })}
-        label={t("modal.app_settings.field.lifecycle_row_runs_button")}
-        hint={t("modal.app_settings.field.lifecycle_row_runs_button_help")}
       />
     </SettingsFormGrid>
   );
@@ -525,6 +518,7 @@ export function AppSettingsBackupsSection({
   const { t } = useTranslation();
   const { renderStatus } = useRowStatuses("backup", config.devices, here, null);
   const pickFolder = usePickFolder();
+  const folders = useFixedFolders(here, null);
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
@@ -541,6 +535,7 @@ export function AppSettingsBackupsSection({
             choice: "data_folder",
             title: t("folder_list.choice.data_folder"),
             description: t("modal.settings.field.backup.folder_data_desc"),
+            folder: folders.dataFolderBackups,
           },
         ]}
         renderStatus={renderStatus}
@@ -578,59 +573,82 @@ export function AppSettingsUnlockedFoldersSection({
   const { renderStatus } = useRowStatuses("unlocked", config.devices, here, null);
   const pickFolder = usePickFolder();
   const phone = here ? isPhoneSystem(here.system) : false;
+  const encryptedGroup = useId();
   const beside = vaultRootPath && here ? besideFolder(here.system, vaultRootPath) : null;
   return (
     <SettingsFormGrid>
-      <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("modal.app_settings.section.unlocked_folders_intro")}
-      </p>
-      <SwitchRow
+      <SettingsField
         label={t("modal.app_settings.field.encrypted_vaults")}
         hint={t(
           phone
             ? "modal.settings.field.unlocked_folder.phone"
             : "modal.app_settings.field.encrypted_vaults_help",
         )}
-        checked={config.encrypted_vaults}
-        disabled={phone || !driver.known || driver.busy}
-        onChange={(encrypted_vaults) => {
-          void (async () => {
-            if (encrypted_vaults && !(await driver.ensureInstalled())) return;
-            onChange({ encrypted_vaults });
-          })();
-        }}
-      />
-      <UnlockedFolderDriverNotice
-        kind={driver.kind}
-        missing={config.encrypted_vaults && driver.missing}
-        busy={driver.busy}
-        onInstall={driver.ensureInstalled}
-      />
-      <FolderList
-        label={t("modal.app_settings.section.unlocked_folders")}
-        policy={APP_UNLOCKED_LIST}
-        groups={config.devices}
-        saved={saved.devices}
-        here={here}
-        lockedHint={lockedHint}
-        selectionMissing={
-          encryptedFolderUnchosen(config, null, here)
-            ? t("modal.app_settings.field.unlocked_folders.unchosen")
-            : null
-        }
-        fixed={[
-          {
-            choice: "beside",
-            title: t("folder_list.choice.beside"),
-            description: t("modal.app_settings.field.unlocked_folders.beside_desc"),
-            folder: beside,
-          },
-        ]}
-        fixedFolders={here ? appUnlockedFixedFolders(here.system, vaultRootPath) : []}
-        renderStatus={renderStatus}
-        pickFolder={pickFolder}
-        onChange={(devices) => onChange({ devices })}
-      />
+        disabled={phone}
+      >
+        <div
+          role="radiogroup"
+          aria-label={t("modal.app_settings.field.encrypted_vaults")}
+          className="grid gap-2"
+        >
+          {(["on", "off"] as const).map((value) => (
+            <PolicyRadioOption
+              key={value}
+              groupName={encryptedGroup}
+              value={value}
+              checked={config.encrypted_vaults === (value === "on")}
+              // On wants folders their driver cannot give yet.
+              attention={value === "on" && driver.missing}
+              disabled={phone || !driver.known || driver.busy}
+              title={t(`modal.settings.option.unlocked_folder.encrypted.${value}`)}
+              description={t(`modal.settings.option.unlocked_folder.encrypted.${value}_app_desc`)}
+              onSelect={() => {
+                const encrypted_vaults = value === "on";
+                void (async () => {
+                  if (encrypted_vaults && !(await driver.ensureInstalled())) return;
+                  onChange({ encrypted_vaults });
+                })();
+              }}
+            />
+          ))}
+        </div>
+        <UnlockedFolderDriverNotice
+          kind={driver.kind}
+          missing={config.encrypted_vaults && driver.missing}
+          busy={driver.busy}
+          onInstall={driver.ensureInstalled}
+        />
+      </SettingsField>
+      <SettingsField
+        label={t("modal.app_settings.field.unlocked_folders.list")}
+        hint={t("modal.app_settings.field.unlocked_folders.list_help")}
+      >
+        <FolderList
+          label={t("modal.app_settings.field.unlocked_folders.list")}
+          policy={APP_UNLOCKED_LIST}
+          groups={config.devices}
+          saved={saved.devices}
+          here={here}
+          lockedHint={lockedHint}
+          selectionMissing={
+            encryptedFolderUnchosen(config, null, here)
+              ? t("modal.app_settings.field.unlocked_folders.unchosen")
+              : null
+          }
+          fixed={[
+            {
+              choice: "beside",
+              title: t("folder_list.choice.beside"),
+              description: t("modal.app_settings.field.unlocked_folders.beside_desc"),
+              folder: beside,
+            },
+          ]}
+          fixedFolders={here ? appUnlockedFixedFolders(here.system, vaultRootPath) : []}
+          renderStatus={renderStatus}
+          pickFolder={pickFolder}
+          onChange={(devices) => onChange({ devices })}
+        />
+      </SettingsField>
     </SettingsFormGrid>
   );
 }

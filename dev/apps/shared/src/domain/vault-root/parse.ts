@@ -1,4 +1,5 @@
 import { RpcError } from "../core-rpc/errors";
+import { parseOsNames } from "../device";
 import {
   DATA_FOLDER_LIST,
   parseChoiceName,
@@ -107,9 +108,19 @@ export function parseDataFolderList(raw: unknown): DataFolderListView {
   const list = asRecord(record.list ?? {}, "data_folder_list list");
   return {
     groups: parseDeviceGroups(list.devices, DATA_FOLDER_LIST),
+    osNames: parseOsNames(list.os_names),
     defaultFolder: typeof record.defaultFolder === "string" ? record.defaultFolder : null,
     explicit: typeof record.explicit === "string" ? record.explicit : null,
   };
+}
+
+/** Parse `data_folder_size`: the bytes of every file in the data folder's `.upriv`. */
+export function parseDataFolderSize(raw: unknown): number {
+  const { bytes } = asRecord(raw, "data_folder_size");
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
+    throw new RpcError(INVALID_RESPONSE, "data_folder_size: bytes is not a size", raw);
+  }
+  return bytes;
 }
 
 /** Parse `data_folder_apply`. */

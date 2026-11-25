@@ -11,7 +11,7 @@ import {
   type VaultListItem,
   type VaultPipelineListStatus,
 } from "@upriv/shared";
-import { useVaultInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useOsNames, useVaultInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import {
@@ -58,6 +58,7 @@ export function VaultInfoModal({
     vaultRootService,
     folderListService,
     securityService,
+    osNames: useOsNames(),
     fallbackVaultRootBase: "",
   });
 

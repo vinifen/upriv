@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::folder_list::backup::AppBackupFolders;
 use crate::folder_list::unlocked::AppUnlockedFolders;
+use crate::os_name::OsNames;
 
 use super::toml::{
     default_entries, default_keep, default_locale, default_log_level, default_sort,
@@ -32,6 +33,10 @@ pub struct AppSettings {
     /// `[backups]`: the app's backup folder list, per device.
     #[serde(default)]
     pub backups: AppBackupFolders,
+    /// `[os_names]`: the name each device's OS gave itself. Core's own: the
+    /// wire carries it apart (`osNames`), and a save never sets it.
+    #[serde(skip)]
+    pub os_names: OsNames,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,11 +101,6 @@ pub struct UiSettings {
     /// its password window, so it never asks twice.
     #[serde(default = "default_false")]
     pub lifecycle_confirm_lock: bool,
-    /// A click on the row of a vault that is not open presses its button
-    /// (Unlock, Stop). Default false. An open vault's row always opens its
-    /// file manager, and a running open reopens its password window.
-    #[serde(default = "default_false")]
-    pub lifecycle_row_runs_button: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,7 +154,6 @@ impl Default for AppSettings {
                 lifecycle_confirm_close_now: true,
                 lifecycle_confirm_stop: true,
                 lifecycle_confirm_lock: false,
-                lifecycle_row_runs_button: false,
             },
             logging: LoggingSettings {
                 enabled: true,
@@ -167,6 +166,7 @@ impl Default for AppSettings {
             },
             unlocked_folders: AppUnlockedFolders::default(),
             backups: AppBackupFolders::default(),
+            os_names: OsNames::default(),
         }
     }
 }

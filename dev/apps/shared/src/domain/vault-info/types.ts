@@ -1,4 +1,5 @@
 import type { VaultBackupSection } from "../backups";
+import type { OsNames } from "../device";
 import type { UnlockedFolderInfo } from "../folder-lists";
 import type { VaultKeyStatus } from "../vault/keyChanges";
 import type { VaultListItem } from "../vault-list";
@@ -18,9 +19,24 @@ export interface VaultRuntimeStats {
   logicalFileCount: number | null;
 }
 
+/** Where the vault's files sit in the data folder, as shown and as the file manager opens them. */
+export interface VaultInfoPaths {
+  storePath: string;
+  backupsPath: string;
+  /** Where the system file manager opens `storePath` (`vaultRootUprivOpenPath`). */
+  storeOpenPath: string;
+  backupsOpenPath: string;
+}
+
+/**
+ * What Vault Info shows. The list row is known at once; each part read from
+ * core fills its rows as it lands (`"reading"`, `"measuring"`, or `null`
+ * while read, as each field says), so a slow one never holds the others.
+ */
 export interface VaultInfoSnapshot {
   vault: VaultListItem;
-  settings: VaultSettingsConfig | null;
+  /** `config.toml`; `"reading"` while it is read, `null` when it could not be. */
+  settings: VaultSettingsConfig | null | "reading";
   kdfPreset: KdfUnlockPreset | null;
   groupName: string | null;
   /** True when the vault’s current group is hidden (locks the vault hidden switch). */
@@ -36,10 +52,9 @@ export interface VaultInfoSnapshot {
    * the answer did not come, `"reading"` while it is read.
    */
   keyStatus: VaultKeyStatus | null | "reading";
-  storePath: string;
-  backupsPath: string;
-  /** Where the system file manager opens `storePath` (`vaultRootUprivOpenPath`). */
-  storeOpenPath: string;
-  backupsOpenPath: string;
+  /** `null` while the data folder in use is read. */
+  paths: VaultInfoPaths | null;
   locale: string;
+  /** The OS names the backup folders' devices are named by. */
+  osNames: OsNames;
 }

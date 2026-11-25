@@ -120,10 +120,12 @@ pub fn is_pack_io_method(method: &str) -> bool {
 /// for a data folder that answers, where an unlock would put a vault's files,
 /// an encrypted vault's unlocked folder after its open, and listing,
 /// deleting, pinning, naming, and forgetting
-/// backups. A folder can be a sleeping or dead drive, so they stay off stdin,
-/// where a stop and Close now arrive, on a lane of several threads, so the
-/// rows of a list check side by side. The backups themselves run on the
-/// close and pack lanes.
+/// backups; and the sizes Info measures by walking every file of a vault or
+/// of the data folder. A folder can be a sleeping or dead drive, and a walk
+/// of many files takes long on a slow one, so they stay off stdin, where a
+/// stop and Close now arrive, on a lane of several threads, so the rows of a
+/// list check side by side. The backups themselves run on the close and pack
+/// lanes.
 pub fn is_folder_method(method: &str) -> bool {
     matches!(
         method,
@@ -136,6 +138,8 @@ pub fn is_folder_method(method: &str) -> bool {
             | "backup_promote"
             | "backup_rename"
             | "backup_folder_forget"
+            | "vault_disk_usage"
+            | "data_folder_size"
     )
 }
 
@@ -249,7 +253,6 @@ mod tests {
         assert!(!is_argon2_bound_method("vault_close", &empty));
         assert!(!is_argon2_bound_method("app_settings_save", &empty));
         assert!(!is_argon2_bound_method("vault_list", &empty));
-        assert!(!is_heavy_method("vault_disk_usage", &empty));
         assert!(!is_heavy_method("vault_close_phase", &empty));
         assert!(!is_argon2_bound_method("app_shutdown", &empty));
         assert_eq!(
@@ -323,6 +326,8 @@ mod tests {
             "backup_promote",
             "backup_rename",
             "backup_folder_forget",
+            "vault_disk_usage",
+            "data_folder_size",
         ] {
             assert_eq!(
                 heavy_lane(method, &empty),
@@ -349,6 +354,7 @@ mod tests {
         // Progress and stop answer at once, beside the job they name.
         assert_eq!(heavy_lane("job_status", &empty), None);
         assert_eq!(heavy_lane("job_cancel", &empty), None);
+        assert_eq!(heavy_lane("job_skip_backup", &empty), None);
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_import_7z", &empty)
@@ -406,6 +412,7 @@ mod tests {
             "backup_save",
             "data_folder_export",
             "data_folder_search",
+            "data_folder_size",
             "folder_status",
             "vault_change_kdf",
             "vault_change_password",
@@ -414,6 +421,7 @@ mod tests {
             "vault_create",
             "vault_delete",
             "vault_discard_import",
+            "vault_disk_usage",
             "vault_export",
             "vault_fs_import_os_file",
             "vault_import_7z",

@@ -27,6 +27,7 @@ export function vaultSettingsFixture(
       mode: "keep_last",
       keep_last: 1,
       skip_unchanged: true,
+      keep_current: true,
       devices: {},
     },
     security: {

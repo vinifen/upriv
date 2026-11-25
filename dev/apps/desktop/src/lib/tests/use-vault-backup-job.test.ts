@@ -31,7 +31,11 @@ function serviceSaving(saveNow: BackupService["saveNow"]): BackupService {
 }
 
 function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
-  return { status: async () => null, cancel: vi.fn(async () => undefined) };
+  return {
+    status: async () => null,
+    cancel: vi.fn(async () => undefined),
+    skipBackup: async () => false,
+  };
 }
 
 function events(): VaultBackupJobEvents & {
@@ -158,6 +162,7 @@ describe("useVaultBackupJob", () => {
     const runner: JobService = {
       status: async () => null,
       cancel: vi.fn(async () => Promise.reject(refusal)),
+      skipBackup: async () => false,
     };
     const on = events();
     const service = serviceSaving(() => new Promise<VaultBackupSaved>(() => undefined));
