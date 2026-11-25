@@ -2,8 +2,6 @@ import type { ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import {
   AUTO_CLOSE_WHEN_BUSY,
-  KDF_UNLOCK_OPTION_META,
-  KDF_UNLOCK_PRESETS,
   IDLE_AUTO_CLOSE_MINUTES_MAX,
   IDLE_AUTO_CLOSE_MINUTES_MIN,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -32,6 +30,7 @@ import { spacing } from "@/theme/tokens";
 import { Select } from "@/components/ui";
 import {
   IntegerInput,
+  KdfPresetChoice,
   PolicyRadioOption,
   SettingsAccordionSection,
   VaultBackupFolderField,
@@ -270,6 +269,7 @@ export function VaultSettingsStorageSection({
   disabled = false,
   disabledLine = null,
   plainNote,
+  aboveChoice,
 }: {
   config: VaultSettingsConfig["storage"];
   onChange: (patch: Partial<VaultSettingsConfig["storage"]>) => void;
@@ -279,12 +279,15 @@ export function VaultSettingsStorageSection({
   disabledLine?: string | null;
   /** Under the plain-text option: where its files would be written on this device. */
   plainNote?: ReactNode;
+  /** Between the intro and the options: the Storage screen's password. */
+  aboveChoice?: ReactNode;
 }) {
   const { t } = useTranslation();
   const warning = STORAGE_WARNING[config.mode];
   return (
     <View style={styles.fields}>
       <FieldHint>{t("modal.storage.intro")}</FieldHint>
+      {aboveChoice}
       <FieldLabel disabled={disabled}>{t("modal.storage.field.mode")}</FieldLabel>
       <FieldHint>{t("modal.storage.field.mode_help")}</FieldHint>
       {disabledLine ? <FieldHint>{disabledLine}</FieldHint> : null}
@@ -354,6 +357,7 @@ export function VaultSettingsAutoCloseSection({
             checked={autoClose.when_busy === value}
             disabled={!autoClose.enabled}
             title={t(`modal.settings.field.auto_close.when_busy.${value}`)}
+            description={t(`modal.settings.field.auto_close.when_busy.${value}_desc`)}
             onSelect={() => onAutoCloseChange({ when_busy: value })}
           />
         ))}
@@ -392,33 +396,65 @@ export function VaultSettingsBackupSection({
         value={config.enabled}
         onValueChange={(enabled) => onChange({ enabled })}
       />
-      <SwitchRow
-        label={t("modal.settings.field.backup.skip_unchanged")}
-        hint={t("modal.settings.field.backup.skip_unchanged_help")}
-        value={config.skip_unchanged}
-        disabled={!config.enabled}
-        onValueChange={(skip_unchanged) => onChange({ skip_unchanged })}
-      />
-      <Select
-        label={t("modal.settings.field.backup.mode")}
-        value={config.mode}
-        disabled={!config.enabled}
-        options={[
-          { value: "keep_last", label: t("modal.settings.option.backup.keep_last") },
-          { value: "keep_all", label: t("modal.settings.option.backup.keep_all") },
-        ]}
-        onChange={(mode) => onChange({ mode })}
-      />
-      <FieldLabel disabled={!config.enabled || config.mode !== "keep_last"}>
-        {t("modal.settings.field.backup.keep_last")}
-      </FieldLabel>
-      <IntegerInput
-        min={1}
-        max={99}
-        disabled={!config.enabled || config.mode !== "keep_last"}
-        value={config.keep_last}
-        onChange={(keep_last) => onChange({ keep_last })}
-      />
+      <FieldLabel disabled={!config.enabled}>{t("modal.settings.field.backup.when")}</FieldLabel>
+      <RadioGroup>
+        <PolicyRadioOption
+          value="changed"
+          checked={config.skip_unchanged}
+          disabled={!config.enabled}
+          title={t("modal.settings.option.backup.changed")}
+          description={t("modal.settings.option.backup.changed_desc")}
+          onSelect={() => onChange({ skip_unchanged: true })}
+          footer={
+            <SwitchRow
+              label={t("modal.settings.field.backup.keep_current")}
+              hint={t("modal.settings.field.backup.keep_current_help")}
+              value={config.keep_current}
+              disabled={!config.enabled}
+              onValueChange={(keep_current) => onChange({ keep_current })}
+            />
+          }
+        />
+        <PolicyRadioOption
+          value="every_close"
+          checked={!config.skip_unchanged}
+          disabled={!config.enabled}
+          title={t("modal.settings.option.backup.every_close")}
+          description={t("modal.settings.option.backup.every_close_desc")}
+          onSelect={() => onChange({ skip_unchanged: false })}
+        />
+      </RadioGroup>
+      <FieldLabel disabled={!config.enabled}>{t("modal.settings.field.backup.mode")}</FieldLabel>
+      <RadioGroup>
+        <PolicyRadioOption
+          value="keep_last"
+          checked={config.mode === "keep_last"}
+          disabled={!config.enabled}
+          title={t("modal.settings.option.backup.keep_last")}
+          description={t("modal.settings.option.backup.keep_last_desc")}
+          onSelect={() => onChange({ mode: "keep_last" })}
+          footer={
+            <View style={styles.fieldGroup}>
+              <FieldLabel>{t("modal.settings.field.backup.keep_last")}</FieldLabel>
+              <IntegerInput
+                min={1}
+                max={99}
+                disabled={!config.enabled}
+                value={config.keep_last}
+                onChange={(keep_last) => onChange({ keep_last })}
+              />
+            </View>
+          }
+        />
+        <PolicyRadioOption
+          value="keep_all"
+          checked={config.mode === "keep_all"}
+          disabled={!config.enabled}
+          title={t("modal.settings.option.backup.keep_all")}
+          description={t("modal.settings.option.backup.keep_all_desc")}
+          onSelect={() => onChange({ mode: "keep_all" })}
+        />
+      </RadioGroup>
       <VaultBackupFolderField
         devices={config.devices}
         saved={lists.saved.backups}
@@ -450,25 +486,11 @@ export function KdfSection({
         {t("modal.settings.field.kdf.unlock_preset")}
       </FieldLabel>
       <FieldHint disabled={!choosesPreset}>{t("modal.settings.section.kdf_intro")}</FieldHint>
-      <RadioGroup>
-        {KDF_UNLOCK_PRESETS.map((preset) => {
-          const meta = KDF_UNLOCK_OPTION_META[preset];
-          const selected = choosesPreset ? config.unlock_preset : archivePreset;
-          return (
-            <PolicyRadioOption
-              key={preset}
-              value={preset}
-              checked={selected === preset}
-              disabled={!choosesPreset}
-              title={t(meta.titleKey)}
-              description={t(meta.descKey)}
-              badge={meta.badge}
-              tone={meta.tone}
-              onSelect={() => onChange({ unlock_preset: preset })}
-            />
-          );
-        })}
-      </RadioGroup>
+      <KdfPresetChoice
+        value={choosesPreset ? config.unlock_preset : archivePreset}
+        disabled={!choosesPreset}
+        onChange={(unlock_preset) => onChange({ unlock_preset })}
+      />
       {!choosesPreset ? (
         <FieldHint>{t("modal.settings.field.kdf.import_package")}</FieldHint>
       ) : null}
@@ -526,5 +548,6 @@ export function VaultSettingsGroupSection({
 const styles = StyleSheet.create({
   root: { gap: spacing.sm },
   fields: { gap: spacing.md },
+  fieldGroup: { gap: spacing.xs },
   multiline: { minHeight: 88, textAlignVertical: "top" },
 });

@@ -100,13 +100,6 @@ export interface AppSettingsConfig {
      * false. Unlock only opens its password window, so it never asks twice.
      */
     lifecycle_confirm_lock: boolean;
-    /**
-     * When true, a click on the row of a vault that is not open presses its
-     * button (Unlock, Stop), with the same second press. Default false. An
-     * open vault's row always opens its file manager, and a running or
-     * waiting open reopens its password window (`vaultRowClick`).
-     */
-    lifecycle_row_runs_button: boolean;
   };
   logging: {
     enabled: boolean;
@@ -162,15 +155,14 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.lifecycle_confirm_close_now === b.ui.lifecycle_confirm_close_now &&
     a.ui.lifecycle_confirm_stop === b.ui.lifecycle_confirm_stop &&
     a.ui.lifecycle_confirm_lock === b.ui.lifecycle_confirm_lock &&
-    a.ui.lifecycle_row_runs_button === b.ui.lifecycle_row_runs_button &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&
     a.logging.keep_last_entries === b.logging.keep_last_entries &&
     a.unlocked_folders.encrypted_vaults === b.unlocked_folders.encrypted_vaults &&
     isEmptyListChanges(
-      listChanges(a.unlocked_folders.devices, b.unlocked_folders.devices, null, APP_UNLOCKED_LIST),
+      listChanges(a.unlocked_folders.devices, b.unlocked_folders.devices, APP_UNLOCKED_LIST),
     ) &&
-    isEmptyListChanges(listChanges(a.backups.devices, b.backups.devices, null, APP_BACKUP_LIST))
+    isEmptyListChanges(listChanges(a.backups.devices, b.backups.devices, APP_BACKUP_LIST))
   );
 }

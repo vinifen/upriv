@@ -2,6 +2,7 @@ import type { StorageMode } from "../vault/types";
 import type { KdfUnlockPreset } from "./kdf";
 import { normalizeStoredName } from "../format/storedName";
 import {
+  ENCRYPTED_FOLDER_SWITCHES,
   VAULT_BACKUP_LIST,
   VAULT_UNLOCKED_LIST,
   parseDeviceGroups,
@@ -16,10 +17,14 @@ export {
   CONFIG_TOML_KDF_ANNOTATION,
   CONFIG_TOML_GROUPS_ANNOTATION,
   createVaultChoosesStoreSettings,
+  DEFAULT_KDF_OTHER_PRESET,
   DEFAULT_KDF_UNLOCK_PRESET,
+  KDF_UNLOCK_MAIN_PRESETS,
+  KDF_UNLOCK_OTHER_PRESETS,
   KDF_UNLOCK_PRESETS,
   kdfParamsFromPreset,
   kdfPresetIsDowngrade,
+  kdfPresetIsOther,
   normalizeKdfUnlockPreset,
   parseKdfUnlockPreset,
 } from "./kdf";
@@ -95,7 +100,7 @@ export function sevenZipPatchFromCompressionPreset(
   }
 }
 
-const ENCRYPTED_SWITCHES = new Set<EncryptedFolderSwitch>(["inherit", "on", "off"]);
+const ENCRYPTED_SWITCHES = new Set<EncryptedFolderSwitch>(ENCRYPTED_FOLDER_SWITCHES);
 
 /** Normalize display name, the lists, and seven_zip. */
 export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): VaultSettingsConfig {
@@ -165,6 +170,12 @@ export interface VaultSettingsConfig {
     keep_last: number;
     /** Close skips a zip when vault files match the last backup still on disk. */
     skip_unchanged: boolean;
+    /**
+     * With `skip_unchanged`: files that did not change still get a zip while
+     * no backup in the folder in use holds the vault as it is (the store was
+     * rewritten since, or its last zip is in another folder or gone).
+     */
+    keep_current: boolean;
     /** The vault's backup folder list, per device. */
     devices: DeviceGroups<VaultBackupChoice>;
   };
@@ -191,6 +202,11 @@ export interface VaultSettingsConfig {
     compression_level: number;
     solid: boolean;
   };
+  /**
+   * `[importing]`: an import fills the vault and has not finished. Only core
+   * writes and drops it; a settings save keeps what the file holds.
+   */
+  importing?: { started_at: string };
 }
 
 /** Export-time 7z defaults (create persists these so export can hydrate). */

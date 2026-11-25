@@ -30,9 +30,7 @@ export const desktopVaultService = createLiveVaultService({
   exportVaultToFolder: (vaultId, request, destDir, job) =>
     rpcVaultExportToFolder(vaultId, request, destDir, job),
   exportCapabilities: () => rpcVaultExportCapabilities(),
-  sweepUnfinished: async () => {
-    await rpcVaultUnfinishedSweep();
-  },
+  sweepUnfinished: () => rpcVaultUnfinishedSweep(),
   importZip: (input, job) => rpcVaultImportZip(input, job),
   import7z: (input, job) => rpcVaultImport7z(input, job),
   importFilesZip: (input, job) => rpcVaultImportFilesZip(input, job),

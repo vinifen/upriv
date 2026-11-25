@@ -10,6 +10,7 @@ export { disarmRowButton, useArmedRowButton, useRowArming } from "./useRowArming
 export { useOperationLimit } from "./useOperationLimit";
 export { useIntegerDraft, type UseIntegerDraftOptions } from "./useIntegerDraft";
 export { useUnfinishedSweep } from "./useUnfinishedSweep";
+export { IMPORTING_ROW_POLL_MS, useRefreshWhileImporting } from "./useRefreshWhileImporting";
 export { useOptimisticValue } from "./useOptimisticValue";
 export { useSettledValue } from "./useSettledValue";
 export { useOutlineHeading } from "./useOutlineHeading";
@@ -51,6 +52,7 @@ export {
 } from "./useVaultRebuildJob";
 export {
   usePasswordChangeJob,
+  type PasswordChangeBackupStep,
   type PasswordChangeJob,
   type PasswordChangeJobEvents,
   type PasswordChangeOutcome,
@@ -101,7 +103,7 @@ export { useTreeFolderPresence } from "./useTreeFolderPresence";
 export { useVaultFileTree } from "./useVaultFileTree";
 export { useOpenTabContents } from "./useOpenTabContents";
 export { useValueAfterPaint } from "./useValueAfterPaint";
-export { useRowButtonStack } from "./useRowButtonStack";
+export { useDataFolderPath } from "./useDataFolderPath";
 export { useVaultInfoData, type UseVaultInfoDataOptions } from "./useVaultInfoData";
 export {
   useSystemInfoData,
@@ -118,6 +120,7 @@ export {
 export {
   useVaultPipelineRun,
   type QueuedPipelineJob,
+  type VaultCloseBackupWork,
   type VaultPipelineFailureMode,
   type VaultPipelinePresentation,
   type VaultPipelineRunState,
@@ -147,4 +150,5 @@ export {
   useFileManagerShell,
   type FileManagerController,
 } from "./FileManagerContext";
+export { DeviceNamesProvider, useOsNames } from "./DeviceNames";
 export { hereDevice, useDeviceInfo } from "./useDeviceInfo";

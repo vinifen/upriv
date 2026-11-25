@@ -14,6 +14,7 @@ import {
   DEFAULT_KDF_UNLOCK_PRESET,
   displayNameToVaultId,
   normalizeStoredName,
+  parseCloseVaultOutcome,
   UPRIV_WORKSPACE_PATH,
   VAULT_WELCOME_README_PATH,
   vaultExportFilename,
@@ -66,7 +67,7 @@ import {
 } from "./stores/vaultSettings";
 
 /** Expo Go's stand-in for this phone. */
-const MOCK_DEVICE: DeviceInfo = { id: "e".repeat(32), system: "android" };
+const MOCK_DEVICE: DeviceInfo = { id: "e".repeat(32), system: "android", os: "Android 15" };
 
 /** Stands in for the upriv-core header probe round-trip. */
 const MOCK_IMPORT_PASSWORD_TEST_MS = 400;
@@ -331,7 +332,7 @@ export function createMobileMockServices(): AppServices {
           importVaultFile(id, "/", VAULT_WELCOME_README_PATH.slice(1), input.welcome.readme);
           setVaultFileContent(id, UPRIV_WORKSPACE_PATH, input.welcome.workspace);
         }
-        return item;
+        return { vault: item, leftOut: 0, stopped: false };
       },
       async diskUsage() {
         return null;
@@ -399,7 +400,9 @@ export function createMobileMockServices(): AppServices {
       async exportCapabilities() {
         return { sevenZip: true };
       },
-      async sweepUnfinished() {},
+      async sweepUnfinished() {
+        return { removedVaults: [] };
+      },
     },
 
     vaultGroups: mockGroups.service,
@@ -410,6 +413,9 @@ export function createMobileMockServices(): AppServices {
         return null;
       },
       async cancel() {},
+      async skipBackup() {
+        return false;
+      },
     },
 
     vaultRoot: {
@@ -430,9 +436,15 @@ export function createMobileMockServices(): AppServices {
       async list(options) {
         return {
           groups: options?.newList ? {} : cloneJson(dataFolders),
+          osNames: {},
           defaultFolder: null,
           explicit: null,
         };
+      },
+
+      // Mock vaults keep nothing on disk.
+      async size() {
+        return 0;
       },
 
       async status(path) {
@@ -494,6 +506,7 @@ export function createMobileMockServices(): AppServices {
           settings: cloneJson(runtimeSettings),
           onDisk: settingsOnDisk,
           rootPath: settingsOnDisk ? MOCK_VAULT_ROOT_URI : null,
+          osNames: {},
         };
       },
       async save(config, lists) {
@@ -601,11 +614,11 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.INSUFFICIENT_RAM);
           }
         });
-        return { switches: [], storageReset: null };
+        return { switches: [], storageReset: null, importKept: false };
       },
       async runClosingPipeline(vaultId, onStep) {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep);
-        return { backupFailed: false, backupFailure: null, backupSwitches: [], plain: null };
+        return parseCloseVaultOutcome(null);
       },
       async hurryClose() {
         return true;

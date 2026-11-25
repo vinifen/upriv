@@ -22,5 +22,5 @@ export {
   normalizeBackupName,
 } from "./format";
 export { backupDeleteConfirmPhrase, matchesBackupDeleteConfirmation } from "./deleteConfirm";
-export { BACKUP_EXPORT_PROGRESS_COPY } from "./exportProgress";
+export { BACKUP_EXPORT_PROGRESS_COPY, BACKUP_SAVE_PROGRESS_COPY } from "./progress";
 export { vaultCanSaveBackupNow } from "./saveNow";

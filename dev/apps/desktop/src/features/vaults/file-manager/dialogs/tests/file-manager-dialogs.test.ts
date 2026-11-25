@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPERATION_LIMIT_MS, type HeldSummary } from "@upriv/shared";
+import { OPERATION_LIMIT_MS, type HeldSummary, type ImportBlockedReport } from "@upriv/shared";
 import type { VaultHeld } from "@upriv/shared/react";
 import { I18nProvider } from "@/i18n";
 import type { FileManagerApi } from "../../hooks/useVaultFileManager";
@@ -33,6 +33,12 @@ function heldWith(summary: HeldSummary | null, open = false): VaultHeld {
 
 const NO_HELD = heldWith(null);
 
+function importBlockedWith(report: ImportBlockedReport | null): FileManagerApi["importBlocked"] {
+  return { report, onLeaveOut: vi.fn(), onClose: vi.fn() };
+}
+
+const NO_IMPORT_REPORT = importBlockedWith(null);
+
 function renderDeletePrompt() {
   const fm = {
     workspace: {
@@ -40,6 +46,7 @@ function renderDeletePrompt() {
       unsavedPrompt: null,
     },
     held: NO_HELD,
+    importBlocked: NO_IMPORT_REPORT,
     dispatch: vi.fn(),
     confirmDelete: vi.fn(),
     stopAskingBeforeDelete: vi.fn(),
@@ -62,6 +69,7 @@ function renderUnsavedPrompt(unsavedSaving: boolean) {
       unsavedPrompt: { type: "close_tab", path: "/note.md" },
     },
     held: NO_HELD,
+    importBlocked: NO_IMPORT_REPORT,
     unsavedSaving,
     abandonUnsavedSave: vi.fn(),
     dispatch: vi.fn(),
@@ -133,6 +141,48 @@ describe("FileManagerDialogs delete prompt", () => {
   });
 });
 
+describe("FileManagerDialogs import window", () => {
+  function renderImportBlocked(report: ImportBlockedReport, promptsOpen = true) {
+    const importBlocked = importBlockedWith(report);
+    const fm = {
+      workspace: { deleteTarget: null, unsavedPrompt: null },
+      held: NO_HELD,
+      importBlocked,
+      dispatch: vi.fn(),
+      toast: null,
+      dismissToast: vi.fn(),
+    } as unknown as FileManagerApi;
+    render(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(FileManagerDialogs, { fm, promptsOpen }),
+      }),
+    );
+    return importBlocked;
+  }
+
+  const REFUSED: ImportBlockedReport = {
+    vaultName: "Work",
+    blocked: { count: 1, items: [{ path: "Photos/db", reason: "permission" }], whole: false },
+    stage: "refused",
+  };
+
+  it("asks about a drop it cannot take whole, before anything is copied", async () => {
+    const importBlocked = renderImportBlocked(REFUSED);
+    expect(await screen.findByText("Photos/db")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Import without them" }));
+    expect(importBlocked.onLeaveOut).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(importBlocked.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows nothing while the file manager's prompts are hidden", async () => {
+    renderImportBlocked(REFUSED, false);
+    await act(async () => undefined);
+    expect(screen.queryByText("Photos/db")).toBeNull();
+  });
+});
+
 describe("FileManagerDialogs set-aside data", () => {
   function renderHeld() {
     const held = heldWith(
@@ -153,6 +203,7 @@ describe("FileManagerDialogs set-aside data", () => {
     const fm = {
       workspace: { deleteTarget: null, unsavedPrompt: null },
       held,
+      importBlocked: NO_IMPORT_REPORT,
       dispatch: vi.fn(),
       showToast: vi.fn(),
       toast: null,

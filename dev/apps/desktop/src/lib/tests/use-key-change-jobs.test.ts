@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   JOB_ERROR_CODES,
   RpcError,
+  type JobProgress,
   type JobService,
   type PasswordChangeFinishResult,
   type PasswordChangeResult,
@@ -30,8 +31,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/** A password change as the settings window starts it. */
+const CHANGE = {
+  currentPassword: "old",
+  newPassword: "new",
+  backUpFirst: true,
+  passwordHint: "",
+};
+
 function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
-  return { status: async () => null, cancel: vi.fn(async () => undefined) };
+  return { status: async () => null, cancel: vi.fn(async () => undefined), skipBackup: vi.fn() };
 }
 
 /** A security service whose other calls are never asked for here. */
@@ -82,16 +91,11 @@ describe("usePasswordChangeJob", () => {
     const { result } = renderHook(() => usePasswordChangeJob(service, jobs(), on));
 
     act(() => {
-      expect(result.current.changePassword("notes", "old", "new", true)).toBe(true);
+      expect(result.current.changePassword("notes", CHANGE)).toBe(true);
     });
     const job = result.current.job;
     expect(job).toMatchObject({ vaultId: "notes", kind: "change" });
-    expect(service.changePassword).toHaveBeenCalledWith("notes", {
-      currentPassword: "old",
-      newPassword: "new",
-      backUpFirst: true,
-      job: job?.id,
-    });
+    expect(service.changePassword).toHaveBeenCalledWith("notes", { ...CHANGE, job: job?.id });
 
     await act(async () => run.resolve(CHANGED));
     await waitFor(() => expect(result.current.job).toBeNull());
@@ -126,7 +130,7 @@ describe("usePasswordChangeJob", () => {
     const { result } = renderHook(() => usePasswordChangeJob(service, jobs(), passwordEvents()));
 
     act(() => {
-      expect(result.current.changePassword("notes", "old", "new", false)).toBe(true);
+      expect(result.current.changePassword("notes", { ...CHANGE, backUpFirst: false })).toBe(true);
     });
     act(() => {
       expect(result.current.finish("other", "pw")).toBe(false);
@@ -143,7 +147,7 @@ describe("usePasswordChangeJob", () => {
     );
 
     act(() => {
-      result.current.changePassword("notes", "old", "new", true);
+      result.current.changePassword("notes", CHANGE);
     });
     const id = result.current.job?.id;
     act(() => result.current.stop());
@@ -167,12 +171,60 @@ describe("usePasswordChangeJob", () => {
     const { result } = renderHook(() => usePasswordChangeJob(change, service, on));
 
     act(() => {
-      result.current.changePassword("notes", "old", "new", true);
+      result.current.changePassword("notes", CHANGE);
     });
     act(() => result.current.stop());
     await waitFor(() => expect(on.onStopRefused).toHaveBeenCalled());
     expect(on.onStopRefused.mock.calls[0]?.[0]).toBe(refused);
     expect(result.current.job?.stoppingSince).toBeNull();
+  });
+
+  /** A change that never ends, whose `job_status` answers `step`. */
+  function changeIn(step: JobProgress["step"], skipped: boolean) {
+    const service = {
+      status: vi.fn(async () => ({ bytesDone: 1, bytesTotal: 4, stoppable: true, step })),
+      cancel: vi.fn(async () => undefined),
+      skipBackup: vi.fn(async () => skipped),
+    } satisfies JobService;
+    const change = security({
+      changePassword: vi.fn(() => new Promise<PasswordChangeResult>(() => undefined)),
+    });
+    const hook = renderHook(() => usePasswordChangeJob(change, service, passwordEvents()));
+    act(() => {
+      hook.result.current.changePassword("notes", CHANGE);
+    });
+    return { service, result: hook.result };
+  }
+
+  it("shows Back up first as its own step, whose stop ends only the backup", async () => {
+    const { service, result } = changeIn("backing_up", true);
+    await waitFor(() =>
+      expect(result.current.backupStep).toMatchObject({ vaultId: "notes", stoppingSince: null }),
+    );
+
+    act(() => result.current.skipBackup());
+    expect(service.skipBackup).toHaveBeenCalledWith(result.current.job?.id);
+    expect(result.current.backupStep?.stoppingSince).not.toBeNull();
+    expect(service.cancel).not.toHaveBeenCalled();
+    expect(result.current.job?.stoppingSince).toBeNull();
+  });
+
+  it("shows Stop again when the backup had already ended", async () => {
+    const { service, result } = changeIn("backing_up", false);
+    await waitFor(() => expect(result.current.backupStep).not.toBeNull());
+
+    act(() => result.current.skipBackup());
+    await waitFor(() => expect(service.skipBackup).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.backupStep?.stoppingSince).toBeNull());
+  });
+
+  it("has no backup step while the change rewrites the files", async () => {
+    const { service, result } = changeIn("rewriting_files", true);
+    await waitFor(() => expect(result.current.job?.progress).not.toBeNull());
+    expect(result.current.backupStep).toBeNull();
+
+    act(() => result.current.skipBackup());
+    expect(service.skipBackup).not.toHaveBeenCalled();
   });
 });
 

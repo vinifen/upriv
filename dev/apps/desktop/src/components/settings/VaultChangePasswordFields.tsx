@@ -1,6 +1,7 @@
 import { useId } from "react";
 import {
   requireVaultConfigEditLockedI18nKey,
+  VAULT_PASSWORD_HINT_MAX_LENGTH,
   type ChangePasswordFieldsState,
   type PasswordWeakness,
 } from "@upriv/shared";
@@ -27,8 +28,6 @@ interface VaultChangePasswordFieldsProps {
   error?: string | null;
   /** Blocked when the vault is not strictly closed (`vault_closed` gate). */
   blocked?: boolean;
-  /** This change is already running. */
-  busy?: boolean;
 }
 
 export function VaultChangePasswordFields({
@@ -40,17 +39,16 @@ export function VaultChangePasswordFields({
   passwordFieldError,
   error,
   blocked = false,
-  busy = false,
 }: VaultChangePasswordFieldsProps) {
   const { t } = useTranslation();
   const currentId = useId();
   const newId = useId();
   const weaknessId = useId();
   const confirmId = useId();
+  const hintId = useId();
 
   const passwordsMatch =
     fields.newPassword.length > 0 && fields.newPassword === fields.confirmPassword;
-  const locked = blocked || busy;
 
   return (
     <div className="space-y-3">
@@ -62,12 +60,12 @@ export function VaultChangePasswordFields({
       <SettingsField
         label={t("vault.change_password.current")}
         htmlFor={currentId}
-        disabled={locked}
+        disabled={blocked}
       >
         <PasswordInput
           id={currentId}
           value={fields.currentPassword}
-          disabled={locked}
+          disabled={blocked}
           aria-invalid={passwordFieldError ? true : undefined}
           aria-errormessage={passwordFieldError ? `${currentId}-error` : undefined}
           onChange={(e) => onChange({ currentPassword: e.target.value })}
@@ -81,11 +79,11 @@ export function VaultChangePasswordFields({
         ) : null}
       </SettingsField>
 
-      <SettingsField label={t("vault.change_password.new")} htmlFor={newId} disabled={locked}>
+      <SettingsField label={t("vault.change_password.new")} htmlFor={newId} disabled={blocked}>
         <PasswordInput
           id={newId}
           value={fields.newPassword}
-          disabled={locked}
+          disabled={blocked}
           aria-describedby={weaknessId}
           onChange={(e) => onChange({ newPassword: e.target.value })}
           autoComplete="new-password"
@@ -97,12 +95,12 @@ export function VaultChangePasswordFields({
       <SettingsField
         label={t("vault.change_password.confirm")}
         htmlFor={confirmId}
-        disabled={locked}
+        disabled={blocked}
       >
         <PasswordInput
           id={confirmId}
           value={fields.confirmPassword}
-          disabled={locked}
+          disabled={blocked}
           onChange={(e) => onChange({ confirmPassword: e.target.value })}
           autoComplete="new-password"
           inputClassName={settingsControlClass}
@@ -120,9 +118,27 @@ export function VaultChangePasswordFields({
         </p>
       ) : null}
 
+      <SettingsField
+        label={t("vault.change_password.hint")}
+        htmlFor={hintId}
+        hint={t("vault.change_password.hint_help")}
+        disabled={blocked}
+      >
+        <input
+          id={hintId}
+          type="text"
+          value={fields.passwordHint}
+          maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
+          disabled={blocked}
+          onChange={(e) => onChange({ passwordHint: e.target.value })}
+          autoComplete="off"
+          className={settingsControlClass}
+        />
+      </SettingsField>
+
       <SwitchRow
         checked={backUpFirst}
-        disabled={locked}
+        disabled={blocked}
         onChange={onBackUpFirstChange}
         label={t("vault.change_password.backup_switch")}
         hint={t("vault.change_password.backup_note")}

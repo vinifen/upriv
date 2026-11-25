@@ -16,10 +16,10 @@ use crate::store::{Keyring, OpenedStore, VaultHeader, VaultIndex};
 mod jobs;
 
 pub use jobs::{
-    cancel_job, job_status, log_request_panic, note_panic, stop_all_jobs, JobStatus, JobStep,
-    JobStop,
+    cancel_job, job_status, log_request_panic, note_panic, skip_job_backup, stop_all_jobs,
+    JobStatus, JobStep, JobStop,
 };
-pub(crate) use jobs::{Job, JobKind, ProgressReader};
+pub(crate) use jobs::{is_quitting, Job, JobKind, JobWatch, ProgressReader};
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const BLOCK_DURATION: Duration = Duration::from_secs(60);
@@ -62,13 +62,19 @@ pub struct OpenSession {
     /// Import and other ingest sessions must not snapshot a vault that was just created.
     #[zeroize(skip)]
     pub skip_close_backup: bool,
-    /// Files appended by an import that are not in the sealed index yet.
+    /// Files and folders an import staged that are not in the sealed index yet.
     #[zeroize(skip)]
     pub unsealed_imports: u64,
+    /// The earliest an import's next seal runs: the last seal's end plus
+    /// `SEAL_PACE` times its length (`vault::fs`). `None` before this
+    /// session's first seal.
+    #[zeroize(skip)]
+    pub(crate) next_paced_seal: Option<Instant>,
     /// Blob files named in the session and not yet flushed with the index.
     #[zeroize(skip)]
     pub(crate) staged_blobs: crate::store::StagedBlobs,
-    /// Range writes waiting for the next index seal. Every seal clears it.
+    /// Writes waiting for the next index seal, with its timer. Every seal
+    /// clears it.
     #[zeroize(skip)]
     pub deferred: Option<DeferredWrites>,
     /// The file-manager layout (root `.upriv-workspace.json`) written since
@@ -98,15 +104,19 @@ pub enum AttachState {
     Running(Arc<AtomicBool>),
 }
 
-/// Range writes whose chunks are already in their blobs while the sealed index
-/// still names the bytes from before them.
+/// Writes already on disk that the sealed index does not name yet: range
+/// writes, whose chunks are in their blobs while the sealed index still names
+/// the bytes from before them, and staged imports.
 #[derive(Debug, Clone)]
 pub struct DeferredWrites {
     /// Names this batch, so a timer seals only the batch it was started for.
     pub batch: u64,
-    /// Plaintext bytes written in the batch.
+    /// When the batch's timer seals it.
+    pub due: Instant,
+    /// Plaintext bytes the batch's range writes wrote.
     pub bytes: u64,
-    /// Blobs the batch wrote to, checked for dead ciphertext after the seal.
+    /// Blobs the batch's range writes wrote to, checked for dead ciphertext
+    /// after the seal.
     pub blob_ids: Vec<String>,
 }
 
@@ -132,6 +142,7 @@ impl OpenSession {
             lock: None,
             skip_close_backup: false,
             unsealed_imports: 0,
+            next_paced_seal: None,
             staged_blobs: crate::store::StagedBlobs::default(),
             deferred: None,
             pending_layout: None,
@@ -410,10 +421,13 @@ pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
 }
 
 /// Where an in-flight close of this vault is. `None` when no close is running.
-pub fn vault_close_phase_at(vault_dir: &Path) -> Option<ClosePhase> {
+pub fn vault_close_step_at(vault_dir: &Path) -> Option<CloseStep> {
     lock_table(&CLOSING)
         .get(vault_dir)
-        .map(|closing| closing.phase)
+        .map(|closing| CloseStep {
+            phase: closing.phase,
+            backup: (closing.phase == ClosePhase::Backup).then(|| closing.backup.status()),
+        })
 }
 
 /// Make the close running for this vault finish the Close now way. False when
@@ -596,6 +610,15 @@ pub enum ClosePhase {
     Backup,
 }
 
+/// Where a running close stands: its step, and how far its backup got while
+/// it writes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloseStep {
+    pub phase: ClosePhase,
+    /// `Some` in [`ClosePhase::Backup`]: the same progress a listed job reports.
+    pub backup: Option<JobStatus>,
+}
+
 impl ClosePhase {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -610,6 +633,8 @@ struct Closing {
     phase: ClosePhase,
     /// Set once this close should finish the Close now way.
     hurry: Arc<AtomicBool>,
+    /// How far its backup got.
+    backup: JobWatch,
 }
 
 /// Mark `vault_dir` as closing until dropped (covers flush after `take_session`).
@@ -629,6 +654,7 @@ impl ClosingGuard {
             Closing {
                 phase: ClosePhase::Flush,
                 hurry: Arc::clone(&hurry),
+                backup: backup.watch(),
             },
         );
         Self {
@@ -889,15 +915,23 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         ));
-        assert_eq!(vault_close_phase_at(&dir), None);
+        assert_eq!(vault_close_step_at(&dir), None);
         {
             let guard = ClosingGuard::enter(&dir);
-            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Flush));
+            let step = vault_close_step_at(&dir).unwrap();
+            assert_eq!(step.phase, ClosePhase::Flush);
+            // The flush reports no backup progress.
+            assert_eq!(step.backup, None);
             guard.set_phase(ClosePhase::Backup);
-            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Backup));
+            guard.backup_job().set_total(400);
+            guard.backup_job().advance(100);
+            let step = vault_close_step_at(&dir).unwrap();
+            assert_eq!(step.phase, ClosePhase::Backup);
+            let backup = step.backup.unwrap();
+            assert_eq!((backup.bytes_done, backup.bytes_total), (100, 400));
             assert!(is_vault_closing_at(&dir));
         }
-        assert_eq!(vault_close_phase_at(&dir), None);
+        assert_eq!(vault_close_step_at(&dir), None);
         assert!(!is_vault_closing_at(&dir));
     }
 

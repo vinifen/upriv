@@ -7,7 +7,6 @@ import type {
   PlainLeftover,
   PlainRecord,
   PlainRecordState,
-  PlainRecoveryOffers,
   PlainWipe,
 } from "./types";
 
@@ -111,21 +110,19 @@ export function parsePlainHeldStatus(raw: unknown): PlainHeldStatus {
   return { heldDeletions: listed, heldCount: finite(body?.heldCount) };
 }
 
-/** A folder that is still there is wiped. No folder means unlock the encrypted vault. */
-export function plainRecoveryOffers(leftover: PlainLeftover | null): PlainRecoveryOffers {
-  return { remove: leftover?.found === true };
-}
-
-/** Warning shown before writing a folder that may leave this computer. Local needs none. */
+/**
+ * The warning beside a plain-text folder that may leave this computer, in the
+ * unlock window and the Storage screen's note. Local needs none.
+ */
 export function plainFolderClassI18nKey(folderClass: PlainFolderClass): I18nKey | null {
   switch (folderClass) {
     case "local":
       return null;
     case "removable":
-      return "plain.place.class.removable";
+      return "plain.folder_class.removable";
     case "network":
-      return "plain.place.class.network";
+      return "plain.folder_class.network";
     case "cloud":
-      return "plain.place.class.cloud";
+      return "plain.folder_class.cloud";
   }
 }

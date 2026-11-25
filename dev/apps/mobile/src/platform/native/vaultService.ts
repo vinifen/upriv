@@ -2,6 +2,7 @@ import {
   createLiveVaultService,
   isContentUri,
   newJobId,
+  parseImportBlocked,
   RpcError,
   type CreateVaultInput,
 } from "@upriv/shared";
@@ -31,6 +32,7 @@ import {
   contentTreeClaimedForCreate,
   importContentTree,
   releaseContentJob,
+  rememberContentTree,
   type ContentImportTree,
   type ContentTreeImportIo,
 } from "./contentTreeImport";
@@ -51,17 +53,26 @@ const contentIo: ContentTreeImportIo = {
   addFile(id, logicalPath, uri, job) {
     return rpcImportContentUri(id, logicalPath, uri, job);
   },
-  close(id) {
-    return rpcVaultFinishImport(id);
+  close(id, stopped) {
+    return rpcVaultFinishImport(id, stopped);
   },
   abort(id) {
     return rpcVaultDiscardImport(id);
   },
 };
 
+/**
+ * Run a picked folder's import, then let its listing go. An import refused for
+ * items it names keeps the listing as the wizard's pick, so "Import without
+ * them" can run it again; closing that window lets it go
+ * (`releasePendingImport`).
+ */
 async function finishContentImport<T>(tree: ContentImportTree, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
+  } catch (error) {
+    if (parseImportBlocked(error)?.whole === false) rememberContentTree(tree);
+    throw error;
   } finally {
     releaseContentJob(tree);
     await releaseImportCache(tree.directoryUri).catch(() => undefined);
@@ -119,12 +130,13 @@ export const nativeVaultService = createLiveVaultService({
   // kill, because nothing ran to release it. A folder that no longer answers
   // keeps its record for the next launch.
   async sweepUnfinished() {
-    const { folders } = await rpcVaultUnfinishedSweep();
+    const { folders, removedVaults } = await rpcVaultUnfinishedSweep();
     for (const folder of folders) {
       await nativeExportTrees
         .withExportFolder(folder, newJobId(), () => rpcVaultUnfinishedSweep())
         .catch(() => undefined);
     }
+    return { removedVaults };
   },
   importZip: (input, job) =>
     finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportZip(input, job)),

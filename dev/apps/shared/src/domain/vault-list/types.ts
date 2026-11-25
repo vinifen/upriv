@@ -25,5 +25,8 @@ export interface VaultListItem extends VaultRow {
  * matches what the next `vault_list` reports without asking for it.
  */
 export type VaultRuntimePatch = { session: VaultSession | null } & Partial<
-  Pick<VaultListItem, "lastAccessedAt" | "lastAccessedWhen" | "autoClosed" | "plainLeftover">
+  Pick<
+    VaultListItem,
+    "lastAccessedAt" | "lastAccessedWhen" | "autoClosed" | "plainLeftover" | "importUnfinished"
+  >
 >;

@@ -29,7 +29,11 @@ function serviceExporting(exportTo: BackupService["exportTo"]): BackupService {
 }
 
 function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
-  return { status: async () => null, cancel: vi.fn(async () => undefined) };
+  return {
+    status: async () => null,
+    cancel: vi.fn(async () => undefined),
+    skipBackup: async () => false,
+  };
 }
 
 function events(): BackupExportJobEvents & {
@@ -84,6 +88,7 @@ describe("useBackupExportJob", () => {
     const runner: JobService = {
       status: async () => progress,
       cancel: async () => undefined,
+      skipBackup: async () => false,
     };
     const on = events();
     const { result } = renderHook(() => useBackupExportJob(service, runner, on));
@@ -200,6 +205,7 @@ describe("useBackupExportJob", () => {
     const runner: JobService = {
       status: async () => (running ? { bytesDone: 0, bytesTotal: 10, stoppable: true } : null),
       cancel: async () => undefined,
+      skipBackup: async () => false,
     };
     const on = events();
     const { result } = renderHook(() => useBackupExportJob(service, runner, on));

@@ -1,4 +1,12 @@
-import { RpcError, VAULT_ERROR_CODES } from "@upriv/shared";
+import {
+  IMPORT_BLOCK_REASON_I18N,
+  RpcError,
+  VAULT_ERROR_CODES,
+  importBlockedList,
+  type ImportBlockReason,
+  type ImportBlocked,
+  type ImportBlockedItem,
+} from "@upriv/shared";
 import { relativePathFromImportFile } from "./vaultImportPaths";
 
 export interface DroppedImportFile {
@@ -297,12 +305,23 @@ function fileFromB64(b64: string, name: string): File {
 
 type DroppedStatRow = { relativePath: string; osPath: string; size: number };
 
-type OsPathWalk = { files: DroppedImportFile[]; unreadable: string[]; truncated: boolean };
+/** A dropped path the main process could not `lstat`, and why. */
+type UnreadableRoot = { osPath: string; reason: ImportBlockReason };
+
+type OsPathWalk = {
+  files: DroppedImportFile[];
+  unreadable: UnreadableRoot[];
+  blocked: ImportBlockedItem[];
+  blockedCount: number;
+  truncated: boolean;
+};
 
 export type ListedOsDrop = {
   files: DroppedImportFile[];
   /** The OS walk stopped before every file was listed. */
   truncated: boolean;
+  /** Items of the drop that cannot be imported; `null` when every one can. */
+  blocked: ImportBlocked | null;
 };
 
 function isStatRow(value: unknown): value is DroppedStatRow {
@@ -315,33 +334,49 @@ function isStatRow(value: unknown): value is DroppedStatRow {
   );
 }
 
+/** A reason Upriv does not know still blocks; it reads as unreadable. */
+function blockReason(raw: unknown): ImportBlockReason {
+  return typeof raw === "string" &&
+    Object.prototype.hasOwnProperty.call(IMPORT_BLOCK_REASON_I18N, raw)
+    ? (raw as ImportBlockReason)
+    : "unreadable";
+}
+
+function blockedItems(
+  value: unknown,
+  key: "path" | "osPath",
+): { path: string; reason: ImportBlockReason }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    const path = record[key];
+    if (typeof path !== "string" || !path.trim()) return [];
+    return [{ path, reason: blockReason(record.reason) }];
+  });
+}
+
+function statRowsFromApi(stats: unknown): Omit<OsPathWalk, "files"> & { rows: DroppedStatRow[] } {
+  const record = (stats && typeof stats === "object" ? stats : {}) as Record<string, unknown>;
+  const blocked = blockedItems(record.blocked, "path");
+  return {
+    rows: Array.isArray(record.files) ? record.files.filter(isStatRow) : [],
+    unreadable: blockedItems(record.unreadable, "osPath").map(({ path, reason }) => ({
+      osPath: path,
+      reason,
+    })),
+    blocked,
+    blockedCount:
+      typeof record.blockedCount === "number" && Number.isFinite(record.blockedCount)
+        ? Math.max(Math.floor(record.blockedCount), blocked.length)
+        : blocked.length,
+    truncated: record.truncated === true,
+  };
+}
+
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-}
-
-function statRowsFromApi(stats: unknown): {
-  rows: DroppedStatRow[];
-  unreadable: string[];
-  truncated: boolean;
-  symlinks: string[];
-} {
-  if (Array.isArray(stats))
-    return { rows: stats.filter(isStatRow), unreadable: [], truncated: false, symlinks: [] };
-  if (!stats || typeof stats !== "object")
-    return { rows: [], unreadable: [], truncated: false, symlinks: [] };
-  const record = stats as {
-    files?: unknown;
-    unreadable?: unknown;
-    truncated?: unknown;
-    symlinks?: unknown;
-  };
-  return {
-    rows: Array.isArray(record.files) ? record.files.filter(isStatRow) : [],
-    unreadable: stringList(record.unreadable),
-    truncated: record.truncated === true,
-    symlinks: stringList(record.symlinks),
-  };
 }
 
 function refuseDroppedSymlinks(symlinks: readonly string[]): void {
@@ -400,11 +435,8 @@ async function filesFromOsPaths(paths: string[]): Promise<OsPathWalk | null> {
   if (!api) return null;
 
   if (typeof api.statDroppedPaths === "function") {
-    const { rows, unreadable, truncated, symlinks } = statRowsFromApi(
-      await api.statDroppedPaths(paths),
-    );
-    refuseDroppedSymlinks(symlinks);
-    return { files: rows.map(fileFromStat), unreadable, truncated };
+    const { rows, ...walk } = statRowsFromApi(await api.statDroppedPaths(paths));
+    return { files: rows.map(fileFromStat), ...walk };
   }
 
   if (typeof api.readDroppedPaths !== "function") return null;
@@ -416,6 +448,8 @@ async function filesFromOsPaths(paths: string[]): Promise<OsPathWalk | null> {
       return { file: fileFromB64(row.contentB64, name), relativePath: row.relativePath };
     }),
     unreadable: [],
+    blocked: [],
+    blockedCount: 0,
     truncated: content.truncated,
   };
 }
@@ -572,6 +606,32 @@ export async function droppedOsRootPaths(snapshot: OsDropSnapshot): Promise<stri
   return rootOsPaths(osPaths);
 }
 
+/**
+ * The drop's blocked items, or `null` when there are none. A dropped path the
+ * main process could not `lstat` is one unless the drop itself handed over
+ * its bytes. `whole` when nothing of the drop can be imported.
+ */
+function dropBlocked(
+  walk: OsPathWalk,
+  collected: readonly DroppedImportFile[],
+  files: readonly DroppedImportFile[],
+): ImportBlocked | null {
+  const items = [...walk.blocked];
+  let count = walk.blockedCount;
+  for (const root of walk.unreadable) {
+    const held = collected.some(
+      (dropped) =>
+        dropped.osPath !== undefined &&
+        pathCovers(root.osPath, dropped.osPath) &&
+        blobWhenPathUnreadable(dropped) !== null,
+    );
+    if (held) continue;
+    items.push({ path: basenameFromOsPath(root.osPath) || root.osPath, reason: root.reason });
+    count += 1;
+  }
+  return count > 0 ? importBlockedList(items, count, files.length === 0) : null;
+}
+
 export async function listFilesFromOsDropSnapshot(snapshot: OsDropSnapshot): Promise<ListedOsDrop> {
   const extra = await snapshot.pending;
   const collected = extra.length > 0 ? [...snapshot.files, ...extra] : [...snapshot.files];
@@ -582,30 +642,34 @@ export async function listFilesFromOsDropSnapshot(snapshot: OsDropSnapshot): Pro
   // A root the main process could not stat keeps its browser `File` bytes.
   if (roots.length > 0) {
     const fromDisk = await filesFromOsPaths(roots);
-    if (!fromDisk) return { files: collected, truncated: false };
+    if (!fromDisk) return { files: collected, truncated: false, blocked: null };
+    const listed = (files: DroppedImportFile[]): ListedOsDrop => ({
+      files,
+      truncated: fromDisk.truncated,
+      blocked: dropBlocked(fromDisk, collected, files),
+    });
     if (fromDisk.unreadable.length === 0) {
-      if (fromDisk.files.length > 0) {
-        return { files: fromDisk.files, truncated: fromDisk.truncated };
-      }
+      if (fromDisk.files.length > 0) return listed(fromDisk.files);
       const walked = new Set(roots.map((root) => pathKey(root)));
-      return {
-        files: collected.filter((dropped) => {
+      return listed(
+        collected.filter((dropped) => {
           if (!dropped.osPath) return true;
           return !walked.has(pathKey(normalizeOsPath(dropped.osPath)));
         }),
-        truncated: fromDisk.truncated,
-      };
+      );
     }
     const kept = collected.flatMap((dropped) => {
       if (!dropped.osPath) return [dropped];
-      const unread = fromDisk.unreadable.some((root) => pathCovers(root, dropped.osPath ?? ""));
+      const unread = fromDisk.unreadable.some((root) =>
+        pathCovers(root.osPath, dropped.osPath ?? ""),
+      );
       if (!unread) return [];
       const blob = blobWhenPathUnreadable(dropped);
       return blob ? [blob] : [];
     });
-    return { files: [...fromDisk.files, ...kept], truncated: fromDisk.truncated };
+    return listed([...fromDisk.files, ...kept]);
   }
-  return { files: collected, truncated: false };
+  return { files: collected, truncated: false, blocked: null };
 }
 
 export function beginOsFileImport(

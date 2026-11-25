@@ -657,7 +657,7 @@ mod tests {
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"pw-ok-ok-3", KdfUnlockPreset::M32).unwrap();
         patch_both_headers(&dir, |header| {
-            header["kdf"]["memory_kib"] = serde_json::json!(4096 * 1024);
+            header["kdf"]["memory_kib"] = serde_json::json!(kdf::MAX_KDF_MEMORY_KIB + 1024);
         });
         assert!(matches!(
             load_header(&dir),

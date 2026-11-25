@@ -16,7 +16,11 @@ describe("nextQuitClose", () => {
   it("counts from the first answer that the close runs, and follows its step", () => {
     const flushing = nextQuitClose(waiting, { state: "closing", phase: "flush" }, 1_000);
     expect(flushing).toMatchObject({ stage: "flush", startedAt: 1_000 });
-    const backing = nextQuitClose(flushing, { state: "closing", phase: "backup" }, 5_000);
+    const backing = nextQuitClose(
+      flushing,
+      { state: "closing", phase: "backup", progress: null },
+      5_000,
+    );
     expect(backing).toMatchObject({ stage: "backup", startedAt: 1_000 });
   });
 

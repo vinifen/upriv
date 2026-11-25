@@ -48,7 +48,8 @@ export function useVaultListModals() {
   const [groupDraftGroupedVaultSortDirection, setGroupDraftGroupedVaultSortDirection] =
     useState<VaultListSortDirection>("asc");
   const [groupDraftHidden, setGroupDraftHidden] = useState(false);
-  const [groupDeleteOpen, setGroupDeleteOpen] = useState(false);
+  /** The group the Delete group window is open for. */
+  const [deleteGroup, setDeleteGroup] = useState<VaultGroup | null>(null);
   const [groupFormError, setGroupFormError] = useState<string | null>(null);
   const [groupBusy, setGroupBusy] = useState(false);
   const [repairBusy, setRepairBusy] = useState(false);
@@ -111,8 +112,8 @@ export function useVaultListModals() {
     setGroupDraftGroupedVaultSortDirection,
     groupDraftHidden,
     setGroupDraftHidden,
-    groupDeleteOpen,
-    setGroupDeleteOpen,
+    deleteGroup,
+    setDeleteGroup,
     groupFormError,
     setGroupFormError,
     groupBusy,

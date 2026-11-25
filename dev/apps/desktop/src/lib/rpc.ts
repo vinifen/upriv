@@ -4,10 +4,12 @@ import { parseAppVersionResult, type AppVersionResult } from "./types";
 import type {
   AllowlistedUiLogEvent,
   AppSettingsConfig,
+  AppSettingsLoadResult,
   AppLogFile,
   AppListChanges,
   AttachAnswer,
   CreateVaultInput,
+  CreatedVault,
   DataFolderApplied,
   DataFolderListView,
   DataFolderSearchResult,
@@ -45,6 +47,7 @@ import {
   parseBackupListing,
   parseDataFolderApplied,
   parseDataFolderList,
+  parseDataFolderSize,
   parseDataFolderSearch,
   parseDataFolderStatus,
   parseFolderStatus,
@@ -52,7 +55,6 @@ import {
   NO_APP_LIST_CHANGES,
   NO_VAULT_LIST_CHANGES,
   parseOsFolderAnswer,
-  parseSwitches,
   parseUnlockedFolderInfo,
   parseBackupSaved,
   parseVaultDeleteOutcome,
@@ -60,11 +62,13 @@ import {
   normalizeVaultSettingsConfig,
   parseAppLogFile,
   parseDeviceInfo,
+  parseOsNames,
   parseEmbeddedVaultSettings,
   parseVaultGroupListResult,
   parsePlainWipe,
   parseVaultGroupWire,
   parseVaultListItemWire,
+  parseImportEnding,
   parseVaultCloseHurry,
   parseVaultCloseState,
   parseVaultListResult,
@@ -74,13 +78,12 @@ import {
   vaultImportProbeTimeoutMs,
   parsePathWriteResult,
   parseVaultExportResult,
-  parsePlainCloseSummary,
   parseStorageChangeResult,
   parseUnlockedDestination,
   parseVaultOpened,
   parsePlainHeldStatus,
   parsePlainLeftover,
-  parseBackupFailure,
+  parseCloseVaultOutcome,
   parseJobStatus,
   parseKeyCopiesUpdate,
   parsePasswordChangeFinishResult,
@@ -88,6 +91,7 @@ import {
   parseUnlockRamChangeResult,
   parseVaultDiskUsage,
   parseVaultKeyStatus,
+  type ChangeVaultPasswordInput,
   type CloseVaultOutcome,
   type KeyCopies,
   type PasswordChangeFinishResult,
@@ -215,11 +219,7 @@ function parseAppSettingsConfig(raw: unknown): AppSettingsConfig {
   return normalizeAppSettings(raw as AppSettingsConfig);
 }
 
-export async function rpcAppSettingsGet(): Promise<{
-  settings: AppSettingsConfig;
-  rootPath: string | null;
-  onDisk: boolean;
-}> {
+export async function rpcAppSettingsGet(): Promise<AppSettingsLoadResult> {
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_GET);
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(
@@ -233,6 +233,7 @@ export async function rpcAppSettingsGet(): Promise<{
     settings: parseAppSettingsConfig(record.settings),
     rootPath: typeof record.rootPath === "string" ? record.rootPath : null,
     onDisk: record.onDisk === true,
+    osNames: parseOsNames(record.osNames),
   };
 }
 
@@ -271,6 +272,10 @@ export async function rpcDataFolderList(newList: boolean): Promise<DataFolderLis
   return parseDataFolderList(
     await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_LIST, { newList }),
   );
+}
+
+export async function rpcDataFolderSize(): Promise<number> {
+  return parseDataFolderSize(await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_SIZE, {}));
 }
 
 export async function rpcDataFolderApply(
@@ -599,18 +604,9 @@ export async function rpcVaultClose(
 /** A new key and every file rewritten with it, as the job `job`. */
 export async function rpcVaultChangePassword(
   id: string,
-  currentPassword: string,
-  newPassword: string,
-  backUpFirst: boolean,
-  job: string,
+  input: ChangeVaultPasswordInput,
 ): Promise<PasswordChangeResult> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
-    id,
-    currentPassword,
-    newPassword,
-    backUpFirst,
-    job,
-  });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, { id, ...input });
   return parsePasswordChangeResult(raw);
 }
 
@@ -689,25 +685,6 @@ export async function rpcVaultRebuild(
 ): Promise<VaultRebuildResult> {
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_REBUILD, { id, password, job });
   return parseVaultRebuildResult(raw);
-}
-
-function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
-  if (typeof raw !== "object" || raw === null) {
-    return { backupFailed: false, backupFailure: null, backupSwitches: [], plain: null };
-  }
-  const body = raw as {
-    backupFailed?: unknown;
-    backupFailure?: unknown;
-    backupSwitches?: unknown;
-    plain?: unknown;
-  };
-  const backupFailed = body.backupFailed === true;
-  return {
-    backupFailed,
-    backupFailure: backupFailed ? (parseBackupFailure(body.backupFailure) ?? "other") : null,
-    backupSwitches: parseSwitches(body.backupSwitches),
-    plain: parsePlainCloseSummary(body.plain),
-  };
 }
 
 /** Tell the close running for this vault to finish the Close now way. False when none runs. */
@@ -867,15 +844,15 @@ export async function rpcVaultExportToFolder(
 }
 
 /**
- * Clear what a crash left from a job: the vaults an import never finished and
- * the unfinished export files. `folders` are the picked folders that hold one
- * and are not mounted now.
+ * Clear what a crash left from a job: the vaults whose create or store copy
+ * never finished and the unfinished export files. `removedVaults` are the
+ * vaults it deleted.
  */
-export async function rpcVaultUnfinishedSweep(): Promise<{ folders: string[] }> {
+export async function rpcVaultUnfinishedSweep(): Promise<{ removedVaults: string[] }> {
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_UNFINISHED_SWEEP, {});
   const record = requireRecord(raw, "vault_unfinished_sweep");
-  const folders = Array.isArray(record.folders) ? record.folders : [];
-  return { folders: folders.filter((folder) => typeof folder === "string") };
+  const removed = Array.isArray(record.removedVaults) ? record.removedVaults : [];
+  return { removedVaults: removed.filter((id): id is string => typeof id === "string") };
 }
 
 /** Each import runs as the job `job`; a stop removes the vault it was making. */
@@ -893,10 +870,18 @@ export async function rpcVaultImportZip(
   return parseVaultResult(raw, "vault_import_zip");
 }
 
+/** The vault an import filled, and how its import ended. */
+function parseCreatedVault(raw: unknown, method: string): CreatedVault {
+  return {
+    vault: parseVaultResult(raw, method),
+    ...parseImportEnding(requireRecord(raw, method)),
+  };
+}
+
 export async function rpcVaultImport7z(
   input: CreateVaultInput,
   job: string,
-): Promise<VaultListItem> {
+): Promise<CreatedVault> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_7Z, {
     settings: input.settings,
@@ -909,13 +894,13 @@ export async function rpcVaultImport7z(
     welcome: input.welcome,
     job,
   });
-  return parseVaultResult(raw, "vault_import_7z");
+  return parseCreatedVault(raw, "vault_import_7z");
 }
 
 export async function rpcVaultImportFilesZip(
   input: CreateVaultInput,
   job: string,
-): Promise<VaultListItem> {
+): Promise<CreatedVault> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
     settings: input.settings,
@@ -927,13 +912,13 @@ export async function rpcVaultImportFilesZip(
     welcome: input.welcome,
     job,
   });
-  return parseVaultResult(raw, "vault_import_files_zip");
+  return parseCreatedVault(raw, "vault_import_files_zip");
 }
 
 export async function rpcVaultImportOsPath(
   input: CreateVaultInput,
   job: string,
-): Promise<VaultListItem> {
+): Promise<CreatedVault> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH, {
     settings: input.settings,
@@ -941,9 +926,10 @@ export async function rpcVaultImportOsPath(
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
     welcome: input.welcome,
+    leaveOut: pkg?.leaveOut === true,
     job,
   });
-  return parseVaultResult(raw, "vault_import_os_path");
+  return parseCreatedVault(raw, "vault_import_os_path");
 }
 
 /** A `.7z` password test runs as the job `job`; a zip is read at once and takes none. */
@@ -1271,6 +1257,14 @@ export async function rpcJobStatus(job: string): Promise<JobProgress | null> {
 
 export async function rpcJobCancel(job: string, by: JobStopBy): Promise<void> {
   await desktopInvokeRaw(CORE_RPC_COMMANDS.JOB_CANCEL, { job, by });
+}
+
+/** Stop only the backup `job` writes before its change; `false` when it writes none now. */
+export async function rpcJobSkipBackup(job: string): Promise<boolean> {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.JOB_SKIP_BACKUP, { job });
+  return (
+    typeof raw === "object" && raw !== null && (raw as { stopping?: unknown }).stopping === true
+  );
 }
 
 /** Copy the backups named by `keys` into `destDir`, as the job `job`. */

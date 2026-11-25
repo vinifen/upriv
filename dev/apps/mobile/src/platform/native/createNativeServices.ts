@@ -12,6 +12,7 @@ import {
   rpcAppSettingsSave,
   rpcDataFolderApply,
   rpcDataFolderList,
+  rpcDataFolderSize,
   rpcDataFolderSearch,
   rpcDataFolderStatus,
   rpcLogDelete,
@@ -82,6 +83,7 @@ const nativeAppSettingsService: AppSettingsService = {
       settings: normalizeAppSettings(result.settings),
       onDisk: result.onDisk,
       rootPath: result.rootPath,
+      osNames: result.osNames,
     };
   },
 
@@ -119,6 +121,9 @@ function createNativeVaultRootService(): VaultRootService {
     },
 
     list: (options) => rpcDataFolderList(options?.newList ?? false),
+
+    // The data folder's tree is mounted by the resolve that found it.
+    size: () => rpcDataFolderSize(),
 
     async status(path) {
       if (path !== null) {

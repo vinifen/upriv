@@ -53,7 +53,6 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       lifecycle_confirm_close_now: true,
       lifecycle_confirm_stop: true,
       lifecycle_confirm_lock: false,
-      lifecycle_row_runs_button: false,
     },
     logging: {
       enabled: true,
@@ -104,7 +103,6 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       lifecycle_confirm_close_now: config.ui.lifecycle_confirm_close_now !== false,
       lifecycle_confirm_stop: config.ui.lifecycle_confirm_stop !== false,
       lifecycle_confirm_lock: config.ui.lifecycle_confirm_lock === true,
-      lifecycle_row_runs_button: config.ui.lifecycle_row_runs_button === true,
     },
     logging,
     app: {

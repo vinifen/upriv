@@ -8,7 +8,11 @@ import type {
   VaultBackupSection,
   VaultListItem,
 } from "@upriv/shared";
-import type { BackupExportJob } from "@upriv/shared/react";
+import type {
+  BackupExportJob,
+  PasswordChangeBackupStep,
+  VaultCloseBackupWork,
+} from "@upriv/shared/react";
 import { useExportFolder } from "@/hooks/useExportFolder";
 import { backupEntry, dataFolderListing } from "@/lib/tests/backupStubs";
 import { pressStop } from "@/lib/tests/pressStop";
@@ -103,6 +107,10 @@ const vault: VaultListItem = {
 };
 
 interface HarnessProps {
+  closeBackup?: (VaultCloseBackupWork & { stoppingSince: number | null }) | null;
+  onStopCloseBackup?: () => void;
+  changeBackup?: PasswordChangeBackupStep | null;
+  onStopChangeBackup?: () => void;
   exportJob?: BackupExportJob | null;
   onExport: (keys: readonly string[], destDir: string) => void;
   onExportBusy?: () => void;
@@ -111,6 +119,10 @@ interface HarnessProps {
 
 /** The window with the folder the vault list keeps. */
 function Harness({
+  closeBackup = null,
+  onStopCloseBackup = () => {},
+  changeBackup = null,
+  onStopChangeBackup = () => {},
   exportJob = null,
   onExport,
   onExportBusy = () => {},
@@ -122,8 +134,12 @@ function Harness({
     open: true,
     canSaveNow: true,
     saveJob: null,
+    closeBackup,
     onSaveNow: () => {},
     onStopSave: () => {},
+    onStopCloseBackup,
+    changeBackup,
+    onStopChangeBackup,
     listRefreshToken: 0,
     onClose: () => {},
     exportFolder,
@@ -340,6 +356,69 @@ describe("VaultBackupsModal export", () => {
   });
 });
 
+describe("VaultBackupsModal close backup", () => {
+  const closeBackup = (stoppingSince: number | null, stoppable = true) => ({
+    vaultId: vault.id,
+    startedAt: Date.now(),
+    progress: { bytesDone: 10, bytesTotal: 40, stoppable, step: null },
+    stoppingSince,
+  });
+
+  it("shows the bar of the backup a close writes, with Stop in place of Back up now", async () => {
+    const onStopCloseBackup = vi.fn();
+    await show({ closeBackup: closeBackup(null), onStopCloseBackup });
+    expect(screen.getByRole("progressbar", { name: "modal.backup.close_backup" })).toBeDefined();
+    expect(screen.getByText("modal.backup.close_backup_hint")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "modal.backup.backup_now" })).toBeNull();
+
+    pressStop(screen.getByRole("button", { name: "action.stop" }));
+    expect(onStopCloseBackup).toHaveBeenCalledOnce();
+  });
+
+  it("says when the stop is on its way, and hides the bar meanwhile", async () => {
+    await show({ closeBackup: closeBackup(Date.now()) });
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "vault.status.stopping" }).disabled,
+    ).toBe(true);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("cannot stop while the zip is being put in place", async () => {
+    await show({ closeBackup: closeBackup(null, false) });
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "action.stop" }).disabled).toBe(
+      true,
+    );
+  });
+});
+
+describe("VaultBackupsModal password change backup", () => {
+  const changeBackup = (stoppingSince: number | null): PasswordChangeBackupStep => ({
+    vaultId: vault.id,
+    startedAt: Date.now(),
+    progress: { bytesDone: 10, bytesTotal: 40, stoppable: true, step: "backing_up" },
+    stoppingSince,
+  });
+
+  it("shows the bar of Back up first, whose Stop ends only that backup", async () => {
+    const onStopChangeBackup = vi.fn();
+    await show({ changeBackup: changeBackup(null), onStopChangeBackup });
+    expect(screen.getByRole("progressbar", { name: "modal.backup.change_backup" })).toBeDefined();
+    expect(screen.getByText("modal.backup.change_backup_hint")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "modal.backup.backup_now" })).toBeNull();
+
+    pressStop(screen.getByRole("button", { name: "action.stop" }));
+    expect(onStopChangeBackup).toHaveBeenCalledOnce();
+  });
+
+  it("says when that stop is on its way", async () => {
+    await show({ changeBackup: changeBackup(Date.now()) });
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "vault.status.stopping" }).disabled,
+    ).toBe(true);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+});
+
 describe("VaultBackupsModal sections", () => {
   it("shows no selection bar until a backup is chosen", async () => {
     await show();
@@ -425,12 +504,12 @@ describe("VaultBackupsModal delete", () => {
     );
   });
 
-  it("keeps a row to Save and its ⋯ menu, which opens the backup's folder too", async () => {
+  it("keeps a row to its ⋯ menu, then Save at its end, and the menu opens the folder", async () => {
     await show();
     const buttons = within(row(PLAIN)).getAllByRole("button");
     expect(
       buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent),
-    ).toEqual(["modal.backup.promote_to_save", "action.row_options"]);
+    ).toEqual(["action.row_options", "modal.backup.promote_to_save"]);
     expect(rowAction(PLAIN, "action.open_folder").disabled).toBe(false);
   });
 });

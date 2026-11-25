@@ -64,8 +64,10 @@ export function FileManagerModal({
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const [mounted, setMounted] = useState(open);
   const [collapsed, setCollapsed] = useState(!open);
-  const opacity = useRef(new Animated.Value(open ? 1 : 0)).current;
-  const scale = useRef(new Animated.Value(open ? 1 : MODAL_SCALE_FROM)).current;
+  // Hidden from the first frame: opened on mount, the panel fades in from
+  // here, so it never paints whole before its entrance starts.
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(MODAL_SCALE_FROM)).current;
   const enterStarted = useRef(false);
   const enterGen = useRef(0);
 

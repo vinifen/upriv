@@ -29,7 +29,6 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
-import { VaultPasswordChangeLine } from "./VaultPasswordChangeLine";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
 import type { VaultListPointerDragHandlers } from "./vaultListPointerDrag";
@@ -103,11 +102,7 @@ export function VaultBlockCard({
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const cardClick = vaultRowClick(role, {
-    open: isOpen,
-    resumeOpen,
-    runsButton: appSettings.ui.lifecycle_row_runs_button,
-  });
+  const cardClick = vaultRowClick(role, { open: isOpen, resumeOpen });
   const activateCard = () => {
     if (isReorderActive || isDragging || cardClick === null) return;
     if (cardClick === "file_manager") onOpenFileManager(vault);
@@ -188,7 +183,6 @@ export function VaultBlockCard({
               }
             />
           </div>
-          <VaultPasswordChangeLine vault={vault} />
           <VaultPlainRecordLine
             vault={vault}
             onRetry={onPlainRecordRetry}

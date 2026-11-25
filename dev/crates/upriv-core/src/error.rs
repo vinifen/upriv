@@ -176,6 +176,12 @@ pub enum UprivError {
     #[error("this vault is being deleted")]
     VaultDeleting,
 
+    /// An import has not finished this vault: it is still being filled, or a
+    /// quit or a crash stopped it and the launch sweep removes the vault.
+    /// Refused before any lock, so an unlock never waits behind that removal.
+    #[error("this vault's import has not finished")]
+    VaultImportUnfinished,
+
     /// `runtime/<id>.lock` is held by a live process (this host or another).
     #[error("vault locked: {0}")]
     VaultLocked(PathBuf),
@@ -190,10 +196,28 @@ pub enum UprivError {
     ImportArchiveNotFound(PathBuf),
 
     /// OS path for `vault_fs_import_os_file` is relative, missing, a symlink,
-    /// not a regular file, or inside this vault's `store/`.
+    /// not a regular file, inside this vault's `store/`, or failed while it
+    /// was read; `reason` says which (wire `details.reason`), so the file is
+    /// told from a failure of the vault it goes into.
     /// Not `io_error` (vault-root toast) and not `workspace_path_*` (Gate).
-    #[error("import source unreadable: {0}")]
-    ImportSourceUnreadable(PathBuf),
+    #[error("import source unreadable: {path}")]
+    ImportSourceUnreadable {
+        path: PathBuf,
+        reason: ImportBlockReason,
+    },
+
+    /// Items of the file or folder chosen for a new vault cannot be imported,
+    /// so nothing was. Every one is counted; the first
+    /// `IMPORT_BLOCKED_LIST_MAX` (`vault/os_import.rs`) are named by their
+    /// path from the chosen item, its own name first. `whole` when the chosen
+    /// item itself is one, so nothing could be imported without them. Wire
+    /// `details`, never the log.
+    #[error("{count} items of the chosen file or folder cannot be imported")]
+    ImportBlocked {
+        count: usize,
+        items: Vec<ImportBlockedItem>,
+        whole: bool,
+    },
 
     /// This vault must be closed first (export, a password or unlock-RAM
     /// change, Finish, or a rebuild).
@@ -356,6 +380,44 @@ pub enum PlainDestinationReason {
     NotAFolder,
     /// App-private storage on a phone. Other apps could not open the files.
     PrivateStorage,
+}
+
+/// One item that keeps a chosen file or folder from becoming a vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportBlockedItem {
+    /// From the chosen item, its own name first, `/` between names.
+    pub path: String,
+    pub reason: ImportBlockReason,
+}
+
+/// Why an item cannot be imported. Wire `details.items[].reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportBlockReason {
+    /// The system does not let this user read it.
+    Permission,
+    /// It was gone by the time it was read.
+    Missing,
+    /// Reading it failed for another reason.
+    Unreadable,
+    /// A socket, pipe, or device, which holds no content to copy.
+    Special,
+    /// A name a vault cannot hold: reserved by Upriv, unsafe, or not Unicode.
+    Name,
+    /// The chosen item is a link. Links inside a chosen folder are skipped.
+    Link,
+}
+
+impl ImportBlockReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Permission => "permission",
+            Self::Missing => "missing",
+            Self::Unreadable => "unreadable",
+            Self::Special => "special",
+            Self::Name => "name",
+            Self::Link => "link",
+        }
+    }
 }
 
 impl PlainDestinationReason {

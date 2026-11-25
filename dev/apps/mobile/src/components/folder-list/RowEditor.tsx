@@ -1,15 +1,19 @@
 import { StyleSheet, Text, View } from "react-native";
 import { ROW_NAME_MAX_CHARS } from "@upriv/shared";
+import { PathField } from "@/components/PathField";
 import { ThemedInput } from "@/components/settings/settingsFields";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
+import { shownPath } from "./shownPath";
 
 /** How a row's folder changes: picked on this phone, typed for another device. */
 export type RowFolderEdit =
   | {
       kind: "picked";
+      /** The folder the row holds now; empty until one is picked. */
+      path: string;
       /** Why the folder cannot change now (an open vault holds it); `null` when it can. */
       held: string | null;
       onPick: () => void;
@@ -19,10 +23,11 @@ export type RowFolderEdit =
 /**
  * A row's name and folder, edited in place under its text (desktop
  * `RowEditor` parity). This phone's folder is a storage-access grant, so it
- * is picked, never typed; the row above shows the one it holds. Another
- * device's folder is text checked against that device's system. Each edit
- * goes to the window's draft at once, and the window's own Save, Apply, or
- * Continue writes it; Edit in the row's menu closes the fields again.
+ * is picked, never typed: its field shows the folder it holds, read-only
+ * with its open button, and Choose folder beside it. Another device's folder
+ * is text checked against that device's system. Each edit goes to the
+ * window's draft at once, and the window's own Save, Apply, or Continue
+ * writes it; Edit in the row's menu closes the fields again.
  */
 export function RowEditor({
   name,
@@ -63,19 +68,29 @@ export function RowEditor({
             autoCorrect={false}
             onChangeText={folder.onPath}
           />
-        ) : folder.held ? (
-          <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
-            {folder.held}
-          </Text>
         ) : (
-          <Button
-            label={t("modal.app_settings.action.choose_folder")}
-            size="sm"
-            variant="secondary"
-            icon="folder"
-            onPress={folder.onPick}
-            style={styles.start}
-          />
+          <>
+            <PathField
+              value={folder.path.trim() ? shownPath(folder.path) : ""}
+              openPath={folder.path}
+              editable={false}
+              placeholder={t("vault.create.action.choose_folder")}
+            />
+            {folder.held ? (
+              <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
+                {folder.held}
+              </Text>
+            ) : (
+              <Button
+                label={t("modal.app_settings.action.choose_folder")}
+                size="sm"
+                variant="secondary"
+                icon="folder"
+                onPress={folder.onPick}
+                style={styles.start}
+              />
+            )}
+          </>
         )}
       </View>
     </View>

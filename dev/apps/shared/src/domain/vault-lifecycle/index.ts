@@ -1,5 +1,10 @@
 export type { VaultPipelineKind } from "./kinds";
 export {
+  createdVaultText,
+  pipelineCompleteText,
+  unfinishedVaultsRemovedText,
+} from "./completeToast";
+export {
   VAULT_PIPELINE_ERROR_CODES,
   VaultPipelineError,
   isVaultPipelineError,
@@ -38,6 +43,7 @@ export {
   lifecycleBusyLabelKey,
 } from "./pipelineSteps";
 export { isVaultOpenJobPending } from "./openPending";
+export { vaultRecoveryCase, type VaultRecoveryCase } from "./recoveryCase";
 export {
   parseVaultOpened,
   storageResetToastKey,

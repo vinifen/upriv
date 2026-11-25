@@ -25,7 +25,6 @@ import { ROW_ARM_ATTR } from "@/hooks/useRowArmingDismiss";
 import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { useElementWidth } from "@/hooks/useElementWidth";
-import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
 import { vaultListDropKeyProps } from "../lib/listDropKey";
 import { VaultDragHandle } from "./VaultDragHandle";
@@ -35,7 +34,6 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultPlainRecordLine } from "./VaultPlainRecordLine";
 import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
-import { VaultPasswordChangeLine } from "./VaultPasswordChangeLine";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
 import { vaultRowDensityClass } from "../lib/vaultListView";
@@ -116,17 +114,11 @@ export function VaultRow({
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
   const rowGap = viewMode === "large" ? "gap-4" : "gap-3";
   const articleRef = useRef<HTMLElement>(null);
-  const titleRef = useRef<HTMLHeadingElement>(null);
-  const nameRef = useRef<HTMLSpanElement>(null);
-  const marksRef = useRef<HTMLSpanElement>(null);
   const estimatedWidth = useMemo(listWidthEstimate, []);
   const rowWidth = useElementWidth(articleRef, estimatedWidth);
-  const buttonsBelow = useRowButtonsBelow(
-    { row: articleRef, slot: titleRef, text: nameRef, beside: marksRef },
-    vault.displayName,
-  );
-  // A row with its buttons on their own line has the room for the full look.
-  const comfortable = vaultRowChrome(rowWidth) === "comfortable" || buttonsBelow;
+  // One line at every width: a narrow row drops the name circle and the
+  // button labels, and the name truncates.
+  const comfortable = vaultRowChrome(rowWidth) === "comfortable";
   const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
   const work = pipelineListStatus.rowWork?.[vault.id] ?? null;
@@ -134,11 +126,7 @@ export function VaultRow({
   const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
-  const rowClick = vaultRowClick(role, {
-    open: isOpen,
-    resumeOpen,
-    runsButton: appSettings.ui.lifecycle_row_runs_button,
-  });
+  const rowClick = vaultRowClick(role, { open: isOpen, resumeOpen });
   const activateRow = () => {
     if (isReorderActive || isDragging || rowClick === null) return;
     if (rowClick === "file_manager") onOpenFileManager(vault);
@@ -155,8 +143,7 @@ export function VaultRow({
       {...vaultListDropKeyProps(dropKey)}
       {...{ [ROW_ARM_ATTR]: vault.id }}
       className={[
-        "vault-row relative z-0 flex min-w-0 w-full justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
-        buttonsBelow ? "flex-col items-stretch" : "flex-row items-center",
+        "vault-row relative z-0 flex min-w-0 w-full flex-row items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
         dragDisabled ? "pl-4" : "pl-2",
         "pr-4 sm:pr-6",
         rowGap,
@@ -207,16 +194,15 @@ export function VaultRow({
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <h3
-              ref={titleRef}
               className={[
                 "flex min-w-0 items-center gap-2 font-semibold text-on-surface",
                 density.title,
               ].join(" ")}
             >
-              <span ref={nameRef} className="truncate">
+              <span className="truncate" title={vault.displayName}>
                 {vault.displayName}
               </span>
-              <span ref={marksRef} className="flex shrink-0 items-center gap-2">
+              <span className="flex shrink-0 items-center gap-2">
                 <VaultPlaintextIndicator storageMode={vault.storageMode} />
                 <VaultLastOpenedIndicator active={isLastOpened} />
                 <VaultFileManagerIndicator vaultId={vault.id} />
@@ -243,7 +229,6 @@ export function VaultRow({
                 }
               />
             </div>
-            <VaultPasswordChangeLine vault={vault} />
             <VaultPlainRecordLine
               vault={vault}
               onRetry={onPlainRecordRetry}

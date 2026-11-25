@@ -39,6 +39,7 @@ export {
   parseDataFolderApplied,
   parseDataFolderList,
   parseDataFolderSearch,
+  parseDataFolderSize,
   parseVaultRootPrivateRoot,
   parseVaultRootResolve,
 } from "./parse";

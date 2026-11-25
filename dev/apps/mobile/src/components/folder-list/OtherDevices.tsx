@@ -6,6 +6,7 @@ import {
   deviceName,
   moveRow,
   otherGroups,
+  removeDeviceQuestion,
   removeGroup,
   rowLabel,
   rowProblems,
@@ -18,6 +19,7 @@ import {
   type FolderListPolicy,
   type HereDevice,
 } from "@upriv/shared";
+import { useOsNames } from "@upriv/shared/react";
 import { Button, Collapse, DisclosureChevron, MenuActionItem } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -33,7 +35,9 @@ import { shownPath } from "./shownPath";
  * shows its rows, the one it selects marked, each with its ⋯ menu and text
  * edits checked against that device's own system. Nothing copies into a
  * phone, so no copy shows: the line under the heading says to pick the
- * folder here instead.
+ * folder here instead. A device stays when its folders are deleted; Remove
+ * device takes its setting from the list, and that device keeps working
+ * with the list's default.
  */
 export function OtherDevices<F extends string>({
   policy,
@@ -97,11 +101,12 @@ function OtherDevice<F extends string>({
   onChange: (groups: DeviceGroups<F>) => void;
 }) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const { colors, typography } = useTheme();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
   const [removing, setRemoving] = useState(false);
-  const name = deviceName(id, group.system, t);
+  const name = deviceName(id, group.system, osNames, t);
   const summary = t("folder_list.selected_there", {
     choice: selectionLabel(group.selected, group, t),
   });
@@ -230,10 +235,14 @@ function OtherDevice<F extends string>({
                 );
               })}
             </View>
-          ) : null}
+          ) : (
+            <Text style={[typography.caption, styles.empty, { color: colors.onSurfaceVariant }]}>
+              {t("folder_list.device_no_folders")}
+            </Text>
+          )}
           <View style={styles.footer}>
             <Button
-              label={t("folder_list.action.remove_device_folders")}
+              label={t("folder_list.action.remove_device")}
               size="sm"
               variant="ghost"
               onPress={() => setRemoving(true)}
@@ -253,8 +262,8 @@ function OtherDevice<F extends string>({
           </View>
           <Collapse open={removing}>
             <RowConfirm
-              question={t("folder_list.remove_device_folders_confirm", { device: name })}
-              confirmLabel={t("folder_list.action.remove_device_folders")}
+              question={removeDeviceQuestion(policy, name, t)}
+              confirmLabel={t("folder_list.action.remove_device")}
               onConfirm={() => onChange(removeGroup(groups, id))}
               onCancel={() => setRemoving(false)}
             />
@@ -284,6 +293,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   rows: { gap: spacing.sm, paddingBottom: spacing.sm },
+  empty: { paddingBottom: spacing.sm },
   // A row card inside the device's card (desktop `p-2.5`).
   row: { borderRadius: radii.sm, padding: 10 },
   top: { flexDirection: "row", alignItems: "center", gap: spacing.xs },

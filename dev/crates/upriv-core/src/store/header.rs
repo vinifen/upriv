@@ -686,7 +686,7 @@ mod tests {
         short.wrapped_keys_b64 = B64.encode([0u8; 20]);
         assert!(!parses(&header(short, None)));
         let mut cost = block(3, &[1], 1);
-        cost.kdf.memory_kib = 4096 * 1024;
+        cost.kdf.memory_kib = crate::store::kdf::MAX_KDF_MEMORY_KIB + 1024;
         assert!(!parses(&header(cost, None)));
     }
 

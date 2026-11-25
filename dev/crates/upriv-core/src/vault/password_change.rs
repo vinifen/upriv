@@ -100,13 +100,16 @@ pub struct PasswordChangeFinishResult {
 
 /// Change the password of the closed vault `vault_id` from `current` to
 /// `new`, as the job `job_id`. `back_up_first` writes a save of the store
-/// before anything changes, when there is room for it.
+/// before anything changes, when there is room for it. `hint` becomes the
+/// vault's password hint once the change is made (empty: none); a change
+/// stopped or failed keeps the hint it had.
 pub fn change_vault_password(
     root: &VaultRoot,
     vault_id: &str,
     current: &[u8],
     new: &[u8],
     back_up_first: bool,
+    hint: &str,
     job_id: &str,
 ) -> Result<PasswordChangeResult> {
     Job::run(job_id, JobKind::PasswordChange, Some(vault_id), |job| {
@@ -117,7 +120,7 @@ pub fn change_vault_password(
             return Err(UprivError::PasswordUnchanged);
         }
         with_closed_vault(root, vault_id, |vault_dir| {
-            job.set_step(JobStep::Unlocking);
+            job.begin(JobStep::Unlocking, 0);
             let mut store = with_unlock_lock(|| {
                 unlock_counted(vault_dir, current, |unlocked| {
                     steady(vault_dir, vault_id, unlocked)
@@ -126,7 +129,7 @@ pub fn change_vault_password(
             job.ensure_running()?;
             let reserve = space_needed(&store)?;
             let (backup, backup_skipped) = if back_up_first {
-                job.set_step(JobStep::BackingUp);
+                job.begin(JobStep::BackingUp, 0);
                 match backup_before_password_change(root, vault_id, reserve, job)? {
                     CopyBefore::Written(zip) => (file_name(&zip), None),
                     CopyBefore::Skipped(reason) => (None, Some(reason)),
@@ -164,7 +167,7 @@ pub fn change_vault_password(
                 );
                 return Err(error);
             }
-            job.set_step(JobStep::Finishing);
+            job.begin(JobStep::Finishing, 0);
             let generation = next_generation(&store.store_dir(), &store.header)?;
             let finished = finish_keys(&mut store.index, &change)?.seal(
                 generation,
@@ -172,7 +175,7 @@ pub fn change_vault_password(
                 &new_kek,
             )?;
             store.commit(finished, new_kek, CommitRecord::Rewritten)?;
-            record_password_changed(vault_dir, vault_id);
+            record_password_changed(vault_dir, vault_id, Some(hint));
             log_event(
                 LogLevel::Info,
                 "vault_password_changed",
@@ -206,7 +209,7 @@ pub fn finish_password_change(
         Some(vault_id),
         |job| {
             with_closed_vault(root, vault_id, |vault_dir| {
-                job.set_step(JobStep::Unlocking);
+                job.begin(JobStep::Unlocking, 0);
                 let mut store = with_unlock_lock(|| {
                     unlock_counted(vault_dir, password, |unlocked| {
                         steady(vault_dir, vault_id, unlocked)
@@ -226,7 +229,7 @@ pub fn finish_password_change(
                 let plan = ConvertPlan::of(&store.index, |key| key < since);
                 convert(&mut store, &keys, plan, reserve, job).map_err(|stopped| stopped.error)?;
                 job.final_step()?;
-                job.set_step(JobStep::Finishing);
+                job.begin(JobStep::Finishing, 0);
                 let generation = next_generation(&store.store_dir(), &store.header)?;
                 let finished = finish_keys(&mut store.index, &keys)?.seal(
                     generation,
@@ -309,7 +312,6 @@ fn free_keys(store: &mut ClosedStore, reserve: u64, job: &Job) -> Result<()> {
         else {
             return Ok(());
         };
-        job.set_step(JobStep::RewritingFiles);
         let keys = store.keys.clone();
         let plan = ConvertPlan::of(&store.index, |key| key == freed);
         convert(store, &keys, plan, reserve, job).map_err(|stopped| stopped.error)?;
@@ -444,11 +446,15 @@ fn file_name(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Write `password_changed_at` into the vault's `config.toml`. A failure is
-/// logged: the password is changed by then.
-pub(crate) fn record_password_changed(vault_dir: &Path, vault_id: &str) {
+/// Write `password_changed_at` into the vault's `config.toml`, and `hint`,
+/// trimmed, as its password hint when one is given. A failure is logged: the
+/// password is changed by then.
+pub(crate) fn record_password_changed(vault_dir: &Path, vault_id: &str, hint: Option<&str>) {
     let saved = load_vault_config(vault_dir).and_then(|mut config| {
         config.security.password_changed_at = Some(utc_timestamp_iso_millis());
+        if let Some(hint) = hint {
+            config.vault.password_hint = hint.trim().to_string();
+        }
         save_vault_config(vault_dir, &config)
     });
     if saved.is_err() {
@@ -595,8 +601,7 @@ fn convert(
 ) -> std::result::Result<bool, Interrupted> {
     let mut converted = false;
     let interrupted = |error: UprivError, converted: bool| Interrupted { error, converted };
-    job.set_step(JobStep::RewritingFiles);
-    job.set_total(plan.total_bytes());
+    job.begin(JobStep::RewritingFiles, plan.total_bytes());
     let Some(first) = plan.next_batch(batch_budget(store, reserve)) else {
         return Ok(false);
     };
@@ -804,7 +809,7 @@ pub(crate) fn settle_pending(
                 settled: false,
             };
             store.commit(settled, kek, CommitRecord::Rewritten)?;
-            record_password_changed(vault_dir, vault_id);
+            record_password_changed(vault_dir, vault_id, None);
             log_event(
                 LogLevel::Warn,
                 "vault_password_change_settled",
@@ -896,7 +901,15 @@ mod tests {
     }
 
     fn change(root: &VaultRoot, back_up_first: bool) -> Result<PasswordChangeResult> {
-        change_vault_password(root, "notes", OLD, NEW, back_up_first, &test_job_id())
+        change_vault_password(
+            root,
+            "notes",
+            OLD,
+            NEW,
+            back_up_first,
+            "new hint",
+            &test_job_id(),
+        )
     }
 
     /// Open `notes` with `password`, check every one of `files` reads whole,
@@ -968,11 +981,36 @@ mod tests {
     }
 
     #[test]
+    fn the_hint_changes_with_the_password_and_only_then() {
+        let (_tmp, root) = notes_with(&[]);
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let hint = || load_vault_config(&vault_dir).unwrap().vault.password_hint;
+        let mut config = load_vault_config(&vault_dir).unwrap();
+        config.vault.password_hint = "old hint".into();
+        save_vault_config(&vault_dir, &config).unwrap();
+
+        let refused = change_vault_password(
+            &root,
+            "notes",
+            b"not-the-password",
+            NEW,
+            false,
+            "wrong",
+            &test_job_id(),
+        );
+        assert!(matches!(refused, Err(UprivError::WrongPassword)));
+        assert_eq!(hint(), "old hint");
+
+        change(&root, false).unwrap();
+        assert_eq!(hint(), "new hint");
+    }
+
+    #[test]
     fn the_same_password_is_refused_before_any_unlock() {
         let (_tmp, root) = notes_with(&[]);
         let before = dir_bytes(&store_of(&root));
         assert!(matches!(
-            change_vault_password(&root, "notes", OLD, OLD, true, &test_job_id()),
+            change_vault_password(&root, "notes", OLD, OLD, true, "", &test_job_id()),
             Err(UprivError::PasswordUnchanged)
         ));
         assert_eq!(dir_bytes(&store_of(&root)), before);
@@ -986,7 +1024,7 @@ mod tests {
         let job = test_job_id();
         cancel_job(&job).unwrap();
         assert!(matches!(
-            change_vault_password(&root, "notes", OLD, NEW, true, &job),
+            change_vault_password(&root, "notes", OLD, NEW, true, "", &job),
             Err(UprivError::JobCancelled)
         ));
         assert_eq!(dir_bytes(&store_of(&root)), before);
@@ -1028,7 +1066,7 @@ mod tests {
                 }
             })));
         }
-        let changed = change_vault_password(root, "notes", OLD, NEW, false, &job);
+        let changed = change_vault_password(root, "notes", OLD, NEW, false, "", &job);
         crate::paths::observe_atomic_writes(None);
         (changed, during)
     }
@@ -1246,12 +1284,13 @@ mod tests {
         let listed = |root: &VaultRoot| crate::vault::vault_list_item(root, "notes").unwrap();
         assert_eq!(listed(&root).session, Some("recovery"));
 
-        // The new password settles it forward: unfinished.
+        // The new password settles it forward: unfinished, still a recovery row.
         reads_whole(&root, NEW, &files);
         assert_eq!(
             listed(&root).password_change,
             crate::store::PasswordChangeState::Unfinished
         );
+        assert_eq!(listed(&root).session, Some("recovery"));
         let result = finish_password_change(&root, "notes", NEW, &test_job_id()).unwrap();
         assert_eq!(result.key_copies, KeyCopies::Done);
         let after = open_store(&store, NEW).unwrap();
@@ -1262,6 +1301,7 @@ mod tests {
             listed(&root).password_change,
             crate::store::PasswordChangeState::None
         );
+        assert_eq!(listed(&root).session, None);
         reads_whole(&root, NEW, &files);
     }
 
@@ -1472,7 +1512,7 @@ mod tests {
         };
         let stopped =
             copies_at_every_write(&root, &tmp.path().join("stopped"), at_first_batch, || {
-                let changed = change_vault_password(&root, "notes", OLD, NEW, false, &job);
+                let changed = change_vault_password(&root, "notes", OLD, NEW, false, "", &job);
                 assert!(matches!(changed, Err(UprivError::JobCancelled)));
             });
         TEST_BATCH_BYTES.with(|bytes| bytes.set(BATCH_BYTES));

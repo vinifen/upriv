@@ -52,10 +52,12 @@ pub(crate) fn pass_closed(store: &mut ClosedStore, job: &Job) -> Result<KeyCopie
         return Ok(KeyCopies::Done);
     }
     job.start_over();
-    job.set_step(JobStep::UpdatingKeyCopies);
     let dir = store.store_dir();
     let targets = pass_targets(&dir, &store.index);
-    job.set_total(targets.len() as u64 * KEY_COPY_LEN);
+    job.begin(
+        JobStep::UpdatingKeyCopies,
+        targets.len() as u64 * KEY_COPY_LEN,
+    );
     let mut staged = StagedBlobs::default();
     let mut failed = Failed::default();
     for target in &targets {
@@ -157,8 +159,10 @@ pub fn update_key_copies(root: &VaultRoot, vault_id: &str, job_id: &str) -> Resu
         let Some(targets) = targets else {
             return Ok(KeyCopies::Done);
         };
-        job.set_step(JobStep::UpdatingKeyCopies);
-        job.set_total(targets.len() as u64 * KEY_COPY_LEN);
+        job.begin(
+            JobStep::UpdatingKeyCopies,
+            targets.len() as u64 * KEY_COPY_LEN,
+        );
         let walked = walk_session(&vault_dir, &targets, job);
         // The session may be gone: a close took it, and the next open resumes.
         let ended = with_open_session(&vault_dir, |session| {
@@ -419,7 +423,7 @@ mod tests {
             .iter()
             .map(|blob| crate::host_fs::read(blob).unwrap())
             .collect();
-        change_vault_password(&root, "notes", PW, NEXT, false, &test_job_id()).unwrap();
+        change_vault_password(&root, "notes", PW, NEXT, false, "", &test_job_id()).unwrap();
         for (blob, bytes) in earlier.iter().zip(&earlier_bytes) {
             crate::host_fs::write(blob, bytes).unwrap();
         }

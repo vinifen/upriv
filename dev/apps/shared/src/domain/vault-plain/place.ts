@@ -44,17 +44,17 @@ export function plainPlaceChanges(input: {
   switch (choice) {
     case "beside": {
       const after = selectHere(appUnlocked, here, APP_UNLOCKED_LIST, "beside");
-      return { list: "app", changes: listChanges(appUnlocked, after, here.id, APP_UNLOCKED_LIST) };
+      return { list: "app", changes: listChanges(appUnlocked, after, APP_UNLOCKED_LIST) };
     }
     case "app_folder": {
       const after = addRow(appUnlocked, here, APP_UNLOCKED_LIST, path).groups;
-      return { list: "app", changes: listChanges(appUnlocked, after, here.id, APP_UNLOCKED_LIST) };
+      return { list: "app", changes: listChanges(appUnlocked, after, APP_UNLOCKED_LIST) };
     }
     case "vault_folder": {
       const after = addRow(vaultUnlocked, here, VAULT_UNLOCKED_LIST, path).groups;
       return {
         list: "vault",
-        changes: listChanges(vaultUnlocked, after, here.id, VAULT_UNLOCKED_LIST),
+        changes: listChanges(vaultUnlocked, after, VAULT_UNLOCKED_LIST),
       };
     }
   }

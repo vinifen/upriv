@@ -97,8 +97,10 @@ export function Modal({
   const [dialogBodyHeight, setDialogBodyHeight] = useState(0);
   const [dialogHeaderHeight, setDialogHeaderHeight] = useState(0);
   const [dialogFooterHeight, setDialogFooterHeight] = useState(0);
-  const opacity = useRef(new Animated.Value(open ? 1 : 0)).current;
-  const scale = useRef(new Animated.Value(open ? 1 : MODAL_SCALE_FROM)).current;
+  // Hidden from the first frame: a dialog mounted open fades in from here, so
+  // it never paints whole before its entrance starts.
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(MODAL_SCALE_FROM)).current;
   const hasFooter = Boolean(footer);
   const enterStarted = useRef(false);
   const enterGen = useRef(0);

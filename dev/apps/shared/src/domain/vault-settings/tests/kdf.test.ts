@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   createVaultChoosesStoreSettings,
+  DEFAULT_KDF_OTHER_PRESET,
   DEFAULT_KDF_UNLOCK_PRESET,
+  KDF_UNLOCK_MAIN_PRESETS,
+  KDF_UNLOCK_OTHER_PRESETS,
+  KDF_UNLOCK_PRESETS,
   kdfParamsFromPreset,
   kdfPresetIsDowngrade,
+  kdfPresetIsOther,
   normalizeKdfUnlockPreset,
   parseKdfUnlockPreset,
 } from "../kdf";
@@ -40,6 +45,39 @@ describe("kdfParamsFromPreset", () => {
       timeCost: 1,
       parallelism: 1,
     });
+    expect(kdfParamsFromPreset("512mib")).toEqual({
+      memoryKib: 524288,
+      timeCost: 2,
+      parallelism: 1,
+    });
+    expect(kdfParamsFromPreset("1536mib")).toEqual({
+      memoryKib: 1572864,
+      timeCost: 1,
+      parallelism: 1,
+    });
+    expect(kdfParamsFromPreset("4gib")).toEqual({
+      memoryKib: 4194304,
+      timeCost: 1,
+      parallelism: 1,
+    });
+  });
+
+  it("lists every preset by growing RAM", () => {
+    const memory = KDF_UNLOCK_PRESETS.map((preset) => kdfParamsFromPreset(preset).memoryKib);
+    expect(memory).toEqual([...memory].sort((a, b) => a - b));
+    expect(KDF_UNLOCK_PRESETS).toHaveLength(10);
+  });
+});
+
+describe("the RAM choice", () => {
+  it("shows three presets as radios and the rest in Other, default among the radios", () => {
+    expect(KDF_UNLOCK_MAIN_PRESETS).toContain(DEFAULT_KDF_UNLOCK_PRESET);
+    expect([...KDF_UNLOCK_MAIN_PRESETS, ...KDF_UNLOCK_OTHER_PRESETS].sort()).toEqual(
+      [...KDF_UNLOCK_PRESETS].sort(),
+    );
+    expect(kdfPresetIsOther("4gib")).toBe(true);
+    expect(kdfPresetIsOther("256mib")).toBe(false);
+    expect(kdfPresetIsOther(DEFAULT_KDF_OTHER_PRESET)).toBe(true);
   });
 });
 

@@ -10,6 +10,7 @@ import {
   isPhoneSystem,
   moveRow,
   otherGroups,
+  removeDeviceQuestion,
   removeGroup,
   rowLabel,
   rowProblems,
@@ -24,6 +25,7 @@ import {
   type FolderRow,
   type HereDevice,
 } from "@upriv/shared";
+import { useOsNames } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
 import { Button, Collapse, DisclosureChevron, type DropdownMenuItem } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
@@ -44,7 +46,9 @@ const REFUSAL_KEYS: Record<CopyRefusal, I18nKey> = {
  * marked, each with its ⋯ menu: Copy into this device, and text edits
  * checked against that device's own system. No radio, no status: only the
  * device in use chooses, and only it can check its folders. Nothing copies
- * into or out of a phone, so a phone's card offers no copy at all.
+ * into or out of a phone, so a phone's card offers no copy at all. A device
+ * stays when its folders are deleted; Remove device takes its setting from
+ * the list, and that device keeps working with the list's default.
  */
 export function OtherDevices<F extends string>({
   policy,
@@ -107,13 +111,14 @@ function OtherDevice<F extends string>({
   onChange: (groups: DeviceGroups<F>) => void;
 }) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
   const [removing, setRemoving] = useState(false);
   const nameId = useId();
   const summaryId = useId();
   const bodyId = useId();
-  const name = deviceName(id, group.system, t);
+  const name = deviceName(id, group.system, osNames, t);
   const problems = rowProblems(saved[id], group, policy);
   // A phone's folder is a grant picked there: none copies into or out of a phone.
   const copies = here !== null && !isPhoneSystem(here.system) && !isPhoneSystem(group.system);
@@ -211,6 +216,11 @@ function OtherDevice<F extends string>({
       </button>
       <Collapse open={open}>
         <div id={bodyId} className="border-t border-outline-variant px-3 pb-3 pt-3 sm:px-3.5">
+          {group.rows.length === 0 ? (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t("folder_list.device_no_folders")}
+            </p>
+          ) : null}
           <ul className="space-y-1.5">
             {group.rows.map((row, index) => {
               const problem = problems.get(row.number) ?? null;
@@ -270,7 +280,7 @@ function OtherDevice<F extends string>({
           ) : null}
           <div className="flex flex-wrap items-center gap-2 pt-3">
             <Button size="sm" variant="ghost" onClick={() => setRemoving(true)}>
-              {t("folder_list.action.remove_device_folders")}
+              {t("folder_list.action.remove_device")}
             </Button>
             <div className="ml-auto flex flex-wrap justify-end gap-2">
               {copies && here ? (
@@ -307,8 +317,8 @@ function OtherDevice<F extends string>({
           ) : null}
           <Collapse open={removing}>
             <RowConfirm
-              question={t("folder_list.remove_device_folders_confirm", { device: name })}
-              confirmLabel={t("folder_list.action.remove_device_folders")}
+              question={removeDeviceQuestion(policy, name, t)}
+              confirmLabel={t("folder_list.action.remove_device")}
               onConfirm={() => onChange(removeGroup(groups, id))}
               onCancel={() => setRemoving(false)}
             />

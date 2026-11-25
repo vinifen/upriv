@@ -1,7 +1,7 @@
 //! This device's identity: the ID that names this machine or phone in every
 //! folder list and record, and its system. No name of the computer or phone
-//! is read or kept: the UI names a device by its system and the start of its
-//! ID.
+//! is read or kept: the UI names a device by the name its OS gives itself
+//! (`os_name`), or its system, and the start of its ID.
 //!
 //! The ID is the first 16 bytes of HMAC-SHA256 keyed by the OS machine ID over
 //! [`DEVICE_ID_LABEL`], in lowercase hex: the app-specific hash machine-id(5)
@@ -155,9 +155,9 @@ impl ThisDevice {
     }
 
     /// The fields of the log lines that name the device: `device` (the ID, or
-    /// `unknown` with the run) and `system`.
+    /// `unknown` with the run), `system`, and `os` when the OS gives its name.
     pub fn log_fields(&self) -> Vec<(&'static str, String)> {
-        let mut fields = Vec::with_capacity(3);
+        let mut fields = Vec::with_capacity(4);
         match &self.id {
             Some(id) => fields.push(("device", id.as_str().to_string())),
             None => {
@@ -166,6 +166,7 @@ impl ThisDevice {
             }
         }
         fields.push(("system", self.system.as_str().to_string()));
+        fields.extend(crate::os_name::this_os_name().map(|name| ("os", name.to_string())));
         fields
     }
 }
@@ -246,10 +247,17 @@ fn linux_machine_id(path: &Path) -> Option<Vec<u8>> {
     well_formed.then(|| text.to_ascii_lowercase().into_bytes())
 }
 
-/// `MachineGuid` under `HKLM\SOFTWARE\Microsoft\Cryptography`, read from the
-/// 64-bit view also by a 32-bit process.
+/// `MachineGuid` under `HKLM\SOFTWARE\Microsoft\Cryptography`.
 #[cfg(windows)]
 fn os_machine_id() -> Option<Vec<u8>> {
+    registry_string(r"SOFTWARE\Microsoft\Cryptography", "MachineGuid")
+        .map(|text| text.to_ascii_lowercase().into_bytes())
+}
+
+/// A text value under `HKLM\{sub_key}`, read from the 64-bit view also by a
+/// 32-bit process. `None` when it is missing, empty, or not text.
+#[cfg(windows)]
+pub(crate) fn registry_string(sub_key: &str, value: &str) -> Option<String> {
     #[link(name = "advapi32")]
     extern "system" {
         fn RegGetValueW(
@@ -266,9 +274,9 @@ fn os_machine_id() -> Option<Vec<u8>> {
     const RRF_RT_REG_SZ: u32 = 0x0000_0002;
     const RRF_SUBKEY_WOW6464KEY: u32 = 0x0001_0000;
     let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-    let sub_key = wide(r"SOFTWARE\Microsoft\Cryptography");
-    let value = wide("MachineGuid");
-    let mut buf = [0u16; 128];
+    let sub_key = wide(sub_key);
+    let value = wide(value);
+    let mut buf = [0u16; 256];
     let mut len = std::mem::size_of_val(&buf) as u32;
     let status = unsafe {
         RegGetValueW(
@@ -287,7 +295,7 @@ fn os_machine_id() -> Option<Vec<u8>> {
     let units = (len as usize / 2).min(buf.len());
     let text = String::from_utf16_lossy(&buf[..units]);
     let text = text.trim_end_matches('\0').trim();
-    (!text.is_empty()).then(|| text.to_ascii_lowercase().into_bytes())
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// The hardware UUID (`IOPlatformUUID`), through `gethostuuid`.
@@ -385,14 +393,14 @@ mod tests {
         let id = DeviceId::from_machine_id(b"machine");
         let known = ThisDevice::new(Some(id.clone()));
         assert_eq!(known.record_key(), id.as_str());
-        // The ID and the system name the device; no name of the computer is kept.
-        assert_eq!(
-            known.log_fields(),
-            vec![
-                ("device", id.as_str().to_string()),
-                ("system", known.system.as_str().to_string()),
-            ]
-        );
+        // The ID, the system, and the OS's own name name the device; no name
+        // of the computer is kept.
+        let mut expected = vec![
+            ("device", id.as_str().to_string()),
+            ("system", known.system.as_str().to_string()),
+        ];
+        expected.extend(crate::os_name::this_os_name().map(|name| ("os", name.to_string())));
+        assert_eq!(known.log_fields(), expected);
     }
 
     #[test]

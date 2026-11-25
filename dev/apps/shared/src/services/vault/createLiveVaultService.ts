@@ -4,6 +4,7 @@ import type { ListsSaved, VaultListChanges } from "../../domain/folder-lists";
 import { forgetVaultSettings, rememberVaultSettings } from "./vaultSettingsMemory";
 import type {
   CreateVaultInput,
+  CreatedVault,
   VaultDeleteInput,
   VaultRenameResult,
   VaultService,
@@ -39,11 +40,17 @@ export interface LiveVaultRpc {
     job: string,
   ) => Promise<VaultExportResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
-  sweepUnfinished?: () => Promise<void>;
+  sweepUnfinished?: () => Promise<{ removedVaults: string[] }>;
   importZip?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
-  import7z?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
-  importFilesZip?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
-  importOsPath?: (input: CreateVaultInput, job: string) => Promise<VaultListItem>;
+  import7z?: (input: CreateVaultInput, job: string) => Promise<CreatedVault>;
+  importFilesZip?: (input: CreateVaultInput, job: string) => Promise<CreatedVault>;
+  /** `leftOut` counts what it left out, as `input.importPackage.leaveOut` asked. */
+  importOsPath?: (input: CreateVaultInput, job: string) => Promise<CreatedVault>;
+}
+
+/** A create that leaves nothing out and that a stop never keeps. */
+async function whole(made: Promise<VaultListItem>): Promise<CreatedVault> {
+  return { vault: await made, leftOut: 0, stopped: false };
 }
 
 /** Shared live adapter — desktop daemon and native FFI pass their `rpc*` fns. */
@@ -60,7 +67,7 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
     async createVault(input, job) {
       if (input.importPackage?.kind === "store_zip") {
         if (!rpc.importZip) notImplemented("Vault zip import");
-        return rpc.importZip(input, job);
+        return whole(rpc.importZip(input, job));
       }
       if (input.importPackage?.kind === "seven_zip") {
         if (!rpc.import7z) notImplemented("Vault 7z import");
@@ -74,7 +81,7 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         if (!rpc.importOsPath) notImplemented("File import");
         return rpc.importOsPath(input, job);
       }
-      return rpc.createVault(input, job);
+      return whole(rpc.createVault(input, job));
     },
     async getSettings(vaultId) {
       const settings = await rpc.getSettings(vaultId);
@@ -133,6 +140,7 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       return rpc.exportCapabilities();
     },
 
-    sweepUnfinished: () => (rpc.sweepUnfinished ? rpc.sweepUnfinished() : Promise.resolve()),
+    sweepUnfinished: () =>
+      rpc.sweepUnfinished ? rpc.sweepUnfinished() : Promise.resolve({ removedVaults: [] }),
   };
 }

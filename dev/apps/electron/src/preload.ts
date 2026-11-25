@@ -6,9 +6,14 @@ export interface UprivDesktopApi {
   /**
    * @param timeoutMs Daemon RPC timeout in main. `undefined` → `DEFAULT_RPC_TIMEOUT_MS`.
    * `0` → no timeout (a job, a close, or a dialog). Renderer should pass `METHOD_TIMEOUT_MS[method]`.
-   * A failed call rejects with an `Error` whose message is the wire `code: message`.
+   * A failed call answers `{ ok: false }` with the wire `code: message` text and
+   * the details core sent; the renderer turns it into its error.
    */
-  invoke(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;
+  invoke(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<InvokeReply>;
   onEvent(callback: (name: string, payload: unknown) => void): () => void;
   /**
    * Absolute path of an OS-dropped `File`.
@@ -29,15 +34,14 @@ export interface UprivDesktopApi {
   >;
   /** `lstat` of one dropped path: file, directory, or anything else (including missing). */
   classifyDroppedPath(osPath: string): Promise<"file" | "directory" | "other">;
-  statDroppedPaths(paths: string[]): Promise<
-    | { relativePath: string; osPath: string; size: number }[]
-    | {
-        files: { relativePath: string; osPath: string; size: number }[];
-        unreadable: string[];
-        truncated?: boolean;
-        symlinks?: string[];
-      }
-  >;
+  /** `droppedImport.ts` `DroppedImportStatResult`. */
+  statDroppedPaths(paths: string[]): Promise<{
+    files: { relativePath: string; osPath: string; size: number }[];
+    unreadable: { osPath: string; reason: string }[];
+    blocked: { path: string; reason: string }[];
+    blockedCount: number;
+    truncated: boolean;
+  }>;
   readDroppedPathRange(
     osPath: string,
     offset: number,
@@ -61,14 +65,12 @@ export interface UprivDesktopApi {
 
 const api: UprivDesktopApi = {
   async invoke(method, params, timeoutMs) {
-    const reply = (await ipcRenderer.invoke(
+    return (await ipcRenderer.invoke(
       "upriv-invoke",
       method,
       params ?? {},
       timeoutMs,
     )) as InvokeReply;
-    if (!reply.ok) throw new Error(reply.error);
-    return reply.value;
   },
   onEvent(callback) {
     const listener = (_event: Electron.IpcRendererEvent, name: string, payload: unknown) => {

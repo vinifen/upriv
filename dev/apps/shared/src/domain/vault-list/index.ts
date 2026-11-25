@@ -39,8 +39,6 @@ export {
   vaultRowClick,
   vaultRowClickLabelKey,
 } from "./rowArming";
-export type { RowButtonStackPart } from "./rowButtonStack";
-export { EMPTY_ROW_BUTTON_STACK, nextRowButtonStack } from "./rowButtonStack";
 export { sortVaultsByOrder } from "./order";
 export type {
   VaultExportRequest,

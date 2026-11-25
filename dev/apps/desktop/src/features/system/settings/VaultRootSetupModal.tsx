@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, ElapsedTime, Modal, Select } from "@/components/ui";
+import { Button, JobProgressBar, Modal, Select } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
 import {
   DATA_FOLDER_LIST_FILE,
@@ -9,6 +9,7 @@ import {
   choiceNameLabel,
   dataFolderChangeMessage,
   isRpcError,
+  jobStepCopy,
   newJobId,
   type AppDistribution,
   type ChoiceName,
@@ -277,10 +278,12 @@ export function VaultRootSetupModal({
       >
         {screen ? <SetupBody screen={screen} newList={newList} /> : null}
         {kind === "selected_failed" && search?.state === "running" ? (
-          <div role="status">
-            <p>{t("modal.vault_root_setup.searching")}</p>
-            <ElapsedTime startedAt={search.startedAt} />
-          </div>
+          <JobProgressBar
+            progress={null}
+            startedAt={search.startedAt}
+            label={t("modal.vault_root_setup.searching")}
+            copy={jobStepCopy(null, "modal.vault_root_setup.searching")}
+          />
         ) : null}
         {kind === "selected_failed" && search?.state === "found_none" ? (
           <p role="status">{t("modal.vault_root_setup.search_found_none")}</p>

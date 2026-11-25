@@ -12,7 +12,6 @@ import {
 import type {
   AppUnlockedChoice,
   DeviceGroups,
-  PlainFolderClass,
   PlainLeftover,
   PlainPlaceChoice,
   PlainRecoveryAction,
@@ -39,6 +38,10 @@ interface VaultLifecycleLayerProps {
   recoveryOpen: boolean;
   onRecoveryClose: () => void;
   onRecoveryAction: (action: PlainRecoveryAction) => void;
+  /** The recovery vault's Password screen, to finish a change that left files behind. */
+  onRecoveryFinishPasswordChange: () => void;
+  /** The recovery vault's Delete vault window, for one whose import was cut off. */
+  onRecoveryDelete: () => void;
   placeOpen: boolean;
   placeVaultName: string;
   /** The app's unlocked folders can change: no vault is open. */
@@ -48,10 +51,8 @@ interface VaultLifecycleLayerProps {
   /** The vault's own unlocked folders; `null` while they load. */
   placeVaultUnlocked: DeviceGroups<VaultUnlockedChoice> | null;
   placeSubmitting: boolean;
-  placeWarningClass: PlainFolderClass | null;
   onPlaceClose: () => void;
   onPlaceContinue: (choice: PlainPlaceChoice, path: string) => void;
-  onPlaceAcceptWarning: () => void;
   heldOpen: boolean;
   heldCount: number;
   heldPaths: readonly string[];
@@ -98,16 +99,16 @@ export function VaultLifecycleLayer({
   recoveryOpen,
   onRecoveryClose,
   onRecoveryAction,
+  onRecoveryFinishPasswordChange,
+  onRecoveryDelete,
   placeOpen,
   placeVaultName,
   placeAppChoices,
   placeAppUnlocked,
   placeVaultUnlocked,
   placeSubmitting,
-  placeWarningClass,
   onPlaceClose,
   onPlaceContinue,
-  onPlaceAcceptWarning,
   heldOpen,
   heldCount,
   heldPaths,
@@ -156,10 +157,8 @@ export function VaultLifecycleLayer({
         appUnlocked={placeAppUnlocked}
         vaultUnlocked={placeVaultUnlocked}
         submitting={placeSubmitting}
-        warningClass={placeWarningClass}
         onClose={onPlaceClose}
         onContinue={onPlaceContinue}
-        onAcceptWarning={onPlaceAcceptWarning}
       />
       <UnlockedFolderDriverModal
         vaultName={driverPromptVaultName}
@@ -200,6 +199,8 @@ export function VaultLifecycleLayer({
         open={recoveryOpen}
         onClose={onRecoveryClose}
         onAction={onRecoveryAction}
+        onFinishPasswordChange={onRecoveryFinishPasswordChange}
+        onDelete={onRecoveryDelete}
       />
     </>
   );

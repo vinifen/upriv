@@ -6,6 +6,11 @@
 //! or nothing. Rows come first in the person's order, then the fixed
 //! choices, which never move. A row's number is given when it is made and is
 //! never reused while its group exists.
+//!
+//! A group is made the first time a device's list differs from the defaults
+//! and stays until another device removes it (Remove device): deleting its
+//! rows or selecting the default again keeps it. Removing it takes only that
+//! list's setting for the device, which then uses the list's default.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -156,7 +161,7 @@ impl<F: FixedChoice> DeviceGroup<F> {
     }
 
     /// A group holds something while it has rows or selects other than the
-    /// list's default. One that holds nothing is not stored.
+    /// list's default. A group is made only to hold something.
     pub fn holds_something(&self) -> bool {
         !self.rows.is_empty() || !self.selected.is_default()
     }
@@ -222,22 +227,25 @@ impl<F: FixedChoice> DeviceGroups<F> {
         self.here(device).map_or(F::DEFAULT, |group| group.selected)
     }
 
-    /// Set this device's selection, making its group when it has none.
-    /// An unknown device changes nothing.
+    /// Set this device's selection, making its group when it has none and
+    /// the selection is not the default. An unknown device changes nothing.
     pub fn select_here(&mut self, device: &ThisDevice, selection: Selection<F>) {
         let Some(id) = device.id.clone() else {
             return;
         };
-        self.0
-            .entry(id)
-            .or_insert_with(|| DeviceGroup::for_device(device))
-            .selected = selection;
-        self.prune();
-    }
-
-    /// Drop the groups that hold nothing.
-    pub fn prune(&mut self) {
-        self.0.retain(|_, group| group.holds_something());
+        match self.0.get_mut(&id) {
+            Some(group) => group.selected = selection,
+            None if selection.is_default() => {}
+            None => {
+                self.0.insert(
+                    id,
+                    DeviceGroup {
+                        selected: selection,
+                        ..DeviceGroup::for_device(device)
+                    },
+                );
+            }
+        }
     }
 
     /// The groups of the other devices.
@@ -252,8 +260,7 @@ impl<F: FixedChoice> DeviceGroups<F> {
 
     /// Why a list read from a file cannot be used: a row number used twice
     /// or zero, a name that is too long, or a selection that names no row.
-    /// A next number at or below a row's is raised, and a group that holds
-    /// nothing is dropped, not refused.
+    /// A next number at or below a row's is raised.
     pub fn check(&mut self) -> std::result::Result<(), String> {
         for (id, group) in &mut self.0 {
             let device = id.as_str();
@@ -261,7 +268,6 @@ impl<F: FixedChoice> DeviceGroups<F> {
             check_selection(group).map_err(|detail| format!("device {device}: {detail}"))?;
             group.next_number = group.next_number.max(highest_number(&group.rows) + 1);
         }
-        self.prune();
         Ok(())
     }
 }
@@ -302,8 +308,8 @@ fn check_selection<F: FixedChoice>(group: &DeviceGroup<F>) -> std::result::Resul
     bound(serialize = "F: FixedChoice", deserialize = "F: FixedChoice")
 )]
 pub struct GroupChange<F: FixedChoice> {
-    /// Remove another device's group. The current device's group goes only
-    /// row by row.
+    /// Remove another device's group. The current device's group is never
+    /// removed from the current device.
     #[serde(default)]
     pub remove: bool,
     /// Every row of the group, in order. The group's next number follows.
@@ -356,8 +362,8 @@ fn invalid(detail: impl Into<String>) -> UprivError {
 
 /// Apply `changes` to `groups`, read again from disk. Only the parts a change
 /// carries are written, so what core switched meanwhile in another part
-/// stays. A group of this device is made when a change needs it. Groups that
-/// hold nothing afterwards are dropped.
+/// stays. A group of this device is made when a change leaves it holding
+/// something; a group goes only by its `remove`.
 ///
 /// A row whose path is new or changed is checked against its group's system;
 /// paths may not repeat in a group, and this device's rows may not name the
@@ -375,11 +381,14 @@ pub fn apply_changes<F: FixedChoice>(
         let here = device.id.as_ref() == Some(id);
         if change.remove {
             if here {
-                return Err(invalid("this device's group goes row by row"));
+                return Err(invalid(
+                    "this device's group is removed only from another device",
+                ));
             }
             groups.0.remove(id);
             continue;
         }
+        let made = here && !groups.0.contains_key(id);
         let group = match groups.0.get_mut(id) {
             Some(group) => group,
             None if here => groups
@@ -390,8 +399,10 @@ pub fn apply_changes<F: FixedChoice>(
         };
         let fixed: &[String] = if here { fixed_here } else { &[] };
         apply_group_change(group, change, fixed)?;
+        if made && !group.holds_something() {
+            groups.0.remove(id);
+        }
     }
-    groups.prune();
     Ok(())
 }
 
@@ -600,19 +611,41 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_group_that_holds_nothing_is_dropped() {
+    fn a_group_stays_once_its_rows_are_deleted() {
+        let here = device(b"desk");
+        let other = device(b"laptop");
+        let mut groups = DeviceGroups::<Spot>::default();
+        for owner in [&here, &other] {
+            groups.0.insert(
+                owner.id.clone().unwrap(),
+                DeviceGroup {
+                    rows: vec![row(1, "/a")],
+                    selected: Selection::Row(1),
+                    next_number: 2,
+                    ..DeviceGroup::for_device(owner)
+                },
+            );
+        }
+        for owner in [&here, &other] {
+            apply_changes(
+                &mut groups,
+                &changes_for(owner, rows_change(Vec::new(), Some(Selection::Nothing))),
+                &here,
+                &[],
+            )
+            .unwrap();
+            let group = groups.group(owner.id.as_ref().unwrap()).unwrap();
+            assert!(group.rows.is_empty());
+            assert_eq!(group.next_number, 2);
+        }
+        groups.check().unwrap();
+        assert_eq!(groups.0.len(), 2);
+    }
+
+    #[test]
+    fn a_group_is_made_only_to_hold_something() {
         let here = device(b"desk");
         let mut groups = DeviceGroups::<Spot>::default();
-        apply_changes(
-            &mut groups,
-            &changes_for(
-                &here,
-                rows_change(vec![row(1, "/a")], Some(Selection::Row(1))),
-            ),
-            &here,
-            &[],
-        )
-        .unwrap();
         apply_changes(
             &mut groups,
             &changes_for(&here, rows_change(Vec::new(), Some(Selection::Nothing))),
@@ -621,6 +654,12 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(groups.is_empty());
+        groups.select_here(&here, Selection::Nothing);
+        assert!(groups.is_empty());
+        groups.select_here(&here, Selection::Fixed(Spot::Beside));
+        groups.select_here(&here, Selection::Nothing);
+        assert_eq!(groups.selection_here(&here), Selection::Nothing);
+        assert!(groups.here(&here).is_some());
     }
 
     #[test]

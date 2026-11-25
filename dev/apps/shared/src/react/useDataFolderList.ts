@@ -181,10 +181,7 @@ export function useDataFolderList({
         ? (statuses.get(selectedKey.slice("row:".length)) ?? null)
         : null;
   const replacePolicy = policy?.key === selectedKey ? policy.policy : null;
-  const changes = useMemo(
-    () => listChanges(saved, draft, hereId, DATA_FOLDER_LIST),
-    [draft, hereId, saved],
-  );
+  const changes = useMemo(() => listChanges(saved, draft, DATA_FOLDER_LIST), [draft, saved]);
   const fixedHere = here ? dataFolderFixedFolders(here.system, view?.defaultFolder ?? null) : [];
   const rowsBlocked = listDraftBlocks(saved, draft, DATA_FOLDER_LIST, hereId, fixedHere);
   const gate = dataFolderGate({

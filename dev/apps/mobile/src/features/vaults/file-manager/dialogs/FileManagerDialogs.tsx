@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Modal as RnModal, Pressable, StyleSheet, Text, View } from "react-native";
+import { ImportBlockedModal } from "@/components/ImportBlockedModal";
 import { Button, Checkbox, Modal, ModalFooterActions, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
@@ -160,6 +161,11 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
       </Modal>
 
       <HeldFilesDialog fm={fm} open={promptsOpen} />
+
+      <ImportBlockedModal
+        {...fm.importBlocked}
+        report={promptsOpen ? fm.importBlocked.report : null}
+      />
 
       {promptsOpen || !fm.toast ? (
         <Toast toast={fm.toast} onDismiss={fm.dismissToast} bottomExtra={56} />

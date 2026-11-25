@@ -178,6 +178,16 @@ describe("job rpc", () => {
     expect(native.invoke).toHaveBeenCalledWith("job_status", JSON.stringify({ job: "job-1" }));
   });
 
+  it("stops only the backup of the job it names, and says whether one was running", async () => {
+    native.invoke
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, result: { stopping: true } }))
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, result: { stopping: false } }));
+    const { rpcJobSkipBackup } = await import("../rpc");
+    await expect(rpcJobSkipBackup("job-1")).resolves.toBe(true);
+    await expect(rpcJobSkipBackup("job-1")).resolves.toBe(false);
+    expect(native.invoke).toHaveBeenCalledWith("job_skip_backup", JSON.stringify({ job: "job-1" }));
+  });
+
   it("stops the job it names, saying who asked", async () => {
     native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { running: true } }));
     const { rpcJobCancel } = await import("../rpc");
@@ -281,10 +291,12 @@ describe("storage rpc", () => {
     await expect(rpcVaultOpen("notes", "pw", "job-1")).resolves.toEqual({
       switches: [],
       storageReset: "unsaved",
+      importKept: false,
     });
     await expect(rpcVaultOpen("notes", "pw", "job-2")).resolves.toEqual({
       switches: [],
       storageReset: null,
+      importKept: false,
     });
   });
 

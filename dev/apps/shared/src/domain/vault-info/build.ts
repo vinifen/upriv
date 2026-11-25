@@ -1,12 +1,20 @@
 import type { VaultBackupEntry, VaultBackupSection } from "../backups";
-import { deviceName } from "../device";
+import { deviceName, type OsNames } from "../device";
 import { choiceNameLabel, fixedChoiceLabel } from "../folder-lists";
 import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
 import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
-import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
+import {
+  loadingField,
+  withOpenPath,
+  type InfoField,
+  type InfoSection,
+  type InfoTranslate,
+} from "../info";
 import { KDF_UNLOCK_OPTION_META } from "../vault-settings/kdf";
+import type { VaultSettingsConfig } from "../vault-settings";
 import type { VaultKeyStatus } from "../vault/keyChanges";
+import type { VaultSession } from "../vault/types";
 import {
   idleWarnLeadSeconds,
   resolveVaultListStatus,
@@ -20,7 +28,8 @@ const SESSION_KEYS = {
   closing: "modal.info.value.session.closing",
   recovery: "modal.info.value.session.recovery",
   deleting: "modal.info.value.session.deleting",
-} as const;
+  importing: "modal.info.value.session.importing",
+} as const satisfies Record<VaultSession, string>;
 
 const PASSWORD_CHANGE_KEYS = {
   none: "modal.info.value.password_change.none",
@@ -66,14 +75,17 @@ function latestBackupName(backups: VaultBackupEntry[]): string {
   return latest ? latest.fileName : "—";
 }
 
-function measured(value: number | null | "measuring", t: InfoTranslate): string {
-  return value === "measuring" ? t("modal.info.loading") : formatBytes(value ?? undefined);
+/** A size row: loading while it is measured, then the size (a dash when it did not run). */
+function sizeField(id: string, label: string, value: number | null | "measuring"): InfoField {
+  return value === "measuring"
+    ? loadingField(id, label)
+    : { id, label, value: formatBytes(value ?? undefined) };
 }
 
 /** A folder holding zips, with the device that wrote there. */
-function sectionValue(section: VaultBackupSection, t: InfoTranslate): string {
+function sectionValue(section: VaultBackupSection, osNames: OsNames, t: InfoTranslate): string {
   return section.device
-    ? `${section.path} · ${deviceName(section.device.id, section.device.system, t)}`
+    ? `${section.path} · ${deviceName(section.device.id, section.device.system, osNames, t)}`
     : section.path;
 }
 
@@ -93,12 +105,11 @@ export function buildVaultInfoSections(
     passwordInSession,
     unlockedFolder,
     keyStatus,
-    storePath,
-    backupsPath,
-    storeOpenPath,
-    backupsOpenPath,
+    paths,
     locale,
+    osNames,
   } = snapshot;
+  const config = settings === "reading" ? null : settings;
 
   const displayStatus = resolveVaultListStatus(vault, pipeline);
   const fileManagerEligible = displayStatus === "open";
@@ -141,6 +152,20 @@ export function buildVaultInfoSections(
       label: t("modal.info.field.session"),
       value: vault.session ? t(SESSION_KEYS[vault.session]) : t("modal.info.value.session.none"),
     },
+    // A vault in recovery for a cut-off import says when that import began.
+    ...(vault.importUnfinished
+      ? [
+          settings === "reading"
+            ? loadingField("import_started_at", t("modal.info.field.import_started_at"))
+            : {
+                id: "import_started_at",
+                label: t("modal.info.field.import_started_at"),
+                value: config?.importing?.started_at
+                  ? formatIsoDate(config.importing.started_at, locale)
+                  : "—",
+              },
+        ]
+      : []),
     {
       id: "storage_mode",
       label: t("modal.info.field.storage_mode"),
@@ -197,24 +222,24 @@ export function buildVaultInfoSections(
   ];
 
   const storageFields = [
-    withOpenPath(
-      { id: "store_path", label: t("modal.info.field.store_path"), value: storePath },
-      storeOpenPath,
-    ),
-    withOpenPath(
-      { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
-      backupsOpenPath,
-    ),
-    {
-      id: "store_size",
-      label: t("modal.info.field.store_size"),
-      value: measured(runtime.storeBytes, t),
-    },
-    {
-      id: "files_size",
-      label: t("modal.info.field.files_size"),
-      value: measured(runtime.filesBytes, t),
-    },
+    paths
+      ? withOpenPath(
+          { id: "store_path", label: t("modal.info.field.store_path"), value: paths.storePath },
+          paths.storeOpenPath,
+        )
+      : loadingField("store_path", t("modal.info.field.store_path")),
+    paths
+      ? withOpenPath(
+          {
+            id: "backups_path",
+            label: t("modal.info.field.backups_path"),
+            value: paths.backupsPath,
+          },
+          paths.backupsOpenPath,
+        )
+      : loadingField("backups_path", t("modal.info.field.backups_path")),
+    sizeField("store_size", t("modal.info.field.store_size"), runtime.storeBytes),
+    sizeField("files_size", t("modal.info.field.files_size"), runtime.filesBytes),
     // Only a vault that set data aside shows the row.
     ...(typeof runtime.heldBytes === "number" && runtime.heldBytes > 0
       ? [
@@ -233,13 +258,15 @@ export function buildVaultInfoSections(
       label: t("modal.info.field.kdf_preset"),
       value: kdfPreset ? t(KDF_UNLOCK_OPTION_META[kdfPreset].titleKey) : "—",
     },
-    {
-      id: "password_changed_at",
-      label: t("modal.info.field.password_changed_at"),
-      value: settings?.security.password_changed_at
-        ? formatIsoDate(settings.security.password_changed_at, locale)
-        : "—",
-    },
+    settings === "reading"
+      ? loadingField("password_changed_at", t("modal.info.field.password_changed_at"))
+      : {
+          id: "password_changed_at",
+          label: t("modal.info.field.password_changed_at"),
+          value: config?.security.password_changed_at
+            ? formatIsoDate(config.security.password_changed_at, locale)
+            : "—",
+        },
     {
       id: "key_count",
       label: t("modal.info.field.key_count"),
@@ -252,13 +279,7 @@ export function buildVaultInfoSections(
     },
     // Only an open session knows which files wait and where the key copies stand.
     ...(keyStatus === "reading"
-      ? [
-          {
-            id: "files_waiting",
-            label: t("modal.info.field.files_waiting"),
-            value: t("modal.info.loading"),
-          },
-        ]
+      ? [loadingField("files_waiting", t("modal.info.field.files_waiting"))]
       : keyStatus
         ? [
             {
@@ -276,105 +297,140 @@ export function buildVaultInfoSections(
   ];
 
   const unlockedPath = unlockedFolder?.path ?? "";
-  const unlockedFields = [
-    {
-      id: "unlocked_folder_choice",
-      label: t("modal.info.field.unlocked_folder_choice"),
-      value: unlockedFolder ? choiceNameLabel(unlockedFolder.choice, t) : t("modal.info.loading"),
-    },
-    withOpenPath(
-      {
-        id: "unlocked_folder_path",
-        label: t("modal.info.field.unlocked_folder_path"),
-        value: emptyDash(unlockedPath),
-      },
-      unlockedPath,
-    ),
+  const unlockedFields: InfoField[] = [
+    unlockedFolder
+      ? {
+          id: "unlocked_folder_choice",
+          label: t("modal.info.field.unlocked_folder_choice"),
+          value: choiceNameLabel(unlockedFolder.choice, t),
+        }
+      : loadingField("unlocked_folder_choice", t("modal.info.field.unlocked_folder_choice")),
+    unlockedFolder
+      ? withOpenPath(
+          {
+            id: "unlocked_folder_path",
+            label: t("modal.info.field.unlocked_folder_path"),
+            value: emptyDash(unlockedPath),
+          },
+          unlockedPath,
+        )
+      : loadingField("unlocked_folder_path", t("modal.info.field.unlocked_folder_path")),
     ...(vault.storageMode === "encrypted_dir"
       ? [
-          {
-            id: "unlocked_folder_mounted",
-            label: t("modal.info.field.unlocked_folder_mounted"),
-            value: yesNo(t, unlockedFolder?.mounted === true),
-          },
-          ...(settings
+          unlockedFolder
+            ? {
+                id: "unlocked_folder_mounted",
+                label: t("modal.info.field.unlocked_folder_mounted"),
+                value: yesNo(t, unlockedFolder.mounted),
+              }
+            : loadingField(
+                "unlocked_folder_mounted",
+                t("modal.info.field.unlocked_folder_mounted"),
+              ),
+          ...(settings === "reading"
             ? [
-                {
-                  id: "unlocked_folder_encrypted",
-                  label: t("modal.info.field.unlocked_folder_encrypted"),
-                  value: t(
-                    `modal.info.value.encrypted_switch.${settings.unlocked_folder.encrypted}`,
-                  ),
-                },
+                loadingField(
+                  "unlocked_folder_encrypted",
+                  t("modal.info.field.unlocked_folder_encrypted"),
+                ),
               ]
-            : []),
+            : config
+              ? [
+                  {
+                    id: "unlocked_folder_encrypted",
+                    label: t("modal.info.field.unlocked_folder_encrypted"),
+                    value: t(
+                      `modal.info.value.encrypted_switch.${config.unlocked_folder.encrypted}`,
+                    ),
+                  },
+                ]
+              : []),
         ]
       : []),
   ];
 
-  const configFields = settings
-    ? [
-        ...(settings.storage.mode === "upriv_plain"
-          ? [
-              {
-                id: "plain_files",
-                label: t("modal.info.field.plain_files"),
-                value: t(`modal.info.value.plain_files.${settings.storage.plain_files}`),
-              },
-            ]
-          : []),
-        {
-          id: "backup_enabled",
-          label: t("modal.info.field.backup_enabled"),
-          value: yesNo(t, settings.backup.enabled),
-        },
-        {
-          id: "backup_skip_unchanged",
-          label: t("modal.settings.field.backup.skip_unchanged"),
-          value: yesNo(t, settings.backup.skip_unchanged),
-        },
-        {
-          id: "backup_keep_last",
-          label: t("modal.settings.field.backup.keep_last"),
-          value: String(settings.backup.keep_last),
-        },
-        {
-          id: "auto_close",
-          label: t("modal.info.field.auto_close"),
-          value: settings.auto_close.enabled
+  /** `config.toml`'s rows, each with its value once the file is read. */
+  const configRows: { id: string; label: string; value: (read: VaultSettingsConfig) => string }[] =
+    [
+      ...(vault.storageMode === "upriv_plain"
+        ? [
+            {
+              id: "plain_files",
+              label: t("modal.info.field.plain_files"),
+              value: (read: VaultSettingsConfig) =>
+                t(`modal.info.value.plain_files.${read.storage.plain_files}`),
+            },
+          ]
+        : []),
+      {
+        id: "backup_enabled",
+        label: t("modal.info.field.backup_enabled"),
+        value: (read) => yesNo(t, read.backup.enabled),
+      },
+      {
+        id: "backup_when",
+        label: t("modal.settings.field.backup.when"),
+        value: (read) =>
+          t(
+            read.backup.skip_unchanged
+              ? "modal.settings.option.backup.changed"
+              : "modal.settings.option.backup.every_close",
+          ),
+      },
+      {
+        id: "backup_keep_current",
+        label: t("modal.settings.field.backup.keep_current"),
+        value: (read) => yesNo(t, read.backup.keep_current),
+      },
+      {
+        id: "backup_keep_last",
+        label: t("modal.settings.field.backup.keep_last"),
+        value: (read) => String(read.backup.keep_last),
+      },
+      {
+        id: "auto_close",
+        label: t("modal.info.field.auto_close"),
+        value: (read) =>
+          read.auto_close.enabled
             ? t("modal.info.value.auto_close_on_warn", {
-                minutes: String(settings.auto_close.idle_minutes),
-                seconds: String(idleWarnLeadSeconds(settings.auto_close.idle_minutes)),
+                minutes: String(read.auto_close.idle_minutes),
+                seconds: String(idleWarnLeadSeconds(read.auto_close.idle_minutes)),
               })
             : t("modal.info.value.no"),
-        },
-        {
-          id: "auto_close_when_busy",
-          label: t("modal.info.field.auto_close_when_busy"),
-          value: t(`modal.settings.field.auto_close.when_busy.${settings.auto_close.when_busy}`),
-        },
-        {
-          id: "file_manager_confirm_delete",
-          label: t("modal.settings.field.file_manager.confirm_delete"),
-          value: yesNo(t, settings.file_manager.confirm_delete),
-        },
-      ]
-    : [{ id: "config_unavailable", label: t("modal.info.field.config"), value: "—" }];
+      },
+      {
+        id: "auto_close_when_busy",
+        label: t("modal.info.field.auto_close_when_busy"),
+        value: (read) =>
+          t(`modal.settings.field.auto_close.when_busy.${read.auto_close.when_busy}`),
+      },
+      {
+        id: "file_manager_confirm_delete",
+        label: t("modal.settings.field.file_manager.confirm_delete"),
+        value: (read) => yesNo(t, read.file_manager.confirm_delete),
+      },
+    ];
+  const configFields: InfoField[] =
+    settings === "reading"
+      ? configRows.map((row) => loadingField(row.id, row.label))
+      : config
+        ? configRows.map((row) => ({ id: row.id, label: row.label, value: row.value(config) }))
+        : [{ id: "config_unavailable", label: t("modal.info.field.config"), value: "—" }];
 
-  const listing = t("modal.info.loading");
   const backups = backupSections?.flatMap((section) => section.entries) ?? null;
   const inUse = backupSections?.find((section) => section.kind === "in_use");
-  const backupFields = [
-    {
-      id: "backup_folder_in_use",
-      label: t("modal.info.field.backup_folder_in_use"),
-      value: backupSections
-        ? inUse
-          ? sectionValue(inUse, t)
-          : fixedChoiceLabel("data_folder", t)
-        : listing,
-      ...(inUse ? { openPath: inUse.path } : {}),
-    },
+  /** A backups row: loading while the list is read. */
+  const listed = (id: string, label: string, value: (read: VaultBackupEntry[]) => string) =>
+    backups ? { id, label, value: value(backups) } : loadingField(id, label);
+  const backupFields: InfoField[] = [
+    backupSections
+      ? {
+          id: "backup_folder_in_use",
+          label: t("modal.info.field.backup_folder_in_use"),
+          value: inUse ? sectionValue(inUse, osNames, t) : fixedChoiceLabel("data_folder", t),
+          ...(inUse ? { openPath: inUse.path } : {}),
+        }
+      : loadingField("backup_folder_in_use", t("modal.info.field.backup_folder_in_use")),
     ...(backupSections ?? [])
       .filter((section) => section.entries.length > 0)
       .map((section) =>
@@ -384,26 +440,16 @@ export function buildVaultInfoSections(
             label: t("modal.info.field.backup_folder_holding", {
               count: section.entries.length,
             }),
-            value: sectionValue(section, t),
+            value: sectionValue(section, osNames, t),
           },
           section.path,
         ),
       ),
-    {
-      id: "backup_count",
-      label: t("modal.info.field.backup_count"),
-      value: backups ? String(backups.length) : listing,
-    },
-    {
-      id: "backup_latest",
-      label: t("modal.info.field.backup_latest"),
-      value: backups ? latestBackupName(backups) : listing,
-    },
-    {
-      id: "backup_total_size",
-      label: t("modal.info.field.backup_total_size"),
-      value: backups ? formatBytes(backupTotalBytes(backups)) : listing,
-    },
+    listed("backup_count", t("modal.info.field.backup_count"), (read) => String(read.length)),
+    listed("backup_latest", t("modal.info.field.backup_latest"), latestBackupName),
+    listed("backup_total_size", t("modal.info.field.backup_total_size"), (read) =>
+      formatBytes(backupTotalBytes(read)),
+    ),
   ];
 
   return [

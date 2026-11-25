@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { BRIDGE_ERROR_CODES, RpcError } from "../errors";
-import { isElectronRenderer, parseInvokeFailure } from "../invoke";
+import { bridgeReplyValue, isElectronRenderer, parseInvokeFailure } from "../invoke";
+
+describe("bridgeReplyValue", () => {
+  it("answers the value of a reply that succeeded", () => {
+    expect(bridgeReplyValue({ ok: true, value: { id: "notes" } })).toEqual({ id: "notes" });
+  });
+
+  it("throws a failure with the details core sent", () => {
+    const details = { count: 1, items: [{ path: "Work/db", reason: "permission" }] };
+    let thrown: unknown;
+    try {
+      bridgeReplyValue({ ok: false, error: "import_blocked: 1 items", details });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(RpcError);
+    expect((thrown as RpcError).code).toBe("import_blocked");
+    expect((thrown as RpcError).details).toEqual(details);
+  });
+
+  it("throws a failure with no details as its wire code", () => {
+    expect(() => bridgeReplyValue({ ok: false, error: "vault_locked: not open" })).toThrow(
+      expect.objectContaining({ code: "vault_locked", details: undefined }),
+    );
+  });
+});
 
 describe("parseInvokeFailure", () => {
   it("passes through RpcError", () => {

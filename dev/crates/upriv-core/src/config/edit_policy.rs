@@ -77,10 +77,11 @@ pub fn refuse_config_save_if_busy(
 /// A preparing vault (open, export, or a password or unlock-RAM change)
 /// returns [`UprivError::VaultBusy`] without waiting on the directory lock. The
 /// settings save budget is 30 seconds; a change can hold that lock for minutes.
-/// `password_changed_at` and `[storage]` stay the values already on disk.
-/// Only a password change writes the first, and only the Storage change, a
-/// reset at open, an import, and the rebuild write the second, so a settings
-/// form never changes or clears them.
+/// `password_changed_at`, `[storage]`, `[deleting]`, and `[importing]` stay
+/// the values already on disk. Only a password change writes the first; only
+/// the Storage change, a reset at open, an import, and the rebuild write the
+/// second; only a delete the third; only an import and the unlock that keeps
+/// what it got in the last. So a settings form never changes or clears them.
 ///
 /// A plaintext folder left by an earlier session blocks a change of this
 /// device's unlocked folder.
@@ -127,6 +128,8 @@ pub fn save_vault_config_checked(
         let mut stored = after.clone();
         stored.security.password_changed_at = before.security.password_changed_at.clone();
         stored.storage = before.storage;
+        stored.deleting = before.deleting.clone();
+        stored.importing = before.importing.clone();
         let leaving = apply_vault_lists(root, &before, &mut stored, lists)?;
         crate::config::save_vault_config(vault_dir, &stored)?;
         Ok(leaving)
@@ -183,6 +186,34 @@ mod storage_tests {
             .expect("a save while open is no storage change");
         assert_eq!(stored_storage(&root), VaultStorage::default());
         close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_save_keeps_the_import_mark_on_disk_whatever_it_is_sent() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            quiet_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let mut marked = crate::config::load_vault_config(&vault_dir).unwrap();
+        let mark = crate::config::vault_config::VaultImportingSection {
+            started_at: "2026-11-24T00:20:46.000Z".into(),
+        };
+        marked.importing = Some(mark.clone());
+        crate::config::save_vault_config(&vault_dir, &marked).unwrap();
+
+        // A form that never saw the mark cannot clear it.
+        let mut after = marked.clone();
+        after.importing = None;
+        after.vault.note = "kept".into();
+        save_vault_config_checked(&root, "notes", &after, &VaultListChanges::default()).unwrap();
+        let saved = crate::config::load_vault_config(&vault_dir).unwrap();
+        assert_eq!(saved.importing, Some(mark));
+        assert_eq!(saved.vault.note, "kept");
     }
 }
 

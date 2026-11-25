@@ -59,10 +59,4 @@ export interface PlainHeldStatus {
   heldCount: number;
 }
 
-/** What recovery offers once the leftover lookup has finished. */
-export interface PlainRecoveryOffers {
-  /** A leftover folder is still there and recovery wipes it. */
-  remove: boolean;
-}
-
 export type PlainRecoveryAction = { kind: "resume_store" } | { kind: "remove_folder" };

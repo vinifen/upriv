@@ -7,7 +7,7 @@ import { useTranslation } from "@/i18n";
 import { getMobileAppVersion } from "@/lib/appVersion";
 import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { buildSystemInfoSections, type VaultGroup, type VaultListItem } from "@upriv/shared";
-import { useSystemInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useOsNames, useSystemInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { InfoFieldList } from "./InfoFieldList";
@@ -44,6 +44,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     settings,
     vaultRootService,
     deviceService,
+    osNames: useOsNames(),
     getVersion,
     showHiddenVaults,
   });

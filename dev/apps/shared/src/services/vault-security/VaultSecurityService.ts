@@ -14,6 +14,8 @@ export interface ChangeVaultPasswordInput {
   newPassword: string;
   /** **Back up first**: a save of the vault as it is, when there is room for it. */
   backUpFirst: boolean;
+  /** The vault's hint once the change is made (empty: none); a stopped change keeps the hint. */
+  passwordHint: string;
   /** The job the change runs as (`newJobId`), so the person can stop it. */
   job: string;
 }

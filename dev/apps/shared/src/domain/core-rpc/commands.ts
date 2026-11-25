@@ -36,6 +36,12 @@ export const CORE_RPC_COMMANDS = {
   /** The data folder list: every device's group, and where Default is. */
   DATA_FOLDER_LIST: "data_folder_list",
   /**
+   * The bytes of every file in the data folder's `.upriv`, for System Info. A
+   * walk of every file: core runs it on the folder lane, off the line other
+   * calls answer on.
+   */
+  DATA_FOLDER_SIZE: "data_folder_size",
+  /**
    * Save the data folder list and open the folder it selects, making a data
    * folder there when it has none. After the data folder in use was lost,
    * it ends any vault still open there first; then it needs every vault idle.
@@ -90,7 +96,10 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CLOSE_PHASE: "vault_close_phase",
   VAULT_CLOSE_HURRY: "vault_close_hurry",
   VAULT_CONFIG_GET: "vault_config_get",
-  /** Regular-file bytes under `store/` and `held/`. Metadata only; not the vault list. */
+  /**
+   * Regular-file bytes under `store/` and `held/`. Metadata only; not the
+   * vault list. A walk of every file: core runs it on the folder lane.
+   */
   VAULT_DISK_USAGE: "vault_disk_usage",
   /** Where an open vault's keys stand (files waiting, key copies). Light; reads RAM only. */
   VAULT_KEY_STATUS: "vault_key_status",
@@ -176,6 +185,12 @@ export const CORE_RPC_COMMANDS = {
    * A job still waiting for its lane ends as soon as it starts.
    */
   JOB_CANCEL: "job_cancel",
+  /**
+   * Stop the backup that job writes before its change (a password change's
+   * Back up first); the job goes on without it. `stopping: false` when it
+   * writes none now.
+   */
+  JOB_SKIP_BACKUP: "job_skip_backup",
 } as const;
 
 /**

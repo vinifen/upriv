@@ -269,7 +269,7 @@ fn tree_step(
         save_header(&store_dir, &tree.header)?;
         record_commit(vault_dir, vault_id, CommitRecord::Hash);
         if tree.from == HeaderFrom::SettledChange {
-            super::password_change::record_password_changed(vault_dir, vault_id);
+            super::password_change::record_password_changed(vault_dir, vault_id, None);
         }
     }
     job.ensure_running()?;
@@ -769,7 +769,7 @@ mode = "encrypted_dir"
     #[test]
     fn records_survive_a_password_change() {
         let (_tmp, root) = notes_with_a_file();
-        change_vault_password(&root, "notes", PW, NEXT, false, &test_job_id()).unwrap();
+        change_vault_password(&root, "notes", PW, NEXT, false, "", &test_job_id()).unwrap();
         lose_index(&root);
 
         rebuild_now(&root, NEXT).unwrap();
@@ -946,7 +946,7 @@ mode = "encrypted_dir"
     fn a_header_from_before_a_password_change_is_an_earlier_password() {
         let (_tmp, root) = notes_with_a_file();
         let [earlier, earlier_copy] = header_files(&root);
-        change_vault_password(&root, "notes", PW, NEXT, false, &test_job_id()).unwrap();
+        change_vault_password(&root, "notes", PW, NEXT, false, "", &test_job_id()).unwrap();
 
         // One file put back: the old password is an earlier one, and the
         // current one repairs it.

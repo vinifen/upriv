@@ -24,7 +24,7 @@
     "unlocked_folder.other_devices": "anytime",
     "vault.id": "vault_closed_or_recovery",
     "action.change_password": "vault_closed",
-    "action.finish_password_change": "vault_closed",
+    "action.finish_password_change": "vault_closed_or_recovery",
     "action.change_kdf": "vault_closed",
     "action.change_storage": "vault_closed",
     "action.delete": "vault_closed_or_recovery"

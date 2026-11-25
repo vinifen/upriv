@@ -22,6 +22,5 @@ export { Select, type SelectOption, type SelectOptionTone } from "./Select";
 export { FloatingToast, Toast } from "./Toast";
 export { ElapsedTime } from "./ElapsedTime";
 export { JobStopButton } from "./JobStopButton";
-export { TextWidthProbe } from "./TextWidthProbe";
 export { JobProgressBar } from "./JobProgressBar";
 export { ContentSkeleton } from "./ContentSkeleton";

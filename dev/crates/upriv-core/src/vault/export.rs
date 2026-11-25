@@ -885,7 +885,8 @@ mode = "encrypted_dir"
             NO_EXTRAS,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
         let listed = crate::vault::fs::fs_list_tree(&root, &imported).unwrap();
         let json = serde_json::to_string(&listed).unwrap();
@@ -923,7 +924,8 @@ mode = "encrypted_dir"
             NO_EXTRAS,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
         let listed = fs_list_tree(&root, &imported).unwrap();
         assert!(listed.children.unwrap().is_empty());
@@ -943,6 +945,7 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             KdfUnlockPreset::M32,
             Some(first),
+            crate::vault::create::NewVault::Complete,
         )
         .unwrap();
         let bytes = seven_zip(&root, "notes", b"pass-word-ok").unwrap();
@@ -963,7 +966,8 @@ mode = "encrypted_dir"
             },
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
         let names: Vec<String> = fs_list_tree(&root, &imported)
             .unwrap()
@@ -1010,7 +1014,8 @@ mode = "encrypted_dir"
             NO_EXTRAS,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
         let json = serde_json::to_string(&fs_list_tree(&root, &imported).unwrap()).unwrap();
         for name in ["empty", "only", "inner", "blank", "hi.txt"] {
@@ -1467,7 +1472,8 @@ mode = "encrypted_dir"
             },
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"new-password").unwrap();
         assert_eq!(root_names(&root, &id), ["docs", "empty"]);
         assert_eq!(read_layout(&root, &id), LAYOUT);
@@ -1494,7 +1500,8 @@ mode = "encrypted_dir"
             },
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"new-password").unwrap();
         assert_eq!(root_names(&root, &id), ["README.md", "docs", "empty"]);
         assert_eq!(read_layout(&root, &id), welcome.workspace.as_bytes());
@@ -1514,7 +1521,8 @@ mode = "encrypted_dir"
             NO_EXTRAS,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"new-password").unwrap();
         assert!(root_names(&root, &id).is_empty());
         close_vault(&root, &id).unwrap();
@@ -1536,7 +1544,8 @@ mode = "encrypted_dir"
             NO_EXTRAS,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"new-password").unwrap();
         assert_eq!(root_names(&root, &id), ["docs"]);
         close_vault(&root, &id).unwrap();
@@ -1558,7 +1567,8 @@ mode = "encrypted_dir"
             NO_EXTRAS,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"new-password").unwrap();
         assert_eq!(
             crate::vault::fs::fs_read_file(&root, &id, "/store/header/vault.header").unwrap(),
@@ -1666,7 +1676,8 @@ mode = "encrypted_dir"
             KEEP_LAYOUT,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"pass-word-ok").unwrap();
         assert_eq!(read_layout(&root, &id), LAYOUT);
         close_vault(&root, &id).unwrap();
@@ -1686,7 +1697,8 @@ mode = "encrypted_dir"
             KEEP_LAYOUT,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"pass-word-ok").unwrap();
         assert_eq!(root_names(&root, &id), ["docs", "empty"]);
         assert_eq!(read_layout(&root, &id), LAYOUT);
@@ -1723,7 +1735,8 @@ mode = "encrypted_dir"
             KEEP_LAYOUT,
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &id, b"pass-word-ok").unwrap();
         assert_eq!(root_names(&root, &id), ["docs", "empty"]);
         assert!(read_layout(&root, &id).is_empty());

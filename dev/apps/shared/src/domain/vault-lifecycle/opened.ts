@@ -14,6 +14,11 @@ export interface VaultOpened {
   /** The unlocked folder selections a plain-text open switched. */
   switches: FolderSwitch[];
   storageReset: StorageReset | null;
+  /**
+   * The vault's import had been cut off, and this unlock kept what got in:
+   * it is a vault like any other now.
+   */
+  importKept: boolean;
 }
 
 /** A `vault_open` answer, from the wire. */
@@ -23,6 +28,7 @@ export function parseVaultOpened(raw: unknown): VaultOpened {
   return {
     switches: parseSwitches(body.switches),
     storageReset: reset === "saved" || reset === "unsaved" ? reset : null,
+    importKept: body.importKept === true,
   };
 }
 

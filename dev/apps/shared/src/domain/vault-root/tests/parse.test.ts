@@ -84,7 +84,7 @@ describe("parseVaultRootResolve", () => {
 describe("data folder list results", () => {
   const id = "a".repeat(32);
 
-  it("reads the list with Default's folder", () => {
+  it("reads the list with Default's folder and each device's OS name", () => {
     const view = parseDataFolderList({
       list: {
         devices: {
@@ -95,6 +95,7 @@ describe("data folder list results", () => {
             rows: [{ number: 1, name: "", path: "/media/usb" }],
           },
         },
+        os_names: { [id]: "Ubuntu 24.04.5 LTS" },
       },
       defaultFolder: "/app",
       explicit: null,
@@ -102,9 +103,10 @@ describe("data folder list results", () => {
     expect(view.defaultFolder).toBe("/app");
     expect(view.explicit).toBeNull();
     expect(view.groups[id].selected).toBe(1);
-    expect(parseDataFolderList({ list: {}, defaultFolder: null, explicit: null }).groups).toEqual(
-      {},
-    );
+    expect(view.osNames).toEqual({ [id]: "Ubuntu 24.04.5 LTS" });
+    const empty = parseDataFolderList({ list: {}, defaultFolder: null, explicit: null });
+    expect(empty.groups).toEqual({});
+    expect(empty.osNames).toEqual({});
   });
 
   it("reads an apply and a search, with the vaults they ended", () => {

@@ -1,32 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePlainCloseSummary, plainRecoveryOffers } from "..";
-
-describe("plainRecoveryOffers", () => {
-  it("wipes the folder when it is still there", () => {
-    expect(
-      plainRecoveryOffers({
-        path: "/data/workspace/Notes",
-        since: "2026-01-01T00:00:00Z",
-        found: true,
-        files: 2,
-        bytes: 10,
-      }),
-    ).toEqual({ remove: true });
-  });
-
-  it("offers unlock when no leftover folder is on this computer", () => {
-    expect(plainRecoveryOffers(null)).toEqual({ remove: false });
-    expect(
-      plainRecoveryOffers({
-        path: "/gone",
-        since: "2026-01-01T00:00:00Z",
-        found: false,
-        files: 0,
-        bytes: 0,
-      }),
-    ).toEqual({ remove: false });
-  });
-});
+import { parsePlainCloseSummary } from "..";
 
 describe("parsePlainCloseSummary", () => {
   it("keeps the counts close reports", () => {

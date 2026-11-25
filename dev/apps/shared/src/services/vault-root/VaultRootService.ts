@@ -49,6 +49,12 @@ export interface VaultRootService {
    */
   list(options?: { newList?: boolean }): Promise<DataFolderListView>;
 
+  /**
+   * The bytes of every file in the data folder in use (its `.upriv`), for
+   * System Info. A walk of every file, which takes long on a slow drive.
+   */
+  size(): Promise<number>;
+
   /** The status of a folder of the list: `null` is Default. Each its own call and limit. */
   status(path: string | null): Promise<DataFolderStatus>;
 

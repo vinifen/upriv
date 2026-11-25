@@ -6,6 +6,12 @@ import {
 import { isRpcError } from "../core-rpc/errors";
 import { joinPath } from "../file-tree/treeUtils";
 import { VAULT_ERROR_CODES } from "../vault/errors/codes";
+import {
+  importBlockedList,
+  importSourceReason,
+  type ImportBlocked,
+  type ImportBlockedItem,
+} from "../vault-create/importBlocked";
 import { isInternalVaultFileName } from "./workspaceSnapshot";
 
 export interface ImportLogicalFile {
@@ -21,7 +27,12 @@ export interface ImportLogicalResult {
   foldersToExpand: string[];
   skippedInvalid: number;
   skippedUnsupported: number;
-  readFailureName: string | null;
+  /**
+   * Files that could not be read on their way in, by their path in the batch
+   * and why. Each is dropped, and the rest of the batch goes on.
+   */
+  leftOut: ImportBlocked;
+  /** The vault refused a file: the batch stopped there. */
   writeFailureName: string | null;
 }
 
@@ -139,7 +150,7 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
   const foldersToExpand = new Set<string>();
   let skippedInvalid = 0;
   let skippedUnsupported = options.skippedUnsupported ?? 0;
-  let readFailureName: string | null = null;
+  const leftOut: ImportBlockedItem[] = [];
   let writeFailureName: string | null = null;
 
   for (const file of files) {
@@ -189,7 +200,8 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
             skippedUnsupported += 1;
             continue;
           }
-          readFailureName = file.name;
+          options.onImportDropped?.(target, file.relativePath);
+          leftOut.push({ path: file.relativePath, reason: "unreadable" });
           continue;
         }
         path = await options.importFile(
@@ -202,6 +214,12 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
     } catch (error) {
       if (folderWasDeleted(error)) {
         options.onImportDropped?.(target, file.relativePath);
+        continue;
+      }
+      const unread = options.signal?.aborted ? null : importSourceReason(error);
+      if (unread) {
+        options.onImportDropped?.(target, file.relativePath);
+        leftOut.push({ path: file.relativePath, reason: unread });
         continue;
       }
       // A write stopped with the rest of the batch is not a failure.
@@ -224,7 +242,7 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
     foldersToExpand: [...foldersToExpand],
     skippedInvalid,
     skippedUnsupported,
-    readFailureName,
+    leftOut: importBlockedList(leftOut, leftOut.length, false),
     writeFailureName,
   };
 }
@@ -234,6 +252,7 @@ type AheadOutcome =
   | { kind: "absent" }
   | { kind: "skip-invalid" }
   | { kind: "imported"; path: string }
+  | { kind: "left-out"; item: ImportBlockedItem }
   | { kind: "write-fail" };
 
 /** Byte imports. Folder creation stays in order. Writes overlap up to `slots`. */
@@ -329,6 +348,12 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
           options.onImportDropped?.(target, file.relativePath);
           continue;
         }
+        const unread = options.signal?.aborted ? null : importSourceReason(error);
+        if (unread) {
+          options.onImportDropped?.(target, file.relativePath);
+          outcomes[index] = { kind: "left-out", item: { path: file.relativePath, reason: unread } };
+          continue;
+        }
         // A write stopped with the rest of the batch is not a failure.
         outcomes[index] = options.signal?.aborted ? { kind: "absent" } : { kind: "write-fail" };
         stop = true;
@@ -349,6 +374,7 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
 
   const importedPaths: string[] = [];
   const foldersToExpand = new Set<string>();
+  const leftOut: ImportBlockedItem[] = [];
   let skippedInvalid = 0;
   let writeFailureName: string | null = null;
   files.forEach((file, index) => {
@@ -356,6 +382,10 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
     if (!outcome || outcome.kind === "absent") return;
     if (outcome.kind === "skip-invalid") {
       skippedInvalid += 1;
+      return;
+    }
+    if (outcome.kind === "left-out") {
+      leftOut.push(outcome.item);
       return;
     }
     if (outcome.kind === "write-fail") {
@@ -373,7 +403,7 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
     foldersToExpand: [...foldersToExpand],
     skippedInvalid,
     skippedUnsupported: options.skippedUnsupported ?? 0,
-    readFailureName: null,
+    leftOut: importBlockedList(leftOut, leftOut.length, false),
     writeFailureName,
   };
 }

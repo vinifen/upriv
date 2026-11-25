@@ -4,10 +4,11 @@ import { VAULT_ERROR_CODES } from "./errors/codes";
 
 /**
  * Why a zip a flow writes before it changes `store/` was not written: the
- * switch was off, neither the data folder nor the folder in use had room, or
- * it failed. The flow goes on without it.
+ * switch was off, neither the data folder nor the folder in use had room, it
+ * failed, or the person stopped it in the Backups window (a password change's
+ * Back up first). The flow goes on without it.
  */
-export type BackupSkip = "off" | "no_room" | "failed";
+export type BackupSkip = "off" | "no_room" | "failed" | "stopped";
 
 /** Where the key copies of a vault's files stand once a pass ends. */
 export type KeyCopies = "done" | "waiting";
@@ -51,7 +52,7 @@ export interface PasswordChangeSpace {
 }
 
 export function parseBackupSkip(raw: unknown): BackupSkip | null {
-  return raw === "off" || raw === "no_room" || raw === "failed" ? raw : null;
+  return raw === "off" || raw === "no_room" || raw === "failed" || raw === "stopped" ? raw : null;
 }
 
 function parseKeyCopies(raw: unknown): KeyCopies {
@@ -139,7 +140,7 @@ export function passwordChangeReportLines(outcome: {
   ];
   if ("backup" in result) {
     if (result.backup) lines.push({ key: "vault.change_password.backup_kept" });
-    else if (result.backupSkipped === "no_room" || result.backupSkipped === "failed") {
+    else if (result.backupSkipped !== null && result.backupSkipped !== "off") {
       lines.push({ key: `vault.change_password.backup_skipped.${result.backupSkipped}` });
     }
   }

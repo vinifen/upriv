@@ -83,7 +83,6 @@ export { displayNameErrorI18nKey, DISPLAY_NAME_ERROR_I18N_KEYS } from "./errors/
 export type { DisplayNameErrorI18nKey } from "./errors/nameMessages";
 export {
   VAULT_DELETE_HOLD_I18N_KEY,
-  vaultPasswordChangeLineKey,
   vaultStatusColorVar,
   vaultStatusI18nKey,
   vaultStatusLabelKey,

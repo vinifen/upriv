@@ -36,7 +36,7 @@ import {
   type SessionPathKind,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
-import { useSearchCollapsedFolders } from "@upriv/shared/react";
+import { useOperationLimit, useSearchCollapsedFolders } from "@upriv/shared/react";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 import { ExplorerActions, ExplorerToolButton } from "./ExplorerActions";
@@ -727,6 +727,8 @@ export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabe
 
 export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
+  // A tree that loads fast never flashes its skeleton.
+  const treeLoading = useOperationLimit(fm.treeStatus === "loading");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { explorerSearchOpen: searchOpen, explorerSearchQuery: search } = fm.workspace;
   // A large vault filters behind the typing, not in its way.
@@ -855,7 +857,9 @@ export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePan
         aria-busy={fm.treeStatus === "loading" ? true : undefined}
       >
         {fm.treeStatus === "loading" ? (
-          <FileTreeSkeleton label={t("modal.file_manager.explorer.loading")} />
+          treeLoading.visible ? (
+            <FileTreeSkeleton label={t("modal.file_manager.explorer.loading")} />
+          ) : null
         ) : fm.treeStatus === "error" ? (
           <div role="alert" className="flex flex-col items-start gap-2 px-3 py-2">
             <p className="text-xs text-on-surface-variant">

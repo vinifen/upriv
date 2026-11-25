@@ -3,9 +3,12 @@ import {
   APP_UNLOCKED_LIST,
   appUnlockedFixedFolders,
   besideFolder,
+  dataFolderBackupsFolder,
   encryptedFolderOn,
   encryptedFolderUnchosen,
   listDraftBlocks,
+  NOTHING_SELECTED,
+  selectionFolder,
   type AppUnlockedChoice,
   type AppUnlockedFolders,
   type DeviceGroups,
@@ -77,6 +80,32 @@ describe("encryptedFolderUnchosen", () => {
   it("never holds on a phone, or before the device is known", () => {
     expect(encryptedFolderUnchosen(app(true), null, { ...DESK, system: "android" })).toBe(false);
     expect(encryptedFolderUnchosen(app(true), null, null)).toBe(false);
+  });
+});
+
+describe("the folder a choice names", () => {
+  it("keeps the Data folder's backups in .upriv, per vault or for every vault", () => {
+    expect(dataFolderBackupsFolder("linux", "/home/me/Upriv", "notes")).toBe(
+      "/home/me/Upriv/.upriv/vaults/notes/backups",
+    );
+    expect(dataFolderBackupsFolder("windows", "D:\\Upriv\\", null)).toBe(
+      "D:\\Upriv\\.upriv\\vaults",
+    );
+  });
+
+  it("names a row's path, a fixed choice's folder, or nothing", () => {
+    const group = {
+      system: "linux" as const,
+      selected: 1,
+      next_number: 2,
+      rows: [{ number: 1, name: "", path: " /mnt/usb " }],
+    };
+    const fixed = (choice: AppUnlockedChoice) =>
+      choice === "beside" ? "/data/upriv-unlocked" : null;
+    expect(selectionFolder<AppUnlockedChoice>(1, group, fixed)).toBe("/mnt/usb");
+    expect(selectionFolder<AppUnlockedChoice>(2, group, fixed)).toBeNull();
+    expect(selectionFolder<AppUnlockedChoice>("beside", group, fixed)).toBe("/data/upriv-unlocked");
+    expect(selectionFolder<AppUnlockedChoice>(NOTHING_SELECTED, group, fixed)).toBeNull();
   });
 });
 

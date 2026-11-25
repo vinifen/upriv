@@ -457,6 +457,14 @@ pub(crate) fn unfinished_imports(root: &VaultRoot) -> Result<Vec<String>> {
     Ok(load_runtime_state(root)?.unfinished_imports)
 }
 
+/// The create or store copy of the vault `vault_id` has not finished. A
+/// `state.json` that does not read holds no record, so the vault opens as it
+/// would without one.
+pub(crate) fn vault_recorded_unfinished(root: &VaultRoot, vault_id: &str) -> bool {
+    load_runtime_state(root)
+        .is_ok_and(|state| state.unfinished_imports.iter().any(|id| id == vault_id))
+}
+
 /// Drop every record of a deleted vault.
 pub(crate) fn forget_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
     with_state_lock(|| {

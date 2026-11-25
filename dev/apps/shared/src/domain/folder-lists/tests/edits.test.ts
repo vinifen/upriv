@@ -20,6 +20,7 @@ import {
   APP_BACKUP_LIST,
   APP_UNLOCKED_LIST,
   DATA_FOLDER_LIST,
+  NOTHING_SELECTED,
   ROW_NAME_MAX_CHARS,
   VAULT_BACKUP_LIST,
   type DeviceGroups,
@@ -51,12 +52,22 @@ describe("folder list edits", () => {
     groups = deleteRow(groups, here.id, 2, APP_BACKUP_LIST);
     expect(groups[here.id].selected).toBe(1);
     groups = deleteRow(groups, here.id, 1, APP_BACKUP_LIST);
-    // A group that holds nothing is not kept.
-    expect(groups[here.id]).toBeUndefined();
+    expect(groups[here.id]).toMatchObject({ rows: [], selected: "data_folder", next_number: 3 });
+  });
 
+  it("keeps a device's group once its rows are deleted", () => {
+    const before = { [laptop]: withRows(["/mnt/b"])[here.id] };
+    const emptied = deleteRow(before, laptop, 1, APP_BACKUP_LIST);
+    expect(emptied[laptop]).toMatchObject({ rows: [], selected: "data_folder" });
+    expect(removeGroup(emptied, laptop)[laptop]).toBeUndefined();
+  });
+
+  it("makes a group only to hold something", () => {
+    expect(selectHere({}, here, APP_UNLOCKED_LIST, NOTHING_SELECTED)).toEqual({});
     let unlocked = addRow({}, here, APP_UNLOCKED_LIST, "/mnt/a").groups;
     unlocked = deleteRow(unlocked, here.id, 1, APP_UNLOCKED_LIST);
-    expect(unlocked[here.id]).toBeUndefined();
+    // Made and emptied again in the draft: nothing to save.
+    expect(isEmptyListChanges(listChanges({}, unlocked, APP_UNLOCKED_LIST))).toBe(true);
   });
 
   it("keeps the order as the priority and never moves past the ends", () => {
@@ -66,10 +77,13 @@ describe("folder list edits", () => {
     expect(moveRow(groups, here.id, 1, -1, APP_BACKUP_LIST)).toEqual(groups);
   });
 
-  it("keeps a fixed choice selected and drops a group back at its default", () => {
+  it("keeps a fixed choice selected, and the group back at its default", () => {
     const groups = selectHere({}, here, VAULT_BACKUP_LIST, "data_folder");
     expect(groups[here.id].selected).toBe("data_folder");
-    expect(selectHere(groups, here, VAULT_BACKUP_LIST, "inherit")[here.id]).toBeUndefined();
+    expect(selectHere(groups, here, VAULT_BACKUP_LIST, "inherit")[here.id]).toMatchObject({
+      rows: [],
+      selected: "inherit",
+    });
   });
 
   it("shows devices only while another device has a group", () => {
@@ -166,18 +180,22 @@ describe("copy between devices", () => {
 describe("change sets", () => {
   it("sends only the parts that changed", () => {
     const before = withRows(["/mnt/a"]);
-    expect(isEmptyListChanges(listChanges(before, before, here.id, APP_BACKUP_LIST))).toBe(true);
+    expect(isEmptyListChanges(listChanges(before, before, APP_BACKUP_LIST))).toBe(true);
     const selected = selectHere(before, here, APP_BACKUP_LIST, "data_folder");
-    expect(listChanges(before, selected, here.id, APP_BACKUP_LIST).groups[here.id]).toEqual({
+    expect(listChanges(before, selected, APP_BACKUP_LIST).groups[here.id]).toEqual({
       selected: "data_folder",
     });
   });
 
-  it("removes another device's group and empties this device's", () => {
+  it("removes a device's group only by Remove device", () => {
     const before = { ...withRows(["/mnt/a"]), [laptop]: withRows(["/mnt/b"])[here.id] };
-    const changes = listChanges(before, {}, here.id, APP_BACKUP_LIST);
-    expect(changes.groups[laptop]).toEqual({ remove: true });
-    expect(changes.groups[here.id]).toEqual({ rows: [], next_number: 2, selected: "data_folder" });
+    expect(listChanges(before, removeGroup(before, laptop), APP_BACKUP_LIST).groups).toEqual({
+      [laptop]: { remove: true },
+    });
+    const emptied = deleteRow(before, laptop, 1, APP_BACKUP_LIST);
+    expect(listChanges(before, emptied, APP_BACKUP_LIST).groups).toEqual({
+      [laptop]: { rows: [], selected: "data_folder" },
+    });
   });
 
   it("checks the path rules only on rows a draft added or changed", () => {
@@ -217,7 +235,7 @@ describe("change sets", () => {
   it("sends no rows when only spaces core trims changed", () => {
     const before = withRows(["/mnt/a"]);
     const spaced = updateRow(before, here.id, 1, { name: " ", path: "/mnt/a " }, APP_BACKUP_LIST);
-    expect(isEmptyListChanges(listChanges(before, spaced, here.id, APP_BACKUP_LIST))).toBe(true);
+    expect(isEmptyListChanges(listChanges(before, spaced, APP_BACKUP_LIST))).toBe(true);
   });
 
   it("calls a row unsaved when a save would write it: new, renamed, or moved to another folder", () => {

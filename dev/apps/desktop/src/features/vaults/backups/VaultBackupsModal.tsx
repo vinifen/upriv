@@ -1,12 +1,12 @@
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
 import { RevealPathButton, useRevealFolder } from "@/components/RevealPathButton";
 import {
   Button,
   DropdownMenu,
-  ElapsedTime,
   IconButton,
+  JobProgressBar,
   JobStopButton,
   Modal,
   Toast,
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui";
 import {
   BACKUP_NAME_MAX_CHARS,
+  BACKUP_SAVE_PROGRESS_COPY,
   backupDeleteConfirmPhrase,
   backupExportFilename,
   backupExportRowKey,
@@ -37,13 +38,15 @@ import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import type { ExportFolder } from "@/hooks/useExportFolder";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
-import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import {
+  useOsNames,
   useBackupExportStep,
   useVaultBackups,
   type BackupExportJob,
+  type PasswordChangeBackupStep,
   type VaultBackupJob,
+  type VaultCloseBackupWork,
 } from "@upriv/shared/react";
 import { BackupExportFolderStep, BackupExportProgress } from "./BackupExportPanel";
 
@@ -57,9 +60,17 @@ interface VaultBackupsModalProps {
   canSaveNow: boolean;
   /** This vault's list-owned Back up now in flight. Survives closing the modal. */
   saveJob: VaultBackupJob | null;
+  /** This vault's close writing its backup, and when its Stop was asked. */
+  closeBackup: (VaultCloseBackupWork & { stoppingSince: number | null }) | null;
   onSaveNow: () => void;
   onStopSave: () => void;
-  /** Bumped when that job finishes so the open list reloads. */
+  /** Tell that close to finish the Close now way: the zip stops, the close ends. */
+  onStopCloseBackup: () => void;
+  /** This vault's password change writing its Back up first zip. */
+  changeBackup: PasswordChangeBackupStep | null;
+  /** Stop only that zip: the password change goes on without it. */
+  onStopChangeBackup: () => void;
+  /** Bumped when Back up now, a close's backup, or Back up first ends, so the open list reloads. */
   listRefreshToken: number;
   onClose: () => void;
   onCreateVaultFromBackup?: (backup: VaultBackupEntry) => void;
@@ -80,8 +91,12 @@ export function VaultBackupsModal({
   open,
   canSaveNow,
   saveJob,
+  closeBackup,
   onSaveNow,
   onStopSave,
+  onStopCloseBackup,
+  changeBackup,
+  onStopChangeBackup,
   listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
@@ -267,6 +282,26 @@ export function VaultBackupsModal({
     );
   };
 
+  // The backup this vault is writing, Back up now's, a close's, or a password
+  // change's Back up first, with its Stop where Back up now was.
+  const running = saveJob
+    ? { ...saveJob, label: t("modal.backup.backup_now"), onStop: onStopSave, hint: null }
+    : closeBackup
+      ? {
+          ...closeBackup,
+          label: t("modal.backup.close_backup"),
+          onStop: onStopCloseBackup,
+          hint: t("modal.backup.close_backup_hint"),
+        }
+      : changeBackup
+        ? {
+            ...changeBackup,
+            label: t("modal.backup.change_backup"),
+            onStop: onStopChangeBackup,
+            hint: t("modal.backup.change_backup_hint"),
+          }
+        : null;
+
   const stepRowKey = exportStep.keys ? backupExportRowKey(exportStep.keys) : null;
   const runningRowKey = shownExport ? backupExportRowKey(shownExport.keys) : null;
   const rowExportPanel = (key: string) =>
@@ -332,45 +367,49 @@ export function VaultBackupsModal({
         <>
           {/* The one scroller: the hint stays put above it. */}
           <div className="modal-scroll-pane min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5">
-            <div className="flex items-center gap-3">
-              <div className="min-w-0 flex-1">
-                {saveJob ? (
-                  <p className="flex items-baseline gap-2 text-xs text-on-surface-variant">
-                    <span>
-                      {saveJob.startedAt === null
-                        ? t("vault.status.queued")
-                        : t("modal.backup.backup_now_running")}
-                    </span>
-                    {saveJob.stoppingSince === null ? (
-                      <ElapsedTime startedAt={saveJob.startedAt} layout="inline" />
-                    ) : null}
-                  </p>
-                ) : canSaveNow ? null : (
-                  <p className="text-xs text-on-surface-variant">
-                    {t("modal.backup.backup_now_blocked")}
-                  </p>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  {running ? (
+                    // Stop counts its own wait; the bar shows the zip until then.
+                    running.stoppingSince === null ? (
+                      <JobProgressBar
+                        progress={running.progress}
+                        startedAt={running.startedAt}
+                        label={running.label}
+                        copy={BACKUP_SAVE_PROGRESS_COPY}
+                      />
+                    ) : null
+                  ) : canSaveNow ? null : (
+                    <p className="text-xs text-on-surface-variant">
+                      {t("modal.backup.backup_now_blocked")}
+                    </p>
+                  )}
+                </div>
+                {running ? (
+                  <span className="shrink-0">
+                    <JobStopButton
+                      size="sm"
+                      stoppingSince={running.stoppingSince}
+                      stoppable={running.progress?.stoppable ?? true}
+                      onStop={running.onStop}
+                    />
+                  </span>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!canSaveNow || isBusy || deleteTargets !== null}
+                    onClick={onSaveNow}
+                  >
+                    {t("modal.backup.backup_now")}
+                  </Button>
                 )}
               </div>
-              {saveJob ? (
-                <span className="shrink-0">
-                  <JobStopButton
-                    size="sm"
-                    stoppingSince={saveJob.stoppingSince}
-                    stoppable={saveJob.progress?.stoppable ?? true}
-                    onStop={onStopSave}
-                  />
-                </span>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={!canSaveNow || isBusy || deleteTargets !== null}
-                  onClick={onSaveNow}
-                >
-                  {t("modal.backup.backup_now")}
-                </Button>
-              )}
+              {running?.hint ? (
+                <p className="text-xs leading-relaxed text-on-surface-variant">{running.hint}</p>
+              ) : null}
             </div>
 
             {sections.length === 0 ? (
@@ -540,6 +579,7 @@ function BackupSection({
   onForget,
 }: BackupSectionProps) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const title = t(SECTION_TITLE_KEYS[section.kind]);
   const reachable = section.status === "ok";
   const selectLabel = t("modal.backup.select_section", { section: title });
@@ -583,7 +623,7 @@ function BackupSection({
       {section.device ? (
         <p className="mt-0.5 text-xs text-on-surface-variant">
           {t("modal.backup.folder.written_by", {
-            device: deviceName(section.device.id, section.device.system, t),
+            device: deviceName(section.device.id, section.device.system, osNames, t),
           })}
         </p>
       ) : null}
@@ -752,8 +792,9 @@ interface BackupRowProps {
 }
 
 /**
- * One backup: Save on the row, its other actions in one ⋯ menu (Create
- * vault, Rename, Export, Open folder, Delete), as a folder list's row.
+ * One backup on one line, its name truncated: its actions in one ⋯ menu
+ * (Create vault, Rename, Export, Open folder, Delete), then Save at the end
+ * of a Standard backup's row, as a vault row ends with its main button.
  */
 function BackupRow({
   entry,
@@ -827,14 +868,6 @@ function BackupRow({
     },
   ];
   const exportPanelRef = useRevealWhen<HTMLDivElement>(Boolean(exportPanel));
-  const rowRef = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLParagraphElement>(null);
-  const nameRef = useRef<HTMLSpanElement>(null);
-  const badgeRef = useRef<HTMLSpanElement>(null);
-  const buttonsBelow = useRowButtonsBelow(
-    { row: rowRef, slot: titleRef, text: nameRef, beside: badgeRef },
-    title,
-  );
 
   return (
     <li
@@ -847,10 +880,8 @@ function BackupRow({
         .join(" ")}
     >
       <div
-        ref={rowRef}
         className={[
-          "flex min-h-14 gap-3 py-3 pl-4 pr-2 sm:py-3.5 sm:pl-4 sm:pr-3",
-          buttonsBelow ? "flex-col items-stretch" : "items-center",
+          "flex min-h-14 items-center gap-3 py-3 pl-4 pr-2 sm:py-3.5 sm:pl-4 sm:pr-3",
           selectionDisabled ? "pointer-events-none opacity-60" : "",
         ]
           .filter(Boolean)
@@ -877,9 +908,8 @@ function BackupRow({
               selectionDisabled || !onToggleSelected ? "cursor-default" : "cursor-pointer",
             ].join(" ")}
           >
-            <p ref={titleRef} className="flex min-w-0 items-center gap-2">
+            <p className="flex min-w-0 items-center gap-2">
               <span
-                ref={nameRef}
                 title={entry.fileName}
                 className={[
                   "truncate text-xs text-on-surface sm:text-sm",
@@ -889,10 +919,7 @@ function BackupRow({
                 {title}
               </span>
               {entry.saved ? (
-                <span
-                  ref={badgeRef}
-                  className="shrink-0 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent"
-                >
+                <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
                   {t("modal.backup.saved_badge")}
                 </span>
               ) : null}
@@ -905,24 +932,13 @@ function BackupRow({
               <span className="font-mono">{formatBytes(entry.sizeBytes)}</span>
             </p>
             {entry.lowerUnlockRam ? (
-              <p className="mt-0.5 text-xs text-on-surface-variant">
+              <p className="mt-0.5 text-xs text-vault-recovery">
                 {t("modal.backup.lower_unlock_ram")}
               </p>
             ) : null}
           </label>
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-0.5">
-          {onPromoteToSave ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={selectionDisabled || exporting}
-              className="mr-0.5 h-8 shrink-0 px-2 text-xs sm:px-2.5"
-              onClick={onPromoteToSave}
-            >
-              {t("modal.backup.promote_to_save")}
-            </Button>
-          ) : null}
+        <div className="flex shrink-0 items-center justify-end gap-1">
           <DropdownMenu
             label={title}
             aboveModal
@@ -931,13 +947,24 @@ function BackupRow({
                 label={t("action.row_options", { name: title })}
                 size="row"
                 variant="row-action"
-                className="-mr-1 text-on-surface-variant"
+                className="text-on-surface-variant"
               >
                 <Icon name="more-horizontal" size={18} />
               </IconButton>
             }
             items={items}
           />
+          {onPromoteToSave ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selectionDisabled || exporting}
+              className="h-8 shrink-0 px-2 text-xs sm:px-2.5"
+              onClick={onPromoteToSave}
+            >
+              {t("modal.backup.promote_to_save")}
+            </Button>
+          ) : null}
         </div>
       </div>
       {reveal.toast}

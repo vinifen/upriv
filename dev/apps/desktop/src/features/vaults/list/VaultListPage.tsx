@@ -8,12 +8,14 @@ import { LogsModal } from "@/features/system/logs";
 import { VaultInfoModal } from "@/features/vaults/info";
 import { VaultLifecycleLayer } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings";
+import { ImportBlockedModal } from "@/components/ImportBlockedModal";
 import { AppShell } from "@/components/layout";
 import { Button, Toast } from "@/components/ui";
 import { appConfigEditAllowed } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { VaultListHeader } from "./header/VaultListHeader";
 import { VaultListSectionHeader } from "./header/VaultListSectionHeader";
+import { VaultGroupDeleteModal } from "./modals/VaultGroupDeleteModal";
 import { VaultGroupSettingsModal } from "./modals/VaultGroupSettingsModal";
 import { VaultGroupsModal } from "./modals/VaultGroupsModal";
 import { VaultNoteModal } from "./modals/VaultNoteModal";
@@ -44,10 +46,12 @@ export function VaultListPage() {
     list,
     lifecycle,
     toast,
+    importBlocked,
     note,
     backups,
     settings,
     groupSettings,
+    groupDelete,
     appSettings,
     groupsModal,
     dataFolder,
@@ -122,6 +126,7 @@ export function VaultListPage() {
           onOpenSettings={list.onOpenSettings}
           onOpenDelete={list.onOpenDelete}
           onOpenGroupSettings={list.onOpenGroupSettings}
+          onOpenGroupDelete={list.onOpenGroupDelete}
           onToggleGroupCollapsed={list.onToggleGroupCollapsed}
           onExportVault={list.onExportVault}
           onOpenFileManager={screen.openFromVault}
@@ -146,6 +151,7 @@ export function VaultListPage() {
       </div>
       <VaultLifecycleLayer {...lifecycle} />
       <Toast toast={toast.toast} onDismiss={toast.onDismiss} />
+      <ImportBlockedModal {...importBlocked} />
       <VaultNoteModal
         vault={note.vault}
         open={note.open}
@@ -158,8 +164,12 @@ export function VaultListPage() {
         open={backups.open}
         canSaveNow={backups.canSaveNow}
         saveJob={backups.saveJob}
+        closeBackup={backups.closeBackup}
         onSaveNow={backups.onSaveNow}
         onStopSave={backups.onStopSave}
+        onStopCloseBackup={backups.onStopCloseBackup}
+        changeBackup={backups.changeBackup}
+        onStopChangeBackup={backups.onStopChangeBackup}
         listRefreshToken={backups.listRefreshToken}
         onClose={backups.onClose}
         onCreateVaultFromBackup={backups.onCreateVaultFromBackup}
@@ -225,8 +235,14 @@ export function VaultListPage() {
         open={groupSettings.open}
         onClose={groupSettings.onClose}
         onSave={groupSettings.onSave}
-        onDelete={groupSettings.onDelete}
         onBusyTimeout={groupSettings.onBusyTimeout}
+      />
+      <VaultGroupDeleteModal
+        group={groupDelete.group}
+        open={groupDelete.open}
+        onClose={groupDelete.onClose}
+        onDelete={groupDelete.onDelete}
+        onBusyTimeout={groupDelete.onBusyTimeout}
       />
       <FileManagerLayer />
       <AppSettingsModal

@@ -15,6 +15,7 @@ See `dev/docs/ARCHITECTURE.md` and `dev/docs/sdd.md` §4.
 |--------|------|
 | `config/` | App `.upriv/settings.toml`, per-vault `vaults/<id>/config.toml`, vault groups, edit policy, list saves |
 | `device` | This device's ID and system; no name of the computer or phone is read |
+| `os_name` | The name this device's OS gives itself, and the `[os_names]` table each device writes its own line into |
 | `folder_list/` | Per-device folder lists: model, path rules, chains, the data folder list file, unlocked folder and backup layouts |
 | `folder_probe` | Time-limited folder checks, one thread per stuck folder |
 | `vault/` | List / create / open / close / rename / delete, in-app file manager (`fs`), export / import, backups, password and unlock-RAM rewrap, `plain/` (`upriv_plain` folders and their records), unlocked folder attach, data folder apply and search, in-RAM `.7z`, data-folder export |
@@ -65,7 +66,7 @@ Order (see `paths/resolve.rs`):
 
 ### `.upriv-data-folder` (app home)
 
-The data folder list: one TOML table per device (`[devices.<id>]`: `system`, `selected`, `next_number`, `rows`). It exists only while some group differs from the defaults, and holds no secrets. `data_folder_list` reads it, `data_folder_apply` saves a change to it under its lock and opens the folder it selects, and Start a new list (`newList`) replaces a file that cannot be read.
+The data folder list: one TOML table per device (`[devices.<id>]`: `system`, `selected`, `next_number`, `rows`), and `[os_names]`, the OS name of each device with a group. It exists only while it holds a group, and holds no secrets. `data_folder_list` reads it, `data_folder_apply` saves a change to it under its lock and opens the folder it selects, and Start a new list (`newList`) replaces a file that cannot be read.
 
 ## Logging
 

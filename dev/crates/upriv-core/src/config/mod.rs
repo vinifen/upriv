@@ -17,12 +17,12 @@ pub mod list_saves;
 pub mod vault_config;
 pub mod vault_groups;
 
-pub(crate) use app_settings::update_app_settings;
 pub use app_settings::{
     discover_bootstrap_root, load_app_settings, load_app_settings_at, parse_settings_toml_str,
     save_app_settings_at, save_app_settings_session, serialize_settings_toml_str,
     AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
 };
+pub(crate) use app_settings::{note_os_name_in_settings, update_app_settings};
 pub use edit_policy::{
     quiet_targets_changed, refuse_config_save_if_busy, save_vault_config_checked,
     CONFIG_SAVE_QUIET_TARGETS,

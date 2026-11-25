@@ -6,12 +6,15 @@ import {
   APP_BACKUP_LIST,
   APP_UNLOCKED_LIST,
   NOTHING_SELECTED,
+  VAULT_BACKUP_LIST,
   selectionHere,
   type AppBackupChoice,
   type AppUnlockedChoice,
   type DeviceGroups,
   type HereDevice,
+  type VaultBackupChoice,
 } from "@upriv/shared";
+import { DeviceNamesProvider } from "@upriv/shared/react";
 import { FolderList, type FolderListProps } from "../FolderList";
 
 vi.mock("@/i18n", () => ({
@@ -152,6 +155,55 @@ describe("FolderList", () => {
       radio("First"),
       radio("Second"),
     ]);
+  });
+
+  it("marks the choice a device with nothing chosen uses as Default, whatever is selected", () => {
+    /** Whether the choice labelled `title` wears the Default badge. */
+    const isDefault = (title: string) => {
+      const choice = screen.getByText(title).closest("label");
+      if (!choice) throw new Error(`no choice ${title}`);
+      return within(choice).queryByText("modal.settings.badge.default") !== null;
+    };
+    render(createElement(Harness, { initial: HERE_ONLY }));
+    expect(radio("First").checked).toBe(true);
+    expect(isDefault("folder_list.choice.data_folder")).toBe(true);
+    expect(screen.getAllByText("modal.settings.badge.default")).toHaveLength(1);
+    cleanup();
+
+    // A vault's backups: Use the app's is its default, Data folder is not.
+    render(
+      createElement(FolderList<VaultBackupChoice>, {
+        label: "Vault backups",
+        policy: VAULT_BACKUP_LIST,
+        groups: {},
+        saved: {},
+        here: HERE,
+        fixed: [
+          { choice: "inherit", title: "Use the app's" },
+          { choice: "data_folder", title: "Data folder" },
+        ],
+        pickFolder: async () => null,
+        onChange: () => {},
+      }),
+    );
+    expect(isDefault("Use the app's")).toBe(true);
+    expect(isDefault("Data folder")).toBe(false);
+    cleanup();
+
+    // The app's unlocked folders start with nothing chosen: no choice is Default.
+    render(
+      createElement(FolderList<AppUnlockedChoice>, {
+        label: "Unlocked",
+        policy: APP_UNLOCKED_LIST,
+        groups: {},
+        saved: {},
+        here: HERE,
+        fixed: [{ choice: "beside", title: "Beside" }],
+        pickFolder: async () => null,
+        onChange: () => {},
+      }),
+    );
+    expect(screen.queryByText("modal.settings.badge.default")).toBeNull();
   });
 
   it("selects with a row's radio part", () => {
@@ -316,7 +368,9 @@ describe("FolderList", () => {
       });
     }
     render(createElement(Unlocked));
-    const besideCard = () => screen.getByText("Beside").closest("label")?.className ?? "";
+    // The card wraps the choice's radio label and the step it may still need.
+    const besideCard = () =>
+      screen.getByText("Beside").closest("label")?.parentElement?.className ?? "";
     expect(screen.getByRole("status").textContent).toBe("Choose a folder");
     expect(besideCard()).toContain("vault-status-recovery");
 
@@ -349,6 +403,21 @@ describe("OtherDevices", () => {
   function expand(label: RegExp) {
     fireEvent.click(screen.getByRole("button", { name: label }));
   }
+
+  it("names each device by the OS name it wrote, and this one by its OS now", () => {
+    render(
+      createElement(DeviceNamesProvider, {
+        names: { [DESK]: "Windows 11 Pro", [HERE.id]: "Ubuntu 22.04.4 LTS" },
+        here: { ...HERE, os: "Ubuntu 24.04.5 LTS" },
+        children: createElement(Harness, { initial: WITH_OTHERS }),
+      }),
+    );
+    expect(screen.getByRole("button", { name: /Windows 11 Pro.*bbbbb/ })).toBeDefined();
+    expect(screen.getByText(/Ubuntu 24\.04\.5 LTS.*aaaaa/)).toBeDefined();
+    expect(screen.queryByText(/Ubuntu 22\.04/)).toBeNull();
+    // A device that wrote no name is named by its system.
+    expect(screen.getByRole("button", { name: /device\.system\.android.*ccccc/ })).toBeDefined();
+  });
 
   it("copies a row into this device, selected, keeping its name", () => {
     const linuxDesk: DeviceGroups<AppBackupChoice> = {
@@ -400,17 +469,25 @@ describe("OtherDevices", () => {
     expect(device()).toContain("vault-status-recovery");
   });
 
-  it("removes another device's folders from the list after asking", () => {
+  it("keeps a device whose last folder is deleted", () => {
     render(createElement(Harness, { initial: WITH_OTHERS }));
     expand(/bbbbb/);
-    fireEvent.click(
-      screen.getByRole("button", { name: "folder_list.action.remove_device_folders" }),
-    );
-    const question = screen.getByText(/folder_list.remove_device_folders_confirm/);
+    choose("Drive", "folder_list.action.delete");
+    const desk = screen.getByRole("button", { name: /bbbbb/ });
+    expect(desk.textContent).toContain("folder_list.selected_there folder_list.choice.data_folder");
+    expect(screen.getByText("folder_list.device_no_folders")).toBeDefined();
+  });
+
+  it("removes another device from the list after asking, naming the vaults' lists", () => {
+    render(createElement(Harness, { initial: WITH_OTHERS }));
+    expand(/bbbbb/);
+    fireEvent.click(screen.getByRole("button", { name: "folder_list.action.remove_device" }));
+    // An app list's removal reaches every vault's own list.
+    const question = screen.getByText(/folder_list.remove_device_confirm_app/);
     const strip = question.parentElement;
     if (!strip) throw new Error("no confirmation");
     fireEvent.click(
-      within(strip).getByRole("button", { name: "folder_list.action.remove_device_folders" }),
+      within(strip).getByRole("button", { name: "folder_list.action.remove_device" }),
     );
     expect(screen.queryByRole("button", { name: /bbbbb/ })).toBeNull();
   });

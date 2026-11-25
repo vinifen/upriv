@@ -18,22 +18,21 @@ use super::persistence::{save_vault_persistence, VaultPersistence};
 use super::unfinished::{forget_import, record_import};
 use super::welcome::VaultWelcome;
 
-/// Registry + Argon2id header + seed chunk. Import paths call this, stream
-/// content in, then add the welcome note with [`super::welcome::seal_welcome_if_absent`].
+/// Registry + Argon2id header + seed chunk.
 pub fn create_vault(
     root: &VaultRoot,
     config: VaultConfig,
     password: &[u8],
     preset: KdfUnlockPreset,
 ) -> Result<()> {
-    create_vault_with_welcome(root, config, password, preset, None)
+    create_vault_with_welcome(root, config, password, preset, None, NewVault::Complete)
 }
 
 /// Scratch create as the job `job_id`. The Argon2id wrap cannot be cut short:
 /// a stop that arrives while it runs removes the new vault once it is made.
-/// `for_import` keeps the vault recorded as unfinished until the import
-/// session that fills it finishes ([`super::finish_import_session`]); a crash
-/// before that deletes it at the next launch.
+/// `for_import` makes it a vault an import session fills: it keeps its
+/// `[importing]` mark until that session finishes
+/// ([`super::finish_import_session`]).
 pub fn create_vault_as_job(
     root: &VaultRoot,
     config: VaultConfig,
@@ -44,16 +43,34 @@ pub fn create_vault_as_job(
     job_id: &str,
 ) -> Result<()> {
     let id = config.vault.id.trim().to_string();
+    let made = if for_import {
+        NewVault::ForImport
+    } else {
+        NewVault::Complete
+    };
     Job::run(job_id, JobKind::VaultCreate, Some(&id), |job| {
-        create_vault_with_welcome(root, config, password, preset, welcome)?;
-        let kept = (|| {
-            if for_import {
-                record_import(root, &id)?;
-            }
-            job.final_step()
-        })();
-        kept.map_err(|error| abandon_failed_import(root, &id, error))
+        create_vault_with_welcome(root, config, password, preset, welcome, made)?;
+        job.final_step()
+            .map_err(|error| abandon_failed_import(root, &id, error))
     })
+}
+
+/// What a new vault is once its create ends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum NewVault {
+    /// A vault as it is: every file it holds is in.
+    Complete,
+    /// A vault an import fills next, marked `[importing]` until it finishes.
+    ForImport,
+}
+
+/// The marks of what a vault goes through are its own: a create starts with
+/// none but the `[importing]` of an import, whatever settings it was given
+/// (a backup's or an export's `config.toml` carries the source's marks).
+pub(super) fn fresh_marks(config: &mut VaultConfig, made: NewVault) {
+    config.deleting = None;
+    config.importing = (made == NewVault::ForImport)
+        .then(crate::config::vault_config::VaultImportingSection::begun_now);
 }
 
 /// Scratch create. `welcome` is sealed in the same pass as the seed chunk.
@@ -63,10 +80,12 @@ pub(super) fn create_vault_with_welcome(
     password: &[u8],
     preset: KdfUnlockPreset,
     welcome: Option<VaultWelcome<'_>>,
+    made: NewVault,
 ) -> Result<()> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
+    fresh_marks(&mut config, made);
     let initial_files = match welcome {
         Some(welcome) => welcome.files()?.to_vec(),
         None => Vec::new(),

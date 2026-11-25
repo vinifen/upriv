@@ -7,6 +7,7 @@ import {
   changePasswordFormIsDirty,
   changeStorageFormCanSubmit,
   changeStorageFormIsDirty,
+  EMPTY_CHANGE_PASSWORD_FIELDS,
 } from "../forms";
 
 const ENCRYPTED = { mode: "encrypted_dir", plain_files: "chosen" } as const;
@@ -131,35 +132,16 @@ describe("changeKdfFormIsDowngrade", () => {
 });
 
 describe("changePasswordFormIsDirty", () => {
-  it("is dirty when any password field is filled", () => {
-    expect(
-      changePasswordFormIsDirty({
-        currentPassword: "",
-        newPassword: "",
-        confirmPassword: "",
-      }),
-    ).toBe(false);
-    expect(
-      changePasswordFormIsDirty({
-        currentPassword: "x",
-        newPassword: "",
-        confirmPassword: "",
-      }),
-    ).toBe(true);
-    expect(
-      changePasswordFormIsDirty({
-        currentPassword: "",
-        newPassword: "y",
-        confirmPassword: "",
-      }),
-    ).toBe(true);
-    expect(
-      changePasswordFormIsDirty({
-        currentPassword: "",
-        newPassword: "",
-        confirmPassword: "z",
-      }),
-    ).toBe(true);
+  it("is dirty when any field is filled, the hint too", () => {
+    expect(changePasswordFormIsDirty(EMPTY_CHANGE_PASSWORD_FIELDS)).toBe(false);
+    for (const patch of [
+      { currentPassword: "x" },
+      { newPassword: "y" },
+      { confirmPassword: "z" },
+      { passwordHint: "h" },
+    ]) {
+      expect(changePasswordFormIsDirty({ ...EMPTY_CHANGE_PASSWORD_FIELDS, ...patch })).toBe(true);
+    }
   });
 });
 

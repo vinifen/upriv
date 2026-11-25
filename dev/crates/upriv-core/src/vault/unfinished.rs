@@ -3,14 +3,22 @@
 //!
 //! A job that writes a file outside the vault (a vault export, a backup
 //! export, the data-folder zip) records that file in `state.json` before its
-//! first byte. An import records its new vault before the vault's folder
-//! exists. A job that ends forgets its record. [`sweep_unfinished`] clears what
-//! is still recorded: it removes each unfinished file, overwriting a plain-text
-//! one first on a thread of its own, and deletes each vault an import never
-//! finished.
+//! first byte. A create, and an import that copies a store, records its new
+//! vault before the vault's folder exists. A job that ends forgets its record.
+//! [`sweep_unfinished`] clears what is still recorded: it removes each
+//! unfinished file, overwriting a plain-text one first on a thread of its own,
+//! and deletes each vault whose create or copy never finished, which holds
+//! nothing to keep.
+//!
+//! An import that fills a whole new vault marks it `[importing]` in its own
+//! `config.toml` instead, from the create on, and drops the mark once every
+//! file is in. One a quit or a crash cut off keeps the mark and the files its
+//! seals hold: that vault is in recovery until the person keeps it (an unlock)
+//! or deletes it. Nothing removes it for them.
 
 use std::path::Path;
 
+use crate::config::{load_vault_config, save_vault_config};
 use crate::error::Result;
 use crate::host_fs::{is_tree_mounted, tree_uri_of};
 use crate::logging::{log_event, LogLevel};
@@ -54,14 +62,47 @@ pub(super) fn forget_file(root: &VaultRoot, partial: &Path) {
     let _ = remove_unfinished_file(root, &partial.to_string_lossy());
 }
 
-/// Record the new vault `vault_id` before an import writes its folder.
+/// Record the new vault `vault_id` before a create writes its folder: the
+/// vault is not whole until the create, or a store copy, lands.
 pub(super) fn record_import(root: &VaultRoot, vault_id: &str) -> Result<()> {
     add_unfinished_import(root, vault_id)
 }
 
-/// The import finished, or its vault is gone.
+/// The vault is whole, or gone.
 pub(super) fn forget_import(root: &VaultRoot, vault_id: &str) {
     let _ = remove_unfinished_import(root, vault_id);
+}
+
+/// Something holds the vault `vault_id` at `vault_dir` now: its session is
+/// open in this process, a create, an unlock, or other work on it runs here
+/// (an export, the data folder's copy), or another Upriv holds its lock. A
+/// vault an import marked or recorded that none of these holds is one a quit
+/// or a crash cut off; one that is held is never taken for cut off.
+pub(crate) fn import_running(root: &VaultRoot, vault_id: &str, vault_dir: &Path) -> bool {
+    vault_is_live(root, vault_id) || crate::session::is_vault_preparing_at(vault_dir)
+}
+
+/// The import of `vault_id` has every file in: drop the vault's
+/// `[importing]` mark, once more when the write fails. A mark that stays
+/// shows the vault in recovery, where an unlock keeps it.
+pub(super) fn end_import_mark(root: &VaultRoot, vault_id: &str) {
+    let Ok(vault_dir) = root.vault_dir(vault_id) else {
+        return;
+    };
+    let dropped = (0..2).any(|_| {
+        crate::session::with_vault_dir_lock(&vault_dir, || {
+            let mut config = load_vault_config(&vault_dir)?;
+            if config.importing.take().is_some() {
+                save_vault_config(&vault_dir, &config)?;
+            }
+            Ok(())
+        })
+        .is_ok()
+    });
+    if !dropped {
+        let fields: Vec<_> = vault_id_log_field(vault_id).into_iter().collect();
+        log_event(LogLevel::Warn, "vault_import_mark_kept", &fields);
+    }
 }
 
 /// How the log names the removal of an unfinished file of `work`.
@@ -73,27 +114,46 @@ pub(super) fn partial_work(work: UnfinishedWork) -> PartialWork {
     }
 }
 
-/// Clear what a crash left: delete each vault an import never finished, then
-/// remove each unfinished file this computer recorded. Returns the
-/// storage-access trees that hold such a file and are not mounted: mount
-/// each and sweep again. Whatever cannot be removed keeps
-/// its record for the next launch.
-pub fn sweep_unfinished(root: &VaultRoot) -> Result<Vec<String>> {
-    sweep_imports(root)?;
-    sweep_files(root)
+/// What [`sweep_unfinished`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SweepOutcome {
+    /// The storage-access trees that hold an unfinished file and are not
+    /// mounted: mount each and sweep again.
+    pub folders: Vec<String>,
+    /// The vaults whose create or store copy never finished that it deleted,
+    /// by id.
+    pub removed_vaults: Vec<String>,
 }
 
-fn sweep_imports(root: &VaultRoot) -> Result<()> {
+/// Clear what a crash left: delete each vault whose create or store copy
+/// never finished, then remove each unfinished file this computer recorded.
+/// Whatever cannot be removed keeps its record for the next launch.
+pub fn sweep_unfinished(root: &VaultRoot) -> Result<SweepOutcome> {
+    let removed_vaults = sweep_unfinished_vaults(root)?;
+    Ok(SweepOutcome {
+        folders: sweep_files(root)?,
+        removed_vaults,
+    })
+}
+
+/// Each vault whose create or store copy a crash cut off holds nothing to
+/// keep: it is removed. A vault an import was filling has its own
+/// `[importing]` mark instead and stays, in recovery, for the person.
+fn sweep_unfinished_vaults(root: &VaultRoot) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
     for vault_id in unfinished_imports(root)? {
-        // An import running in this process, or in another Upriv on the same
+        // A create running in this process, or in another Upriv on the same
         // data folder, is not a leftover.
-        if vault_is_live(root, &vault_id) {
+        if import_running(root, &vault_id, &root.vault_dir(&vault_id)?) {
             continue;
         }
         let fields: Vec<_> = vault_id_log_field(&vault_id).into_iter().collect();
         // A deleted vault forgets its record.
         match delete_failed_import(root, &vault_id) {
-            Ok(()) => log_event(LogLevel::Info, "vault_import_unfinished_removed", &fields),
+            Ok(()) => {
+                log_event(LogLevel::Info, "vault_import_unfinished_removed", &fields);
+                removed.push(vault_id);
+            }
             Err(_) => log_event(
                 LogLevel::Warn,
                 "vault_import_unfinished_remove_failed",
@@ -101,7 +161,7 @@ fn sweep_imports(root: &VaultRoot) -> Result<()> {
             ),
         }
     }
-    Ok(())
+    Ok(removed)
 }
 
 fn sweep_files(root: &VaultRoot) -> Result<Vec<String>> {
@@ -179,7 +239,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(sweep_unfinished(&root).unwrap().is_empty());
+        assert_eq!(sweep_unfinished(&root).unwrap(), SweepOutcome::default());
         // The sweep answers at once; the wipe forgets the record when done.
         crate::vault::wait_for_partial_wipes();
         assert!(!partial.host_exists());
@@ -275,7 +335,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(sweep_unfinished(&root).unwrap(), vec![tree.to_string()]);
+        assert_eq!(
+            sweep_unfinished(&root).unwrap().folders,
+            vec![tree.to_string()]
+        );
         assert_eq!(load_runtime_state(&root).unwrap().unfinished_files.len(), 2);
     }
 
@@ -326,7 +389,10 @@ mode = "encrypted_dir"
         record_import(&root, "notes").unwrap();
         assert!(root.vault_dir("notes").unwrap().host_is_dir());
 
-        sweep_unfinished(&root).unwrap();
+        assert_eq!(
+            sweep_unfinished(&root).unwrap().removed_vaults,
+            vec!["notes"]
+        );
         assert!(!root.vault_dir("notes").unwrap().host_exists());
         assert!(load_runtime_state(&root)
             .unwrap()
@@ -341,13 +407,152 @@ mode = "encrypted_dir"
         record_import(&root, "notes").unwrap();
         crate::vault::open_import_session(&root, "notes", b"pass-word-ok").unwrap();
 
-        sweep_unfinished(&root).unwrap();
+        assert!(sweep_unfinished(&root).unwrap().removed_vaults.is_empty());
         assert!(root.vault_dir("notes").unwrap().host_is_dir());
         assert_eq!(
             load_runtime_state(&root).unwrap().unfinished_imports,
             vec!["notes"]
         );
         crate::vault::abort_import_vault(&root, "notes").unwrap();
+    }
+
+    fn row(root: &VaultRoot) -> crate::vault::VaultListItem {
+        crate::vault::list_vaults(root).unwrap().remove(0)
+    }
+
+    /// An unlock while the folder's lock is held: a refusal that came after
+    /// the lock would wait instead.
+    fn unlock_behind_the_lock(root: &VaultRoot) -> Result<crate::vault::VaultOpened> {
+        let dir = root.vault_dir("notes").unwrap();
+        crate::session::with_vault_dir_lock(&dir, || {
+            Ok(crate::open_vault(root, "notes", b"pass-word-ok"))
+        })
+        .unwrap()
+    }
+
+    /// A vault an import was filling when a quit or a crash cut it off: the
+    /// session's close sealed what got in, and the mark stays.
+    fn cut_off_import(root: &VaultRoot) {
+        crate::create_vault_as_job(
+            root,
+            sample_config("notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            None,
+            true,
+            &test_job_id(),
+        )
+        .unwrap();
+        crate::vault::open_import_session(root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::ingest_import_reader(
+            root,
+            "notes",
+            "a.txt",
+            &mut &b"alpha"[..],
+            &test_job_id(),
+        )
+        .unwrap();
+        crate::close_vault(root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_cut_off_create_is_removed_and_never_opens() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_notes(&root);
+        record_import(&root, "notes").unwrap();
+
+        crate::vault::open_import_session(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(row(&root).session, Some("importing"));
+        crate::close_vault(&root, "notes").unwrap();
+
+        let left = row(&root);
+        assert_eq!(left.session, Some("deleting"));
+        assert!(!left.delete_unfinished);
+        assert!(!left.import_unfinished);
+        assert!(matches!(
+            unlock_behind_the_lock(&root),
+            Err(crate::error::UprivError::VaultImportUnfinished)
+        ));
+    }
+
+    #[test]
+    fn an_import_still_running_is_importing_and_refuses_an_unlock() {
+        let (_tmp, root) = vault_root_with(&[]);
+        crate::create_vault_as_job(
+            &root,
+            sample_config("notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            None,
+            true,
+            &test_job_id(),
+        )
+        .unwrap();
+        crate::vault::open_import_session(&root, "notes", b"pass-word-ok").unwrap();
+        let running = row(&root);
+        assert_eq!(running.session, Some("importing"));
+        assert!(!running.import_unfinished);
+        assert!(matches!(
+            unlock_behind_the_lock(&root),
+            Err(crate::error::UprivError::VaultImportUnfinished)
+        ));
+        crate::vault::abort_import_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_cut_off_import_is_in_recovery_until_an_unlock_keeps_it() {
+        let (_tmp, root) = vault_root_with(&[]);
+        cut_off_import(&root);
+        let left = row(&root);
+        assert_eq!(left.session, Some("recovery"));
+        assert!(left.import_unfinished);
+        // Nothing removes it for the person.
+        assert!(sweep_unfinished(&root).unwrap().removed_vaults.is_empty());
+        assert!(root.vault_dir("notes").unwrap().host_is_dir());
+
+        let opened = crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert!(opened.import_kept);
+        assert_eq!(row(&root).session, Some("open"));
+        assert!(crate::vault::fs::fs_read_file(&root, "notes", "/a.txt").is_ok());
+        crate::close_vault(&root, "notes").unwrap();
+
+        let kept = row(&root);
+        assert_eq!(kept.session, None);
+        assert!(!kept.import_unfinished);
+        let config = load_vault_config(root.vault_dir("notes").unwrap()).unwrap();
+        assert_eq!(config.importing, None);
+    }
+
+    #[test]
+    fn a_wrong_password_keeps_a_cut_off_import_in_recovery() {
+        let (_tmp, root) = vault_root_with(&[]);
+        cut_off_import(&root);
+        assert!(crate::open_vault(&root, "notes", b"not-the-password").is_err());
+        assert!(row(&root).import_unfinished);
+    }
+
+    #[test]
+    fn a_finished_import_is_a_vault_like_any_other() {
+        let (_tmp, root) = vault_root_with(&[]);
+        crate::create_vault_as_job(
+            &root,
+            sample_config("notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            None,
+            true,
+            &test_job_id(),
+        )
+        .unwrap();
+        crate::vault::open_import_session(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::finish_import_session(&root, "notes", crate::vault::ImportEnd::Whole)
+            .unwrap();
+        let done = row(&root);
+        assert_eq!(done.session, None);
+        assert!(!done.import_unfinished);
+        let opened = crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert!(!opened.import_kept);
+        crate::close_vault(&root, "notes").unwrap();
     }
 
     #[test]

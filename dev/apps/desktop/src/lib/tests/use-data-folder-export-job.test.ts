@@ -44,6 +44,7 @@ function jobs(progress: JobProgress | null = null): JobService & {
   return {
     status: vi.fn(async () => progress),
     cancel: vi.fn(async () => undefined),
+    skipBackup: async () => false,
   };
 }
 

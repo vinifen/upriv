@@ -47,6 +47,8 @@ import {
   type FileNameErrorCode,
   type FileProblem,
   type FileTreeNode,
+  type ImportBlocked,
+  type ImportBlockedReport,
   type JobStopBy,
   type PendingImportEntry,
   type VaultWorkspaceAction,
@@ -81,6 +83,12 @@ const MOUNT_FAILED_KEY: I18nKey = "error.vault_mount_failed";
 type ImportFileOptions = {
   openFirstViewable?: boolean;
   skippedUnsupported?: number;
+};
+
+/** A window of items an import could not take; a refused drop waits on `answer`. */
+type QueuedImportReport = ImportBlockedReport & {
+  id: number;
+  answer?: (leaveOut: boolean) => void;
 };
 
 interface UseVaultFileManagerOptions {
@@ -217,6 +225,71 @@ export function useVaultFileManager({
       );
     },
     [commitLandedImportPaths],
+  );
+
+  /** Windows of items imports could not take, shown one at a time in order. */
+  const [importReports, setImportReports] = useState<QueuedImportReport[]>([]);
+  const importReportsRef = useRef(importReports);
+  importReportsRef.current = importReports;
+  const importReportSeqRef = useRef(0);
+  const dropImportReport = useCallback(
+    (id: number) => setImportReports((prev) => prev.filter((report) => report.id !== id)),
+    [],
+  );
+
+  /**
+   * Ask whether to import a drop without the items it cannot take, before
+   * anything is copied. A stop of the import is a no.
+   */
+  const askLeaveOut = useCallback(
+    (blocked: ImportBlocked, signal: AbortSignal): Promise<boolean> => {
+      if (signal.aborted) return Promise.resolve(false);
+      const id = (importReportSeqRef.current += 1);
+      return new Promise<boolean>((resolve) => {
+        const answer = (leaveOut: boolean) => {
+          signal.removeEventListener("abort", stop);
+          dropImportReport(id);
+          resolve(leaveOut);
+        };
+        const stop = () => answer(false);
+        signal.addEventListener("abort", stop, { once: true });
+        setImportReports((prev) => [
+          ...prev,
+          { id, vaultName: entry.displayName, blocked, stage: "refused", answer },
+        ]);
+      });
+    },
+    [dropImportReport, entry.displayName],
+  );
+
+  /** Name the files a finished batch could not read on their way in. */
+  const reportLeftOut = useCallback(
+    (blocked: ImportBlocked) => {
+      const id = (importReportSeqRef.current += 1);
+      setImportReports((prev) => [
+        ...prev,
+        { id, vaultName: entry.displayName, blocked, stage: "left_out" },
+      ]);
+    },
+    [entry.displayName],
+  );
+
+  // A file manager that goes away cancels the drop it was asking about.
+  useEffect(
+    () => () => {
+      for (const report of importReportsRef.current) report.answer?.(false);
+    },
+    [],
+  );
+
+  const shownImportReport: QueuedImportReport | null = importReports[0] ?? null;
+  const answerImportReport = useCallback(
+    (leaveOut: boolean) => {
+      if (!shownImportReport) return;
+      if (shownImportReport.answer) shownImportReport.answer(leaveOut);
+      else dropImportReport(shownImportReport.id);
+    },
+    [dropImportReport, shownImportReport],
   );
 
   const treeMutated = useCallback(
@@ -758,6 +831,7 @@ export function useVaultFileManager({
         if (toOpen) dispatch({ type: "open_file", path: toOpen });
       }
 
+      if (result.leftOut.count > 0) reportLeftOut(result.leftOut);
       const message = formatImportOutcomeToast(
         result.importedPaths.length,
         result.skippedInvalid,
@@ -765,9 +839,6 @@ export function useVaultFileManager({
         (key, vars) => t(key, vars),
       );
       if (message) showToast(message);
-      if (result.readFailureName) {
-        showToast(t("modal.file_manager.toast.import_failed", { name: result.readFailureName }));
-      }
       if (result.writeFailureName) {
         showToast(
           t("modal.file_manager.toast.import_write_failed", { name: result.writeFailureName }),
@@ -797,6 +868,7 @@ export function useVaultFileManager({
       dispatch,
       fs,
       reloadTree,
+      reportLeftOut,
       setTree,
       showToast,
       syncTree,
@@ -865,6 +937,14 @@ export function useVaultFileManager({
         if (listed.truncated) {
           showToast(t("modal.file_manager.toast.import_truncated"));
         }
+        // Nothing is copied until the person chooses to import without them.
+        if (listed.blocked) {
+          const leaveOut = await askLeaveOut(listed.blocked, signal);
+          if (!leaveOut || signal.aborted || !importInFlightRef.current.has(sessionId)) {
+            clearImportSession(sessionId);
+            return;
+          }
+        }
         const files = listed.files;
         if (files.length === 0) {
           clearImportSession(sessionId);
@@ -892,6 +972,7 @@ export function useVaultFileManager({
     },
     [
       applyImportedBatch,
+      askLeaveOut,
       beginImportSession,
       clearImportSession,
       dispatch,
@@ -1095,6 +1176,12 @@ export function useVaultFileManager({
     importFiles,
     importOsDrop,
     importBusy,
+    /** The window of items an import could not take, for `ImportBlockedModal`. */
+    importBlocked: {
+      report: shownImportReport as ImportBlockedReport | null,
+      onLeaveOut: () => answerImportReport(true),
+      onClose: () => answerImportReport(false),
+    },
     editorImportStartedAt,
     stopImports,
     cancelImportAndDismiss,

@@ -4,7 +4,8 @@
 //! between machines finds each machine's own choice again. A device with no
 //! group uses Default: the folder beside the app for a portable copy, the
 //! per-user app folder for an installed one, Documents/Upriv on a phone. The
-//! file exists only while some group differs from that.
+//! file exists only while it holds a group. Beside the groups it keeps the OS
+//! name of each device that has one (`[os_names]`), written by that device.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -14,8 +15,9 @@ use serde::{Deserialize, Serialize};
 use super::chain::ChoiceName;
 use super::model::{DeviceGroups, FixedChoice, Row, Selection};
 use super::path_rules::ListKind;
-use crate::device::ThisDevice;
+use crate::device::{this_device, ThisDevice};
 use crate::error::{Result, UprivError};
+use crate::os_name::{this_os_name, OsNames};
 
 /// The file in the app home.
 pub const DATA_FOLDER_LIST_FILE: &str = ".upriv-data-folder";
@@ -55,6 +57,23 @@ impl FixedChoice for DataFolderChoice {
 pub struct DataFolderList {
     #[serde(default, skip_serializing_if = "DeviceGroups::is_empty")]
     pub devices: DeviceGroups<DataFolderChoice>,
+    /// The OS name of each device with a group here.
+    #[serde(default, skip_serializing_if = "OsNames::is_empty")]
+    pub os_names: OsNames,
+}
+
+impl DataFolderList {
+    /// The names the file keeps: a line only for a device with a group, and
+    /// this device's own as its OS gives it now (the one written before when
+    /// it gives none).
+    fn settle_os_names(&mut self, device: &ThisDevice, name: Option<&str>) {
+        let groups = &self.devices;
+        self.os_names
+            .retain_devices(|id| groups.group(id).is_some());
+        if groups.here(device).is_some() {
+            self.os_names.note_here(device, name);
+        }
+    }
 }
 
 /// A choice of the list on this device.
@@ -138,20 +157,37 @@ pub fn load_data_folder_list(home: &Path) -> Result<DataFolderList> {
     Ok(list)
 }
 
-/// Write the list atomically; an empty list removes the file. Upriv runs one
-/// instance per machine, so it is the only writer.
+/// Write the list atomically, with the OS names settled; an empty list
+/// removes the file. Upriv runs one instance per machine, so it is the only
+/// writer.
 pub fn save_data_folder_list(home: &Path, list: &DataFolderList) -> Result<()> {
     let path = list_path(home);
+    let mut list = list.clone();
+    list.settle_os_names(this_device(), this_os_name());
     if list.devices.is_empty() {
         return match crate::host_fs::remove_file(&path) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
             _ => Ok(()),
         };
     }
-    let body = toml::to_string_pretty(list).map_err(|error| UprivError::DataFolderListInvalid {
-        detail: error.to_string(),
-    })?;
+    let body =
+        toml::to_string_pretty(&list).map_err(|error| UprivError::DataFolderListInvalid {
+            detail: error.to_string(),
+        })?;
     crate::paths::write_bytes_atomic(&path, format!("{HEADER}{body}").as_bytes())
+}
+
+/// Note this device's OS name in the list at `home`, under the list's lock,
+/// when the list holds this device's group and its line says something else.
+pub fn note_os_name_in_list(home: &Path) -> Result<()> {
+    let _lock = lock_data_folder_list();
+    let list = load_data_folder_list(home)?;
+    let mut settled = list.clone();
+    settled.settle_os_names(this_device(), this_os_name());
+    if settled == list {
+        return Ok(());
+    }
+    save_data_folder_list(home, &settled)
 }
 
 #[cfg(test)]
@@ -204,6 +240,61 @@ mod tests {
         assert_eq!(
             load_data_folder_list(home.path()).unwrap(),
             DataFolderList::default()
+        );
+    }
+
+    #[test]
+    fn the_list_keeps_the_os_names_of_devices_with_a_group() {
+        let home = tempfile::tempdir().unwrap();
+        let laptop = device(b"laptop");
+        let phone = device(b"phone");
+        let mut list = DataFolderList::default();
+        list.devices.0.insert(
+            laptop.id.clone().unwrap(),
+            DeviceGroup {
+                rows: vec![row(1, "/media/usb")],
+                selected: Selection::Row(1),
+                next_number: 2,
+                ..DeviceGroup::for_device(&laptop)
+            },
+        );
+        list.os_names.note_here(&laptop, Some("Fedora Linux 41"));
+        list.os_names.note_here(&phone, Some("Android 15 (Xiaomi)"));
+        save_data_folder_list(home.path(), &list).unwrap();
+        let saved = load_data_folder_list(home.path()).unwrap();
+        assert_eq!(
+            saved.os_names.get(laptop.id.as_ref().unwrap()),
+            Some("Fedora Linux 41")
+        );
+        // A device with no group here is named nowhere in the list.
+        assert_eq!(saved.os_names.get(phone.id.as_ref().unwrap()), None);
+
+        // This device notes its name once the list holds its group.
+        let here = this_device();
+        let Some(id) = here.id.clone() else {
+            return;
+        };
+        let mut with_here = saved.clone();
+        with_here.devices.0.insert(
+            id.clone(),
+            DeviceGroup {
+                rows: vec![row(1, "/mnt/data")],
+                selected: Selection::Row(1),
+                next_number: 2,
+                ..DeviceGroup::for_device(here)
+            },
+        );
+        std::fs::write(
+            list_path(home.path()),
+            toml::to_string_pretty(&with_here).unwrap(),
+        )
+        .unwrap();
+        note_os_name_in_list(home.path()).unwrap();
+        let noted = load_data_folder_list(home.path()).unwrap();
+        assert_eq!(noted.os_names.get(&id), this_os_name());
+        assert_eq!(
+            noted.os_names.get(laptop.id.as_ref().unwrap()),
+            Some("Fedora Linux 41")
         );
     }
 

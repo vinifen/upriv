@@ -55,6 +55,7 @@ import {
   vaultBlocksColumnCount,
   buildVaultWelcomeFiles,
   createVaultImportPackage,
+  unfinishedVaultsRemovedText,
   createVaultImportPackageKind,
   type CreateVaultDraft,
   type CreateVaultGroupAssignment,
@@ -67,6 +68,7 @@ import {
   type KdfUnlockPreset,
   type StorageMode,
   type KeyCopies,
+  type ImportBlockedReport,
   type VaultListItem,
   type VaultRuntimePatch,
   vaultRebuiltToast,
@@ -114,6 +116,7 @@ import {
   claimContentTreeForCreate,
   contentTreeClaimedForCreate,
   releaseContentJob,
+  releasePendingImport,
 } from "@/platform/native/contentTreeImport";
 import { releaseImportCache } from "@/platform/native/importCache";
 import { useVaultListModals } from "./useVaultListModals";
@@ -408,8 +411,6 @@ export function useVaultListScreen() {
     onStorageReset: (vaultId) => setVaultStorageMode(vaultId, "encrypted_dir"),
   });
 
-  useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch);
-
   /** Reloads in flight: `refreshing` stays on until the last one settles. */
   const reloadsInFlightRef = useRef(0);
   /** The reload the person asked for (Refresh, or a pull), shared while it runs. */
@@ -489,6 +490,17 @@ export function useVaultListScreen() {
     vaultGroupService,
     vaultService,
   ]);
+
+  // The vaults whose create or store copy a crash cut off go, and the toast
+  // names them. Core runs inside this app, so no import outlives the screen
+  // that started it.
+  useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch, (removed) => {
+    const names = removed.map(
+      (id) => vaultsRef.current.find((vault) => vault.id === id)?.displayName ?? id,
+    );
+    show(unfinishedVaultsRemovedText(names, t), 8000);
+    void reload();
+  });
 
   /**
    * Refresh from the menu or a pull. A second ask while one runs joins it, so
@@ -692,6 +704,32 @@ export function useVaultListScreen() {
   const runningDelete = deleteJob.job;
   const backupService = useBackupService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
+  const changeBackup = passwordChange.backupStep;
+  const changeBackupVaultId = changeBackup?.vaultId ?? null;
+  const changeBackupSeenRef = useRef<string | null>(null);
+  // Back up first that ended may have put a zip in place: the open Backups window lists it.
+  useEffect(() => {
+    if (changeBackupSeenRef.current !== null && changeBackupVaultId === null) {
+      setBackupListRefresh((token) => token + 1);
+    }
+    changeBackupSeenRef.current = changeBackupVaultId;
+  }, [changeBackupVaultId]);
+  /**
+   * A create refused for the items it names, until its window is closed. Its
+   * row stays, as creating, until the person answers.
+   */
+  const [refusedImport, setRefusedImport] = useState<
+    (ImportBlockedReport & { vaultId: string }) | null
+  >(null);
+  /**
+   * What "Import without them" runs again while that window is open, with no
+   * password when nothing can be imported without them. Kept out of render
+   * state since it holds the new vault's password; dropped when the window
+   * closes, which also lets a picked folder's listing go.
+   */
+  const refusedRetryRef = useRef<{ result: CreateVaultResult; password: string | null } | null>(
+    null,
+  );
   const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
       const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
@@ -789,7 +827,11 @@ export function useVaultListScreen() {
       closingVaultIds: [...lifecycle.closingVaultIds],
       backingUpVaultIds: [...lifecycle.backingUpVaultIds],
       exportingVaultIds: exportJob ? [exportJob.vaultId] : [],
-      backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
+      // A password change writing its Back up first zip shows as backing up.
+      backupJobVaultIds: [
+        ...(backupNowJob ? [backupNowJob.vaultId] : []),
+        ...(changeBackupVaultId !== null ? [changeBackupVaultId] : []),
+      ],
       backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
       recoveringVaultIds: [lifecycle.plainRemoveJob, rebuildJob].flatMap((job) =>
         job ? [job.vaultId] : [],
@@ -799,7 +841,10 @@ export function useVaultListScreen() {
       storageChangeVaultIds: storageJob ? [storageJob.vaultId] : undefined,
       deletingVaultIds: runningDelete ? [runningDelete.vaultId] : undefined,
       deleteNowVaultIds: deleteNowIds,
-      creatingVaultIds: [...lifecycle.creatingVaultIds],
+      // A refused create waits for its window's answer, still creating.
+      creatingVaultIds: refusedImport
+        ? [...lifecycle.creatingVaultIds, refusedImport.vaultId]
+        : [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
       closeNowVaultIds: lifecycle.closeNowVaultIds,
@@ -815,6 +860,7 @@ export function useVaultListScreen() {
     lifecycle.rowWork,
     backupExport.job,
     backupNowJob,
+    changeBackupVaultId,
     dataFolderExportJob,
     exportJob,
     lifecycle.openingVaultIds,
@@ -823,6 +869,7 @@ export function useVaultListScreen() {
     deleteNowIds,
     passwordJob,
     rebuildJob,
+    refusedImport,
     runningDelete,
     storageJob,
     unlockRamJob,
@@ -929,6 +976,29 @@ export function useVaultListScreen() {
 
   const backupSaveJob =
     backupJob.job !== null && backupJob.job.vaultId === backupsVaultId ? backupJob.job : null;
+  const closeBackup = lifecycle.closeBackup;
+  const backupCloseBackup =
+    closeBackup !== null && closeBackup.vaultId === backupsVaultId
+      ? {
+          ...closeBackup,
+          stoppingSince: lifecycle.closeNowAskedAt.get(closeBackup.vaultId) ?? null,
+        }
+      : null;
+  const backupChangeBackup =
+    changeBackup !== null && changeBackup.vaultId === backupsVaultId ? changeBackup : null;
+  const closeBackupVaultId = closeBackup?.vaultId ?? null;
+  const hurryRunningClose = lifecycle.hurryRunningClose;
+  const handleCloseBackupStop = useCallback(() => {
+    if (closeBackupVaultId !== null) hurryRunningClose(closeBackupVaultId);
+  }, [closeBackupVaultId, hurryRunningClose]);
+  const closeBackupSeenRef = useRef<string | null>(null);
+  // A close's backup that ended put a zip in place: the open Backups window lists it.
+  useEffect(() => {
+    if (closeBackupSeenRef.current !== null && closeBackupVaultId === null) {
+      setBackupListRefresh((token) => token + 1);
+    }
+    closeBackupSeenRef.current = closeBackupVaultId;
+  }, [closeBackupVaultId]);
   const handleBackupSaveNow = useCallback(() => {
     const vault = backupsVault;
     if (!vault) return;
@@ -1551,6 +1621,99 @@ export function useVaultListScreen() {
     show(t("error.operation_timed_out"));
   }, [repairLimit.timedOut, repairBusy, setRepairBusy, show, t]);
 
+  /**
+   * The vault a create listed was not made: what it picked is let go, and its
+   * row and the group it would join go.
+   */
+  const dropCreatePlaceholder = (result: CreateVaultResult) => {
+    const claimed = contentTreeClaimedForCreate(result.vaultId);
+    if (claimed) releaseContentJob(claimed);
+    if (result.source === "import") {
+      void releaseImportCache(result.importFilePath ?? "").catch(() => undefined);
+    }
+    const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
+    pendingCreatesRef.current.delete(result.vaultId);
+    pendingCreateGroupsRef.current.delete(result.vaultId);
+    sessionWritesRef.current.delete(result.vaultId);
+    setVaults((current) => current.filter((vault) => vault.id !== result.vaultId));
+    if (pendingEffect) {
+      setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
+    }
+  };
+
+  /**
+   * Run the create of a vault whose row is listed. `leaveOut`: the person
+   * chose to import without the items that cannot be imported.
+   */
+  const runCreate = (result: CreateVaultResult, password: string, leaveOut: boolean) => {
+    // Take the picked folder now: the wizard lets go of it when it closes, and
+    // this create may wait behind another.
+    const claim = claimsContentTree(result)
+      ? claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "")
+      : Promise.resolve();
+    claim.catch(() => undefined);
+
+    const welcome = buildVaultWelcomeFiles(result, { t, locale });
+    const importPackage = createVaultImportPackage(result, password);
+    lifecycle.startCreatePipeline(
+      result.vaultId,
+      async (job) => {
+        await claim;
+        const created = await vaultService.createVault(
+          {
+            password,
+            unlockPreset: result.unlockPreset,
+            settings: result.settings,
+            importPackage:
+              importPackage && leaveOut ? { ...importPackage, leaveOut } : importPackage,
+            welcome,
+          },
+          job,
+        );
+        return created;
+      },
+      {
+        onComplete: () => {
+          sessionWritesRef.current.set(result.vaultId, Date.now());
+          if (shouldRecordVaultHidden(false, result.settings.vault.hidden)) {
+            void logService.recordVaultHidden().catch(() => {
+              /* Logging must never block hide. */
+            });
+          }
+          void (async () => {
+            const assignment = result.groupAssignment;
+            if (assignment.kind !== "none") {
+              try {
+                await handleCommitGroupAssignment(result.vaultId, assignment);
+              } catch (error) {
+                show(t(mobileErrorI18nKey(error, "error.unexpected")));
+              }
+            }
+            const listed = await reload();
+            if (listed.some((row) => row.id === result.vaultId)) {
+              pendingCreatesRef.current.delete(result.vaultId);
+              pendingCreateGroupsRef.current.delete(result.vaultId);
+            }
+          })();
+        },
+        // Core may have kept a stopped import in recovery: its answer says.
+        onRemoved: () => {
+          dropCreatePlaceholder(result);
+          reloadVaults();
+        },
+        onBlocked: (blocked) => {
+          refusedRetryRef.current = { result, password: blocked.whole ? null : password };
+          setRefusedImport({
+            vaultId: result.vaultId,
+            vaultName: result.displayName,
+            blocked,
+            stage: "refused",
+          });
+        },
+      },
+    );
+  };
+
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
     // Another vault being created only queues this one. The same id still in
     // flight is taken.
@@ -1578,74 +1741,7 @@ export function useVaultListScreen() {
       pendingCreateGroupsRef.current.set(result.vaultId, groupEffect);
       setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
     }
-
-    const releaseCreateImport = () => {
-      const claimed = contentTreeClaimedForCreate(result.vaultId);
-      if (claimed) releaseContentJob(claimed);
-      if (result.source !== "import") return;
-      void releaseImportCache(result.importFilePath ?? "").catch(() => undefined);
-    };
-
-    // Take the picked folder now: the wizard lets go of it when it closes, and
-    // this create may wait behind another.
-    const claim = claimsContentTree(result)
-      ? claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "")
-      : Promise.resolve();
-    claim.catch(() => undefined);
-
-    const welcome = buildVaultWelcomeFiles(result, { t, locale });
-    lifecycle.startCreatePipeline(
-      result.vaultId,
-      async (job) => {
-        await claim;
-        await vaultService.createVault(
-          {
-            password,
-            unlockPreset: result.unlockPreset,
-            settings: result.settings,
-            importPackage: createVaultImportPackage(result, password),
-            welcome,
-          },
-          job,
-        );
-      },
-      {
-        onComplete: () => {
-          sessionWritesRef.current.set(result.vaultId, Date.now());
-          if (shouldRecordVaultHidden(false, result.settings.vault.hidden)) {
-            void logService.recordVaultHidden().catch(() => {
-              /* Logging must never block hide. */
-            });
-          }
-          void (async () => {
-            const assignment = result.groupAssignment;
-            if (assignment.kind !== "none") {
-              try {
-                await handleCommitGroupAssignment(result.vaultId, assignment);
-              } catch (error) {
-                show(t(mobileErrorI18nKey(error, "error.unexpected")));
-              }
-            }
-            const listed = await reload();
-            if (listed.some((row) => row.id === result.vaultId)) {
-              pendingCreatesRef.current.delete(result.vaultId);
-              pendingCreateGroupsRef.current.delete(result.vaultId);
-            }
-          })();
-        },
-        onRemoved: () => {
-          releaseCreateImport();
-          const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
-          pendingCreatesRef.current.delete(result.vaultId);
-          pendingCreateGroupsRef.current.delete(result.vaultId);
-          sessionWritesRef.current.delete(result.vaultId);
-          setVaults((current) => current.filter((vault) => vault.id !== result.vaultId));
-          if (pendingEffect) {
-            setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
-          }
-        },
-      },
-    );
+    runCreate(result, password, false);
   };
 
   return {
@@ -1655,6 +1751,24 @@ export function useVaultListScreen() {
     show,
     dismiss,
     toast,
+    refusedImport,
+    retryRefusedImport: () => {
+      const retry = refusedRetryRef.current;
+      refusedRetryRef.current = null;
+      setRefusedImport(null);
+      if (retry?.password != null) runCreate(retry.result, retry.password, true);
+      else if (retry) dropCreatePlaceholder(retry.result);
+    },
+    closeRefusedImport: () => {
+      const retry = refusedRetryRef.current;
+      refusedRetryRef.current = null;
+      setRefusedImport(null);
+      if (!retry) return;
+      if (claimsContentTree(retry.result)) {
+        void releasePendingImport(retry.result.importFilePath ?? "").catch(() => undefined);
+      }
+      dropCreatePlaceholder(retry.result);
+    },
     openFromVault,
     setMeasuredHeaderHeight,
     ...state,
@@ -1682,6 +1796,8 @@ export function useVaultListScreen() {
     settingsVault,
     backupsVault,
     backupSaveJob,
+    backupCloseBackup,
+    backupChangeBackup,
     backupListRefresh,
     handleBackupSaveNow,
     backupExportFolder,
@@ -1726,6 +1842,8 @@ export function useVaultListScreen() {
     cancelDeleteNow: () => setDeleteNowAsk(null),
     confirmDeleteNow,
     backupSaveStop: backupJob.stop,
+    handleCloseBackupStop,
+    handleChangeBackupStop: passwordChange.skipBackup,
     handleConfirmExportVault,
     handleStopExportVault,
     handleRowExport,

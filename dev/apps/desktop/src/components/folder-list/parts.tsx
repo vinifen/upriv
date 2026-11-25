@@ -16,12 +16,16 @@ export function rowCardClass(checked: boolean, attention: boolean): string {
 /** Where what belongs to a row starts under it: past the radio, under its text. */
 export const ROW_INSET_CLASS = "pl-[1.625rem] sm:pl-7";
 
-type BadgeKind = "in_use" | "unsaved" | "selected_there";
+type BadgeKind = "in_use" | "default" | "unsaved" | "selected_there";
 
 const BADGE: Record<BadgeKind, { key: I18nKey; className: string }> = {
   in_use: {
     key: "folder_list.badge.in_use",
     className: "bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] text-vault-open",
+  },
+  default: {
+    key: "modal.settings.badge.default",
+    className: "bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] text-accent",
   },
   unsaved: {
     key: "folder_list.badge.unsaved",
@@ -34,9 +38,10 @@ const BADGE: Record<BadgeKind, { key: I18nKey; className: string }> = {
 };
 
 /**
- * A word beside a choice's name: In use (the data folder open now), Not
- * saved (a row a save would write: new, or with another name or path), or
- * Chosen there (another device's selection).
+ * A word beside a choice's name: In use (the data folder open now), Default
+ * (what a device with nothing chosen uses), Not saved (a row a save would
+ * write: new, or with another name or path), or Chosen there (another
+ * device's selection).
  */
 export function ListBadge({ kind }: { kind: BadgeKind }) {
   const { t } = useTranslation();

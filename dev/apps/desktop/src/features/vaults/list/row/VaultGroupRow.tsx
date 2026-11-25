@@ -1,5 +1,5 @@
 import { Icon } from "@/components/icons";
-import { IconButton } from "@/components/ui";
+import { DropdownMenu, IconButton } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import type { VaultGroup, VaultListViewMode } from "@upriv/shared";
@@ -21,8 +21,13 @@ interface VaultGroupRowProps {
   pointerDrag: VaultListPointerDragHandlers;
   onToggleCollapsed: (groupId: string) => void;
   onOpenSettings: (groupId: string) => void;
+  onOpenDelete: (groupId: string) => void;
 }
 
+/**
+ * A group's header: its toggle, then its Settings menu (Group settings, then
+ * Delete group…), as a vault row's gear opens its own.
+ */
 export function VaultGroupRow({
   group,
   groupedVaultCount,
@@ -34,6 +39,7 @@ export function VaultGroupRow({
   pointerDrag,
   onToggleCollapsed,
   onOpenSettings,
+  onOpenDelete,
 }: VaultGroupRowProps) {
   const { t } = useTranslation();
   const { settings } = useAppSettingsContext();
@@ -125,19 +131,30 @@ export function VaultGroupRow({
       </div>
       {showGroupSettings ? (
         <div className={["flex shrink-0 items-center", density.article].join(" ")}>
-          <IconButton
+          <DropdownMenu
             label={t("vault.group.open_settings")}
-            size="sm"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenSettings(group.id);
-            }}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <Icon name="settings" size={18} />
-          </IconButton>
+            align="right"
+            trigger={
+              <IconButton label={t("vault.group.open_settings")} size="sm">
+                <Icon name="settings" size={18} />
+              </IconButton>
+            }
+            items={[
+              {
+                id: "settings",
+                label: t("vault.group.settings.title"),
+                icon: <Icon name="settings" size={18} />,
+                onSelect: () => window.requestAnimationFrame(() => onOpenSettings(group.id)),
+              },
+              {
+                id: "delete",
+                label: t("vault.group.settings.delete_entry"),
+                icon: <Icon name="trash" size={18} />,
+                danger: true,
+                onSelect: () => window.requestAnimationFrame(() => onOpenDelete(group.id)),
+              },
+            ]}
+          />
         </div>
       ) : null}
     </article>

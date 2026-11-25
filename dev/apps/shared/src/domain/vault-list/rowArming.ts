@@ -63,19 +63,17 @@ export function vaultRowButtonRole(
 /**
  * What a click on the row itself does. A running or waiting open reopens its
  * password window, and an open vault opens its file manager: a row click
- * never locks. Any other row, with `ui.lifecycle_row_runs_button` on, presses
- * its button when that is Unlock or Stop (through the same arming); off, it
- * does nothing.
+ * never locks. Any other row presses its button when that is Unlock or Stop
+ * (through the same arming), and does nothing otherwise.
  */
 export type VaultRowClick = "file_manager" | "resume_unlock" | "button" | null;
 
 export function vaultRowClick(
   role: VaultRowButtonRole,
-  row: { open: boolean; resumeOpen: boolean; runsButton: boolean },
+  row: { open: boolean; resumeOpen: boolean },
 ): VaultRowClick {
   if (row.resumeOpen) return "resume_unlock";
   if (row.open) return "file_manager";
-  if (!row.runsButton) return null;
   return role === "stop" || role === "unlock" ? "button" : null;
 }
 

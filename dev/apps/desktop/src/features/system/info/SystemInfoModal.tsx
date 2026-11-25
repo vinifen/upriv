@@ -6,7 +6,7 @@ import { useTranslation } from "@/i18n";
 import { APP_VERSION, getAppVersion, getSessionAppVersion } from "@/lib";
 import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { buildSystemInfoSections, type VaultGroup, type VaultListItem } from "@upriv/shared";
-import { useSystemInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useOsNames, useSystemInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { InfoFieldList } from "./InfoFieldList";
 
 interface SystemInfoModalProps {
@@ -40,6 +40,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     settings,
     vaultRootService,
     deviceService,
+    osNames: useOsNames(),
     getVersion,
     showHiddenVaults,
   });

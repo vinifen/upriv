@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { deviceName, unreachablePlainRecord, type VaultListItem } from "@upriv/shared";
+import { useOsNames } from "@upriv/shared/react";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 
@@ -18,10 +19,11 @@ interface VaultPlainRecordLineProps {
  */
 export function VaultPlainRecordLine({ vault, onRetry, onForget }: VaultPlainRecordLineProps) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const [asking, setAsking] = useState(false);
   const record = unreachablePlainRecord(vault.plainRecords ?? []);
   if (!record) return null;
-  const device = deviceName(record.device.id, record.device.system, t);
+  const device = deviceName(record.device.id, record.device.system, osNames, t);
   const message =
     record.state === "elsewhere"
       ? t("plain.record.elsewhere", { device, path: record.path })

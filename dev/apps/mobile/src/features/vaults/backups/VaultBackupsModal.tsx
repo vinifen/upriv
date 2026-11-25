@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
   BACKUP_NAME_MAX_CHARS,
+  BACKUP_SAVE_PROGRESS_COPY,
   backupDeleteConfirmPhrase,
   backupExportFilename,
   backupExportRowKey,
@@ -30,13 +31,12 @@ import {
   Button,
   Checkbox,
   DropdownPanel,
-  ElapsedTime,
   IconButton,
+  JobProgressBar,
   JobStopButton,
   MenuActionItem,
   Modal,
   ModalFooterActions,
-  TextWidthProbe,
   Toast,
 } from "@/components/ui";
 import { SettingsAccordionSection, ThemedInput } from "@/components/settings";
@@ -44,11 +44,13 @@ import { Icon } from "@/components/icons";
 import { useTheme } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
 import {
+  useOsNames,
   useBackupExportStep,
-  useRowButtonStack,
   useToast,
   type BackupExportJob,
+  type PasswordChangeBackupStep,
   type VaultBackupJob,
+  type VaultCloseBackupWork,
 } from "@upriv/shared/react";
 import { useVaultBackups } from "@upriv/shared/react";
 import { BackupExportFolderStep, BackupExportProgress } from "./BackupExportPanel";
@@ -60,10 +62,18 @@ interface VaultBackupsModalProps {
   canSaveNow: boolean;
   /** This vault's list-owned Back up now in flight. Survives closing the modal. */
   saveJob: VaultBackupJob | null;
+  /** This vault's close writing its backup, and when its Stop was asked. */
+  closeBackup: (VaultCloseBackupWork & { stoppingSince: number | null }) | null;
   onSaveNow: () => void;
   /** Ask the running Back up now to stop; core removes its unfinished zip. */
   onStopSave: () => void;
-  /** Bumped when that job finishes so the open list reloads. */
+  /** Tell that close to finish the Close now way: the zip stops, the close ends. */
+  onStopCloseBackup: () => void;
+  /** This vault's password change writing its Back up first zip. */
+  changeBackup: PasswordChangeBackupStep | null;
+  /** Stop only that zip: the password change goes on without it. */
+  onStopChangeBackup: () => void;
+  /** Bumped when Back up now, a close's backup, or Back up first ends, so the open list reloads. */
   listRefreshToken: number;
   onClose: () => void;
   onCreateVaultFromBackup?: (backup: VaultBackupEntry) => void;
@@ -84,8 +94,12 @@ export function VaultBackupsModal({
   open,
   canSaveNow,
   saveJob,
+  closeBackup,
   onSaveNow,
   onStopSave,
+  onStopCloseBackup,
+  changeBackup,
+  onStopChangeBackup,
   listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
@@ -269,6 +283,26 @@ export function VaultBackupsModal({
     );
   };
 
+  // The backup this vault is writing, Back up now's, a close's, or a password
+  // change's Back up first, with its Stop where Back up now was.
+  const running = saveJob
+    ? { ...saveJob, label: t("modal.backup.backup_now"), onStop: onStopSave, hint: null }
+    : closeBackup
+      ? {
+          ...closeBackup,
+          label: t("modal.backup.close_backup"),
+          onStop: onStopCloseBackup,
+          hint: t("modal.backup.close_backup_hint"),
+        }
+      : changeBackup
+        ? {
+            ...changeBackup,
+            label: t("modal.backup.change_backup"),
+            onStop: onStopChangeBackup,
+            hint: t("modal.backup.change_backup_hint"),
+          }
+        : null;
+
   const stepRowKey = exportStep.keys ? backupExportRowKey(exportStep.keys) : null;
   const runningRowKey = shownExport ? backupExportRowKey(shownExport.keys) : null;
   const rowExportPanel = (key: string) =>
@@ -332,39 +366,43 @@ export function VaultBackupsModal({
         </Text>
       ) : (
         <View style={styles.list}>
-          <View style={styles.saveRow}>
-            <View style={styles.saveStatus}>
-              {saveJob ? (
-                <View style={styles.saveRunning}>
-                  <Text style={typography.caption}>
-                    {saveJob.startedAt === null
-                      ? t("vault.status.queued")
-                      : t("modal.backup.backup_now_running")}
-                  </Text>
-                  {saveJob.stoppingSince === null ? (
-                    <ElapsedTime startedAt={saveJob.startedAt} layout="inline" />
-                  ) : null}
-                </View>
-              ) : canSaveNow ? null : (
-                <Text style={typography.caption}>{t("modal.backup.backup_now_blocked")}</Text>
+          <View style={styles.saveRunning}>
+            <View style={styles.saveRow}>
+              <View style={styles.saveStatus}>
+                {running ? (
+                  // Stop counts its own wait; the bar shows the zip until then.
+                  running.stoppingSince === null ? (
+                    <View style={styles.saveRunning}>
+                      <JobProgressBar
+                        progress={running.progress}
+                        startedAt={running.startedAt}
+                        label={running.label}
+                        copy={BACKUP_SAVE_PROGRESS_COPY}
+                      />
+                    </View>
+                  ) : null
+                ) : canSaveNow ? null : (
+                  <Text style={typography.caption}>{t("modal.backup.backup_now_blocked")}</Text>
+                )}
+              </View>
+              {running ? (
+                <JobStopButton
+                  size="sm"
+                  stoppingSince={running.stoppingSince}
+                  stoppable={running.progress?.stoppable ?? true}
+                  onStop={running.onStop}
+                />
+              ) : (
+                <Button
+                  label={t("modal.backup.backup_now")}
+                  variant="secondary"
+                  size="sm"
+                  disabled={!canSaveNow || isBusy || deleteTargets !== null}
+                  onPress={onSaveNow}
+                />
               )}
             </View>
-            {saveJob ? (
-              <JobStopButton
-                size="sm"
-                stoppingSince={saveJob.stoppingSince}
-                stoppable={saveJob.progress?.stoppable ?? true}
-                onStop={onStopSave}
-              />
-            ) : (
-              <Button
-                label={t("modal.backup.backup_now")}
-                variant="secondary"
-                size="sm"
-                disabled={!canSaveNow || isBusy || deleteTargets !== null}
-                onPress={onSaveNow}
-              />
-            )}
+            {running?.hint ? <Text style={typography.caption}>{running.hint}</Text> : null}
           </View>
 
           {sections.length === 0 ? (
@@ -512,6 +550,7 @@ function BackupSection({
   onForget,
 }: BackupSectionProps) {
   const { t } = useTranslation();
+  const osNames = useOsNames();
   const { colors, typography } = useTheme();
   const title = t(SECTION_TITLE_KEYS[section.kind]);
   const reachable = section.status === "ok";
@@ -551,7 +590,7 @@ function BackupSection({
       {section.device ? (
         <Text style={typography.caption}>
           {t("modal.backup.folder.written_by", {
-            device: deviceName(section.device.id, section.device.system, t),
+            device: deviceName(section.device.id, section.device.system, osNames, t),
           })}
         </Text>
       ) : null}
@@ -723,10 +762,11 @@ interface BackupRowProps {
 }
 
 /**
- * One backup (desktop `BackupRow` parity): Save on the row, its other
- * actions in one ⋯ menu (Create vault, Rename, Export, Open folder, Delete).
- * Open folder opens the folder the zip is in: the Files app would open the
- * zip itself in a viewer.
+ * One backup on one line, its name truncated (desktop `BackupRow` parity):
+ * its actions in one ⋯ menu (Create vault, Rename, Export, Open folder,
+ * Delete), then Save at the end of a Standard backup's row. Open folder
+ * opens the folder the zip is in: the Files app would open the zip itself in
+ * a viewer.
  */
 function BackupRow({
   entry,
@@ -749,7 +789,6 @@ function BackupRow({
 }: BackupRowProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const { stacked, measure } = useRowButtonStack();
   const reveal = useRevealFolder();
   const title = entry.name || entry.fileName;
   const folder = folderReachable
@@ -771,13 +810,8 @@ function BackupRow({
       ]}
     >
       <View
-        style={[
-          styles.rowMain,
-          stacked ? styles.rowMainStacked : null,
-          { opacity: selectionDisabled ? 0.6 : 1 },
-        ]}
+        style={[styles.rowMain, { opacity: selectionDisabled ? 0.6 : 1 }]}
         pointerEvents={selectionDisabled ? "none" : "auto"}
-        onLayout={(event) => measure("rowWidth", event.nativeEvent.layout.width)}
       >
         <View style={styles.rowHead}>
           {onToggleSelected ? (
@@ -795,14 +829,8 @@ function BackupRow({
             style={styles.rowCopy}
             onPress={onToggleSelected}
             disabled={selectionDisabled || !onToggleSelected}
-            onLayout={(event) => measure("slotWidth", event.nativeEvent.layout.width)}
           >
             <View style={styles.rowTitleRow}>
-              <TextWidthProbe
-                text={title}
-                style={[titleStyle, styles.rowTitle]}
-                onWidth={(width) => measure("textWidth", width)}
-              />
               <Text
                 style={[titleStyle, styles.rowTitle, { color: colors.onSurface }]}
                 numberOfLines={1}
@@ -811,10 +839,7 @@ function BackupRow({
                 {title}
               </Text>
               {entry.saved ? (
-                <View
-                  style={[styles.badge, { backgroundColor: colorAlpha(colors.accent, 0.15) }]}
-                  onLayout={(event) => measure("besideWidth", event.nativeEvent.layout.width)}
-                >
+                <View style={[styles.badge, { backgroundColor: colorAlpha(colors.accent, 0.15) }]}>
                   <Text style={[styles.badgeText, { color: colors.accent }]}>
                     {t("modal.backup.saved_badge")}
                   </Text>
@@ -827,20 +852,13 @@ function BackupRow({
               <Text style={typography.mono}>{formatBytes(entry.sizeBytes)}</Text>
             </Text>
             {entry.lowerUnlockRam ? (
-              <Text style={typography.caption}>{t("modal.backup.lower_unlock_ram")}</Text>
+              <Text style={[typography.caption, { color: colors.vaultStatusRecovery }]}>
+                {t("modal.backup.lower_unlock_ram")}
+              </Text>
             ) : null}
           </Pressable>
         </View>
         <View style={styles.rowActions}>
-          {onPromoteToSave ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={selectionDisabled || exporting}
-              label={t("modal.backup.promote_to_save")}
-              onPress={onPromoteToSave}
-            />
-          ) : null}
           <DropdownPanel
             label={title}
             heading={title}
@@ -891,6 +909,15 @@ function BackupRow({
               onPress={onDelete}
             />
           </DropdownPanel>
+          {onPromoteToSave ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selectionDisabled || exporting}
+              label={t("modal.backup.promote_to_save")}
+              onPress={onPromoteToSave}
+            />
+          ) : null}
         </View>
       </View>
       {reveal.toast}
@@ -963,7 +990,7 @@ const styles = StyleSheet.create({
   hint: { marginBottom: spacing.md },
   saveRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   saveStatus: { flex: 1, minWidth: 0 },
-  saveRunning: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
+  saveRunning: { gap: spacing.xs },
   list: { gap: spacing.md },
   empty: { textAlign: "center", paddingVertical: 40, fontSize: 14 },
   footer: { gap: spacing.sm },
@@ -1016,7 +1043,6 @@ const styles = StyleSheet.create({
     paddingLeft: spacing.lg,
     paddingRight: spacing.sm,
   },
-  rowMainStacked: { flexDirection: "column", alignItems: "stretch", gap: spacing.xs },
   rowHead: {
     flexGrow: 1,
     flexShrink: 1,

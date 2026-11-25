@@ -1,15 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   resolveVaultDisplayStatus,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
-  vaultRootLogsDisplayPath,
-  vaultRootUprivOpenPath,
 } from "../domain";
-import type { AppSettingsConfig, SystemInfoSnapshot, VaultGroup, VaultListItem } from "../domain";
+import type {
+  AppSettingsConfig,
+  DataFolderListView,
+  DeviceInfo,
+  OsNames,
+  SystemInfoSnapshot,
+  VaultGroup,
+  VaultListItem,
+  VaultRootResolveResult,
+} from "../domain";
 import type { DeviceService, VaultRootService } from "../services";
 
-export type SystemInfoAppVersion = SystemInfoSnapshot["app"];
+export type SystemInfoAppVersion = NonNullable<SystemInfoSnapshot["app"]>;
 
 export interface UseSystemInfoDataOptions {
   open: boolean;
@@ -18,11 +25,52 @@ export interface UseSystemInfoDataOptions {
   settings: AppSettingsConfig;
   vaultRootService: VaultRootService;
   deviceService: DeviceService;
+  /** The OS names devices are named by (`useOsNames`). */
+  osNames: OsNames;
   getVersion: () => Promise<SystemInfoAppVersion> | SystemInfoAppVersion;
   /** Effective list show-hidden (persisted always-show or session). */
   showHiddenVaults?: boolean;
 }
 
+/** What core answers, each part on its own; `null` until it lands. */
+interface ReadParts {
+  app: SystemInfoAppVersion | null;
+  device: DeviceInfo | null;
+  root: VaultRootResolveResult | null;
+  dataFolders: DataFolderListView | null;
+  /** `"measuring"` until it lands, `null` when the measure failed. */
+  dataFolderBytes: number | null | "measuring";
+}
+
+const NOTHING_READ: ReadParts = {
+  app: null,
+  device: null,
+  root: null,
+  dataFolders: null,
+  dataFolderBytes: "measuring",
+};
+
+/** The walk of the data folder each service runs now, while it runs. */
+const measuring = new WeakMap<VaultRootService, Promise<number>>();
+
+/**
+ * The size of the data folder in use. A walk of every file is slow on a slow
+ * drive, so a window opened again while one runs joins it instead of starting
+ * another beside it on core's folder lane.
+ */
+function measureDataFolder(service: VaultRootService): Promise<number> {
+  const running = measuring.get(service);
+  if (running) return running;
+  const walk = service.size().finally(() => measuring.delete(service));
+  measuring.set(service, walk);
+  return walk;
+}
+
+/**
+ * System Info: the settings and the list show at once, and each part read
+ * from core fills its rows as it lands, so a slow data folder never holds
+ * the version or the device back.
+ */
 export function useSystemInfoData({
   open,
   vaults,
@@ -30,12 +78,11 @@ export function useSystemInfoData({
   settings,
   vaultRootService,
   deviceService,
+  osNames,
   getVersion,
   showHiddenVaults = false,
 }: UseSystemInfoDataOptions) {
-  const [snapshot, setSnapshot] = useState<SystemInfoSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  const [read, setRead] = useState<ReadParts>(NOTHING_READ);
   const [loadFailure, setLoadFailure] = useState<unknown>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
 
@@ -48,133 +95,86 @@ export function useSystemInfoData({
     (vault) => resolveVaultDisplayStatus(vault) === "open",
   ).length;
   const groupsTotal = groups.filter((group) => !group.hidden).length;
-  const ui = settings.ui;
-  const logging = settings.logging;
-  const unlockedFolders = settings.unlocked_folders;
-  const backups = settings.backups;
-  const listsKey = JSON.stringify([unlockedFolders, backups]);
   const lastOpenedRaw = settings.app.last_opened_vault ?? "";
   const lastOpenedIsHidden = vaults.some(
     (vault) => vault.id === lastOpenedRaw && Boolean(vault.hidden),
   );
   const lastOpenedVault = lastOpenedIsHidden && !showHiddenVaults ? "" : lastOpenedRaw;
 
-  // StrictMode remounts in development — `cancelled` drops the stale load.
-  // Key on Info fields, not `vaults` / `groups` / `settings` object identity.
+  // StrictMode remounts in development — `cancelled` drops the stale reads.
   useEffect(() => {
     if (!open) {
-      setSnapshot(null);
-      setLoadError(false);
+      setRead(NOTHING_READ);
       setLoadFailure(null);
-      setLoading(false);
       return;
     }
-
     let cancelled = false;
-    setLoading(true);
-    setLoadError(false);
     setLoadFailure(null);
-
-    void (async () => {
-      try {
-        const [versionInfo, device, root, dataFolders] = await Promise.all([
-          Promise.resolve(getVersion()),
-          deviceService.info(),
-          vaultRootService.resolve(),
-          vaultRootService.list(),
-        ]);
-        if (cancelled) return;
-        if (root.status !== "found") {
-          throw vaultRootGoneRpcError();
-        }
-
-        // The app home holds the data folder list; on a computer it is Default's folder.
-        const appHome = dataFolders.defaultFolder ?? "—";
-        setSnapshot({
-          app: versionInfo,
-          device,
-          root,
-          dataFolders,
-          inventory: {
-            vaultsTotal,
-            vaultsOpen,
-            groupsTotal,
-          },
-          ui,
-          logging,
-          unlockedFolders,
-          backups,
-          lastOpenedVault,
-          paths: {
-            appHome,
-            logsDir: vaultRootLogsDisplayPath(root.rootPath),
-            logsOpenPath: vaultRootUprivOpenPath(root.rootPath, "logs"),
-          },
-        });
-      } catch (error) {
-        if (cancelled) return;
-        if (shouldBumpVaultRootEpoch(error)) {
-          setSnapshot(null);
-        }
-        setLoadFailure(error);
-        setLoadError(true);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
+    const land = (patch: Partial<ReadParts>) => {
+      if (!cancelled) setRead((current) => ({ ...current, ...patch }));
+    };
+    const fail = (error: unknown) => {
+      if (!cancelled) setLoadFailure(error);
+    };
+    void Promise.resolve()
+      .then(getVersion)
+      .then((app) => land({ app }), fail);
+    deviceService.info().then((device) => land({ device }), fail);
+    vaultRootService.resolve().then((root) => {
+      land({ root });
+      if (root.status !== "found") fail(vaultRootGoneRpcError());
+    }, fail);
+    vaultRootService.list().then((dataFolders) => land({ dataFolders }), fail);
+    // Its row alone shows the failure, a dash: a data folder gone is the
+    // resolve's to report.
+    measureDataFolder(vaultRootService).then(
+      (dataFolderBytes) => land({ dataFolderBytes }),
+      () => land({ dataFolderBytes: null }),
+    );
     return () => {
       cancelled = true;
     };
-    // Snapshot stores `ui`/`logging` values. Object identity must not retrigger resolve.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- scalar Info fields only
-  }, [
-    open,
-    vaultsTotal,
-    vaultsOpen,
-    groupsTotal,
-    lastOpenedVault,
-    ui.locale,
-    ui.theme,
-    ui.vault_list_sort,
-    ui.vault_list_sort_direction,
-    ui.vault_list_view,
-    ui.vault_list_search,
-    ui.vault_list_show_create_button,
-    ui.vault_list_show_search_button,
-    ui.vault_list_show_sort_button,
-    ui.vault_list_show_view_button,
-    ui.vault_list_show_header_more_button,
-    ui.vault_list_show_vault_more_button,
-    ui.vault_list_show_vault_settings_button,
-    ui.vault_list_show_group_settings_button,
-    ui.vault_list_show_drag,
-    ui.vault_list_allow_drag_into_group,
-    ui.file_manager_dock_expanded,
-    ui.lifecycle_close_modal_on_submit,
-    ui.lifecycle_open_file_manager_on_open,
-    ui.lifecycle_keep_open_on_wake,
-    ui.lifecycle_confirm_close_now,
-    ui.lifecycle_confirm_stop,
-    ui.lifecycle_confirm_lock,
-    ui.lifecycle_row_runs_button,
-    ui.always_show_hidden_vaults,
-    logging.enabled,
-    logging.level,
-    logging.entries_per_file,
-    logging.keep_last_entries,
-    listsKey,
-    vaultRootService,
-    deviceService,
-    getVersion,
-    loadAttempt,
-  ]);
+  }, [open, vaultRootService, deviceService, getVersion, loadAttempt]);
+
+  // A data folder gone shows nothing of it: the window reports and closes.
+  const gone = loadFailure !== null && shouldBumpVaultRootEpoch(loadFailure);
+  const snapshot = useMemo<SystemInfoSnapshot | null>(
+    () =>
+      open && !gone
+        ? {
+            ...read,
+            osNames,
+            inventory: { vaultsTotal, vaultsOpen, groupsTotal },
+            ui: settings.ui,
+            logging: settings.logging,
+            unlockedFolders: settings.unlocked_folders,
+            backups: settings.backups,
+            lastOpenedVault,
+          }
+        : null,
+    [
+      open,
+      gone,
+      read,
+      osNames,
+      vaultsTotal,
+      vaultsOpen,
+      groupsTotal,
+      settings.ui,
+      settings.logging,
+      settings.unlocked_folders,
+      settings.backups,
+      lastOpenedVault,
+    ],
+  );
 
   return {
     snapshot,
-    loading,
-    loadError,
+    loadError: loadFailure !== null,
     loadFailure,
-    retryLoad: () => setLoadAttempt((n) => n + 1),
+    retryLoad: () => {
+      setRead(NOTHING_READ);
+      setLoadAttempt((n) => n + 1);
+    },
   };
 }

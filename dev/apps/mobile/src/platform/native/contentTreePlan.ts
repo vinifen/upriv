@@ -1,4 +1,13 @@
-import { isRootWelcomeReadmePath, type CreateVaultInput, type VaultListItem } from "@upriv/shared";
+import {
+  importBlockedError,
+  importSourceReason,
+  isJobCancelled,
+  isRootWelcomeReadmePath,
+  type CreateVaultInput,
+  type CreatedVault,
+  type ImportEnding,
+  type VaultListItem,
+} from "@upriv/shared";
 
 export interface ContentImportFile {
   logicalPath: string;
@@ -8,9 +17,16 @@ export interface ContentImportFile {
 /** Folder or single file held in memory until the creating job streams it. */
 export interface ContentImportTree {
   directoryUri: string;
+  /** What was picked: a folder, whose children reach the vault root, or one file. */
+  picked: "folder" | "file";
   folderName: string;
   directories: string[];
   files: ContentImportFile[];
+}
+
+/** A document as the person finds it: from the picked item, its name first. */
+function pickedPath(tree: ContentImportTree, file: ContentImportFile): string {
+  return tree.picked === "file" ? file.logicalPath : `${tree.folderName}/${file.logicalPath}`;
 }
 
 /**
@@ -23,7 +39,9 @@ export interface ContentTreeImportIo {
   openSession(id: string, password: string): Promise<void>;
   addDirectory(id: string, logicalPath: string): Promise<void>;
   addFile(id: string, logicalPath: string, uri: string, job: string): Promise<void>;
-  close(id: string): Promise<void>;
+  /** Seal and close the filled vault: whole, or with what got in before a stop. */
+  close(id: string, stopped: boolean): Promise<void>;
+  /** Delete the new vault. */
   abort(id: string): Promise<void>;
 }
 
@@ -74,7 +92,7 @@ export function contentTreeFromFolderPick(picked: {
     if (!skippedImportLogical(logical)) files.push({ logicalPath: logical, uri: file.uri });
   }
   assertImportTreeNames(directories, files);
-  return { directoryUri, folderName, directories, files };
+  return { directoryUri, picked: "folder", folderName, directories, files };
 }
 
 /** One document. `path` is the wizard key; `uri` is what Android can open. */
@@ -89,7 +107,7 @@ export function contentTreeFromPickedFile(picked: {
   if (!directoryUri || !uri || !logicalPath) throw new Error("import file is unavailable");
   const files = [{ logicalPath, uri }];
   assertImportTreeNames([], files);
-  return { directoryUri, folderName: logicalPath, directories: [], files };
+  return { directoryUri, picked: "file", folderName: logicalPath, directories: [], files };
 }
 
 const RESERVED_SEED_PATH = "upriv-seed.txt";
@@ -207,17 +225,23 @@ export function createContentTreeRegistry() {
 
 /**
  * Create the vault, stream the folder in, then close it, as the job `job`.
- * A failure or a stop deletes the new vault instead of leaving it open or
- * half-filled. The welcome note is sealed at create, so it is dropped up front
- * when the picked tree already has a root `README.md` file or folder (same
- * rule as core).
+ * The person's stop keeps the files that got in: the vault is closed with
+ * them (`stopped`), or, when none did, deleted. A failure deletes the new
+ * vault instead of leaving it open or half-filled. A document that cannot be
+ * read is left out and counted when the person chose that
+ * (`importPackage.leaveOut`), unless it is the picked file itself. Otherwise
+ * it ends the import as `import_blocked`, naming it; the documents after it
+ * are not opened to check, since opening a cloud document may download it.
+ * The welcome note is sealed at create, so it is dropped up front when the
+ * picked tree already has a root `README.md` file or folder (same rule as
+ * core).
  */
 export async function importContentTree(
   input: CreateVaultInput,
   tree: ContentImportTree,
   io: ContentTreeImportIo,
   job: string,
-): Promise<VaultListItem> {
+): Promise<CreatedVault> {
   const hasOwnReadme =
     tree.files.some((file) => isRootWelcomeReadmePath(file.logicalPath)) ||
     tree.directories.some((dir) => isRootWelcomeReadmePath(dir));
@@ -230,18 +254,53 @@ export async function importContentTree(
     },
     job,
   );
+  let ending: ImportEnding;
   try {
     await io.openSession(created.id, input.password);
     for (const directory of tree.directories) {
       await io.addDirectory(created.id, directory);
     }
-    for (const file of tree.files) {
-      await io.addFile(created.id, file.logicalPath, file.uri, job);
-    }
-    await io.close(created.id);
-    return created;
+    const leaveOut = input.importPackage?.leaveOut === true && tree.picked === "folder";
+    ending = await streamFiles(tree, created.id, io, job, leaveOut);
+    if (!ending.stopped) await io.close(created.id, false);
   } catch (error) {
     await io.abort(created.id);
     throw error;
   }
+  // Out of reach of the delete above: core seals what got in, or leaves the
+  // vault in recovery when that fails, and never deletes it.
+  if (ending.stopped) await io.close(created.id, true);
+  return { vault: created, ...ending };
+}
+
+/**
+ * Stream every file of `tree` into the open vault `id`. A stop that comes once
+ * a file is in ends it `stopped`; one that comes before throws, as a failure.
+ */
+async function streamFiles(
+  tree: ContentImportTree,
+  id: string,
+  io: ContentTreeImportIo,
+  job: string,
+  leaveOut: boolean,
+): Promise<ImportEnding> {
+  let leftOut = 0;
+  let filesIn = 0;
+  for (const file of tree.files) {
+    try {
+      await io.addFile(id, file.logicalPath, file.uri, job);
+      filesIn += 1;
+    } catch (error) {
+      if (isJobCancelled(error) && filesIn > 0) return { leftOut, stopped: true };
+      const reason = importSourceReason(error);
+      if (reason && leaveOut) {
+        leftOut += 1;
+        continue;
+      }
+      throw reason
+        ? importBlockedError([{ path: pickedPath(tree, file), reason }], tree.picked === "file")
+        : error;
+    }
+  }
+  return { leftOut, stopped: false };
 }

@@ -1,7 +1,5 @@
 import { View } from "react-native";
 import {
-  KDF_UNLOCK_OPTION_META,
-  KDF_UNLOCK_PRESETS,
   changeKdfFormIsDowngrade,
   requireVaultConfigEditLockedI18nKey,
   type ChangeKdfFieldsState,
@@ -9,9 +7,14 @@ import {
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { spacing } from "@/theme/tokens";
-import { PolicyRadioOption } from "./PolicyRadioOption";
-import { FieldHint, FieldLabel, PasswordInput, RadioGroup, Warning } from "./settingsFields";
+import { KdfPresetChoice } from "./KdfPresetChoice";
+import { FieldHint, FieldLabel, PasswordInput, Warning } from "./settingsFields";
 
+/**
+ * The Unlock RAM screen, as every change screen lays out: what the change
+ * does, the vault's password, then its choice. The footer's action takes
+ * both.
+ */
 export function VaultChangeKdfFields({
   currentPreset,
   blocked,
@@ -19,7 +22,6 @@ export function VaultChangeKdfFields({
   onChange,
   passwordFieldError,
   error,
-  busy = false,
 }: {
   /** Current unlock cost from `store/header/vault.header`. */
   currentPreset: KdfUnlockPreset;
@@ -29,12 +31,10 @@ export function VaultChangeKdfFields({
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
   passwordFieldError?: string | null;
   error?: string | null;
-  busy?: boolean;
 }) {
   const { t } = useTranslation();
   const presetChanged = fields.nextPreset !== currentPreset;
   const downgrade = changeKdfFormIsDowngrade(currentPreset, fields.nextPreset);
-  const locked = blocked || busy;
 
   return (
     <View style={{ gap: spacing.md }}>
@@ -43,35 +43,22 @@ export function VaultChangeKdfFields({
       ) : null}
       <FieldHint>{t("modal.settings.change_kdf_intro")}</FieldHint>
       <FieldHint>{t("vault.change_kdf.backups_note")}</FieldHint>
-      <FieldLabel disabled={locked}>{t("vault.change_kdf.current")}</FieldLabel>
+      <FieldLabel disabled={blocked}>{t("vault.change_kdf.current")}</FieldLabel>
       <PasswordInput
         value={fields.password}
-        disabled={locked}
+        disabled={blocked}
         invalid={Boolean(passwordFieldError)}
         onChangeText={(password) => onChange({ password })}
         autoCapitalize="none"
         autoCorrect={false}
       />
       {passwordFieldError ? <Warning>{passwordFieldError}</Warning> : null}
-      <FieldLabel disabled={locked}>{t("modal.settings.field.kdf.unlock_preset")}</FieldLabel>
-      <RadioGroup>
-        {KDF_UNLOCK_PRESETS.map((preset) => {
-          const meta = KDF_UNLOCK_OPTION_META[preset];
-          return (
-            <PolicyRadioOption
-              key={preset}
-              value={preset}
-              checked={fields.nextPreset === preset}
-              disabled={locked}
-              title={t(meta.titleKey)}
-              description={t(meta.descKey)}
-              badge={meta.badge}
-              tone={meta.tone}
-              onSelect={() => onChange({ nextPreset: preset })}
-            />
-          );
-        })}
-      </RadioGroup>
+      <FieldLabel disabled={blocked}>{t("modal.settings.field.kdf.unlock_preset")}</FieldLabel>
+      <KdfPresetChoice
+        value={fields.nextPreset}
+        disabled={blocked}
+        onChange={(nextPreset) => onChange({ nextPreset })}
+      />
       {downgrade ? <FieldHint>{t("vault.change_kdf.downgrade_warn")}</FieldHint> : null}
       {!presetChanged && fields.password.length > 0 ? (
         <Warning>{t("vault.change_kdf.same_as_current")}</Warning>

@@ -16,6 +16,7 @@ export const desktopAppSettingsService: AppSettingsService = {
       settings: normalizeAppSettings(result.settings),
       onDisk: result.onDisk,
       rootPath: result.rootPath,
+      osNames: result.osNames,
     };
   },
 

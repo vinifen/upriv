@@ -212,9 +212,9 @@ describe("listFilesFromOsDropSnapshot", () => {
   it("keeps large videos as a stream handle instead of loading them into a File", async () => {
     vi.stubGlobal("window", {
       upriv: {
-        statDroppedPaths: async () => [
-          { relativePath: "demo.mkv", osPath: "/tmp/demo.mkv", size: 80 * 1024 * 1024 },
-        ],
+        statDroppedPaths: async () => ({
+          files: [{ relativePath: "demo.mkv", osPath: "/tmp/demo.mkv", size: 80 * 1024 * 1024 }],
+        }),
         readDroppedPathRange: async () => {
           throw new Error("should stream later, not now");
         },
@@ -239,9 +239,9 @@ describe("listFilesFromOsDropSnapshot", () => {
   it("streams oversized text the same way as oversized video", async () => {
     vi.stubGlobal("window", {
       upriv: {
-        statDroppedPaths: async () => [
-          { relativePath: "huge.txt", osPath: "/tmp/huge.txt", size: 80 * 1024 * 1024 },
-        ],
+        statDroppedPaths: async () => ({
+          files: [{ relativePath: "huge.txt", osPath: "/tmp/huge.txt", size: 80 * 1024 * 1024 }],
+        }),
         readDroppedPathRange: async () => {
           throw new Error("should stream later, not now");
         },
@@ -264,9 +264,9 @@ describe("listFilesFromOsDropSnapshot", () => {
   it("keeps small uri-list files as OS path handles instead of loading bytes", async () => {
     vi.stubGlobal("window", {
       upriv: {
-        statDroppedPaths: async () => [
-          { relativePath: "hello.txt", osPath: "/tmp/hello.txt", size: 2 },
-        ],
+        statDroppedPaths: async () => ({
+          files: [{ relativePath: "hello.txt", osPath: "/tmp/hello.txt", size: 2 }],
+        }),
         readDroppedPathRange: async () => {
           throw new Error("should stream in the daemon, not in the renderer");
         },
@@ -289,10 +289,12 @@ describe("listFilesFromOsDropSnapshot", () => {
     vi.stubGlobal("window", {
       upriv: {
         getPathForFile: () => "/tmp/photos",
-        statDroppedPaths: async () => [
-          { relativePath: "photos/a.txt", osPath: "/tmp/photos/a.txt", size: 4 },
-          { relativePath: "photos/b.txt", osPath: "/tmp/photos/b.txt", size: 5 },
-        ],
+        statDroppedPaths: async () => ({
+          files: [
+            { relativePath: "photos/a.txt", osPath: "/tmp/photos/a.txt", size: 4 },
+            { relativePath: "photos/b.txt", osPath: "/tmp/photos/b.txt", size: 5 },
+          ],
+        }),
       },
     });
     const folder = new File(["not-a-directory"], "photos");
@@ -309,9 +311,9 @@ describe("listFilesFromOsDropSnapshot", () => {
     vi.stubGlobal("window", {
       upriv: {
         retrievePortalDrop: async () => ["/tmp/portal-note.txt"],
-        statDroppedPaths: async () => [
-          { relativePath: "portal-note.txt", osPath: "/tmp/portal-note.txt", size: 3 },
-        ],
+        statDroppedPaths: async () => ({
+          files: [{ relativePath: "portal-note.txt", osPath: "/tmp/portal-note.txt", size: 3 }],
+        }),
       },
     });
     const transfer = {
@@ -346,7 +348,9 @@ describe("listFilesFromOsDropSnapshot", () => {
           file.name === "photos" ? "/tmp/photos" : "/tmp/photos/a.txt",
         statDroppedPaths: async (paths: string[]) => {
           seen.push(paths);
-          return [{ relativePath: "photos/a.txt", osPath: "/tmp/photos/a.txt", size: 4 }];
+          return {
+            files: [{ relativePath: "photos/a.txt", osPath: "/tmp/photos/a.txt", size: 4 }],
+          };
         },
       },
     });
@@ -368,7 +372,9 @@ describe("listFilesFromOsDropSnapshot", () => {
         getPathForFile: (file: File) => (file.name === "Photos" ? "C:\\Photos" : "c:/photos/a.txt"),
         statDroppedPaths: async (paths: string[]) => {
           seen.push(paths);
-          return [{ relativePath: "Photos/a.txt", osPath: "C:\\Photos\\a.txt", size: 4 }];
+          return {
+            files: [{ relativePath: "Photos/a.txt", osPath: "C:\\Photos\\a.txt", size: 4 }],
+          };
         },
       },
     });
@@ -387,7 +393,7 @@ describe("listFilesFromOsDropSnapshot", () => {
     vi.stubGlobal("window", {
       upriv: {
         getPathForFile: () => "/tmp/empty-dir",
-        statDroppedPaths: async () => [],
+        statDroppedPaths: async () => ({ files: [] }),
       },
     });
     const folder = new File(["dir"], "empty-dir");
@@ -408,7 +414,7 @@ describe("listFilesFromOsDropSnapshot", () => {
           file.name === "Photos" ? "/tmp/Photos" : "/tmp/photos/a.txt",
         statDroppedPaths: async (paths: string[]) => {
           seen.push(paths);
-          return [];
+          return { files: [] };
         },
       },
     });
@@ -447,7 +453,10 @@ describe("listFilesFromOsDropSnapshot", () => {
     vi.stubGlobal("window", {
       upriv: {
         getPathForFile: () => "/tmp/secret.txt",
-        statDroppedPaths: async () => ({ files: [], unreadable: ["/tmp/secret.txt"] }),
+        statDroppedPaths: async () => ({
+          files: [],
+          unreadable: [{ osPath: "/tmp/secret.txt", reason: "permission" }],
+        }),
       },
     });
     const file = new File(["hello"], "secret.txt");
@@ -456,31 +465,70 @@ describe("listFilesFromOsDropSnapshot", () => {
       files: [file],
       getData: () => "",
     } as unknown as DataTransfer;
-    const files = await droppedFiles(dragEvent(transfer));
-    expect(files).toHaveLength(1);
-    expect(files[0]?.osPath).toBeUndefined();
-    expect(files[0]?.file.size).toBe(5);
-    expect(await files[0]?.file.text()).toBe("hello");
+    const listed = await listFilesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    expect(listed.files).toHaveLength(1);
+    expect(listed.files[0]?.osPath).toBeUndefined();
+    expect(listed.files[0]?.file.size).toBe(5);
+    expect(await listed.files[0]?.file.text()).toBe("hello");
+    expect(listed.blocked).toBeNull();
   });
 
-  it("refuses a drop that contains a symlink", async () => {
+  it("names what the drop cannot import, and the rest stays listed", async () => {
     vi.stubGlobal("window", {
       upriv: {
+        getPathForFile: () => undefined,
         statDroppedPaths: async () => ({
-          files: [{ relativePath: "a.txt", osPath: "/tmp/a.txt", size: 1 }],
-          unreadable: [],
+          files: [{ relativePath: "Work/a.txt", osPath: "/tmp/Work/a.txt", size: 1 }],
+          unreadable: [{ osPath: "/tmp/gone.txt", reason: "missing" }],
+          blocked: [
+            { path: "Work/db", reason: "permission" },
+            { path: "Work/agent.sock", reason: "special" },
+          ],
+          blockedCount: 702,
           truncated: false,
-          symlinks: ["/tmp/link"],
         }),
       },
     });
     const transfer = {
       items: [],
       files: [],
-      getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/a.txt" : ""),
+      getData: (type: string) =>
+        type === "text/uri-list" ? "file:///tmp/Work\nfile:///tmp/gone.txt" : "",
     } as unknown as DataTransfer;
-    await expect(
-      listFilesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer))),
-    ).rejects.toMatchObject({ code: "import_source_unreadable" });
+    const listed = await listFilesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    expect(listed.files.map((file) => file.relativePath)).toEqual(["Work/a.txt"]);
+    expect(listed.blocked).toEqual({
+      count: 703,
+      items: [
+        { path: "Work/agent.sock", reason: "special" },
+        { path: "Work/db", reason: "permission" },
+        { path: "gone.txt", reason: "missing" },
+      ],
+      whole: false,
+    });
+  });
+
+  it("knows when nothing of the drop can be imported", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        statDroppedPaths: async () => ({
+          files: [],
+          blocked: [{ path: "link", reason: "link" }],
+          blockedCount: 1,
+        }),
+      },
+    });
+    const transfer = {
+      items: [],
+      files: [],
+      getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/link" : ""),
+    } as unknown as DataTransfer;
+    const listed = await listFilesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    expect(listed.files).toEqual([]);
+    expect(listed.blocked).toEqual({
+      count: 1,
+      items: [{ path: "link", reason: "link" }],
+      whole: true,
+    });
   });
 });

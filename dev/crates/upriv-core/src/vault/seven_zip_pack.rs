@@ -1238,7 +1238,8 @@ mod tests {
             ImportExtras::default(),
             &crate::test_support::test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &imported, PASSWORD).unwrap();
         assert_eq!(fs_read_file(&root, &imported, "/a.bin").unwrap(), same);
         assert_eq!(fs_read_file(&root, &imported, "/b.bin").unwrap(), same);
@@ -1300,7 +1301,8 @@ mod tests {
                 ImportExtras::default(),
                 &crate::test_support::test_job_id(),
             )
-            .unwrap();
+            .unwrap()
+            .id;
             open_vault(&root, &imported, PASSWORD).unwrap();
             assert_eq!(fs_read_file(&root, &imported, "/one.txt").unwrap(), text);
             assert_eq!(
@@ -1359,7 +1361,8 @@ mod tests {
             ImportExtras::default(),
             &test_job_id(),
         )
-        .unwrap();
+        .unwrap()
+        .id;
         open_vault(&root, &imported, PASSWORD).unwrap();
         assert_eq!(
             fs_read_file(&root, &imported, "/docs/hi.txt").unwrap(),

@@ -1,3 +1,4 @@
+import { holdsSomething } from "./edits";
 import { folderPathIssue, sameFolderPath } from "./paths";
 import type {
   DeviceGroup,
@@ -18,12 +19,11 @@ import type {
 export function listChanges<F extends string>(
   before: DeviceGroups<F>,
   after: DeviceGroups<F>,
-  hereId: DeviceId | null,
   policy: FolderListPolicy<F>,
 ): ListChanges<F> {
   const groups: Record<DeviceId, GroupChange<F>> = {};
   for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    const change = groupChange(before[id], after[id], id === hereId, policy);
+    const change = groupChange(before[id], after[id], policy);
     if (change) groups[id] = change;
   }
   return { groups };
@@ -36,16 +36,12 @@ export function isEmptyListChanges<F extends string>(changes: ListChanges<F>): b
 function groupChange<F extends string>(
   before: DeviceGroup<F> | undefined,
   after: DeviceGroup<F> | undefined,
-  here: boolean,
   policy: FolderListPolicy<F>,
 ): GroupChange<F> | null {
-  if (!after) {
-    if (!before) return null;
-    // This device's group goes row by row; once empty, core drops it.
-    return here
-      ? { rows: [], next_number: before.next_number, selected: policy.fallback }
-      : { remove: true };
-  }
+  // Only Remove device takes a group, and only another device's.
+  if (!after) return before ? { remove: true } : null;
+  // A group this draft made and emptied again was never saved.
+  if (!before && !holdsSomething(after, policy)) return null;
   const change: GroupChange<F> = {};
   if (!before || !sameRows(before.rows, after.rows)) change.rows = after.rows;
   if (!before || before.next_number !== after.next_number) change.next_number = after.next_number;

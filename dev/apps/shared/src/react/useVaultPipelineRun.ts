@@ -1,5 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { CLOSING_BACKUP_STEP, isJobCancelled, newJobId, type VaultPipelineKind } from "../domain";
+import {
+  CLOSING_BACKUP_STEP,
+  isJobCancelled,
+  newJobId,
+  type JobProgress,
+  type VaultPipelineKind,
+} from "../domain";
 import type { I18nKey } from "../i18n/catalog";
 import type { JobService } from "../services";
 import { useJobProgress } from "./useJobProgress";
@@ -17,6 +23,10 @@ export interface VaultPipelineRunState {
   job: string;
   /** When the request went out. A close counts from here. */
   sentAt: number;
+  /** When `activeStep` began. */
+  stepStartedAt: number;
+  /** How far the step in flight got, when it says: a close's backup. */
+  stepProgress: JobProgress | null;
   /** When Stop was asked for; `null` until then. */
   stoppingSince: number | null;
   errorKey?: I18nKey;
@@ -30,6 +40,15 @@ export interface VaultPipelineRunWork {
   /** False once the job reached the step it cannot stop; always false for a close. */
   stoppable: boolean;
   stoppingSince: number | null;
+}
+
+/** A close writing its backup, for the Backups window to show beside Back up now's. */
+export interface VaultCloseBackupWork {
+  vaultId: string;
+  /** When the backup step began. */
+  startedAt: number;
+  /** `null` before the zip measured its work. */
+  progress: JobProgress | null;
 }
 
 export type VaultPipelinePresentation = "foreground" | "background";
@@ -53,10 +72,18 @@ interface StartPipelineOptions {
    * `advance`: a toast or the row owns the failure and the next queued run starts.
    */
   failureMode?: VaultPipelineFailureMode;
-  /** `job` is the core job id this run sends; a close has no use for it. */
-  runPipeline: (vaultId: string, onStep: (stepIndex: number) => void, job: string) => Promise<void>;
+  /**
+   * `job` is the core job id this run sends; a close has no use for it.
+   * `onStep` may carry how far the step got (a close's backup).
+   */
+  runPipeline: (
+    vaultId: string,
+    onStep: (stepIndex: number, progress?: JobProgress | null) => void,
+    job: string,
+  ) => Promise<void>;
   onComplete: () => void;
-  onError: (errorKey: I18nKey) => void;
+  /** `error` is what the run threw, for a caller that shows more than its message. */
+  onError: (errorKey: I18nKey, error: unknown) => void;
   /** Stopped before core started it, or core stopped it and left nothing behind. */
   onStopped?: () => void;
 }
@@ -66,6 +93,18 @@ interface PipelineRunEvents {
   jobs: JobService;
   /** Core refused the stop (`job_not_stoppable`): the run goes on. */
   onStopRefused: (error: unknown) => void;
+}
+
+/** True when `next` says what `before` already said: nothing to draw again. */
+function sameProgress(before: JobProgress | null, next: JobProgress | null): boolean {
+  return (
+    before === next ||
+    (before !== null &&
+      next !== null &&
+      before.bytesDone === next.bytesDone &&
+      before.bytesTotal === next.bytesTotal &&
+      before.stoppable === next.stoppable)
+  );
 }
 
 function listStatusKind(kind: VaultPipelineKind): "opening" | "closing" | "creating" {
@@ -115,6 +154,7 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
       const generation = ++generationRef.current;
       const job = newJobId();
       inFlightRef.current = true;
+      const sentAt = Date.now();
 
       syncRun({
         vaultId,
@@ -123,7 +163,9 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
         stepCount,
         foreground,
         job,
-        sentAt: Date.now(),
+        sentAt,
+        stepStartedAt: sentAt,
+        stepProgress: null,
         stoppingSince: null,
       });
 
@@ -138,11 +180,18 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
         try {
           await runPipeline(
             vaultId,
-            (stepIndex) => {
+            (stepIndex, progress = null) => {
               if (generationRef.current !== generation) return;
               const current = runRef.current;
               if (current?.vaultId !== vaultId) return;
-              syncRun({ ...current, activeStep: stepIndex });
+              const sameStep = current.activeStep === stepIndex;
+              if (sameStep && sameProgress(current.stepProgress, progress)) return;
+              syncRun({
+                ...current,
+                activeStep: stepIndex,
+                stepStartedAt: sameStep ? current.stepStartedAt : Date.now(),
+                stepProgress: progress,
+              });
             },
             job,
           );
@@ -164,10 +213,10 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
             const errorKey = errorToI18nKey(error);
             if (failureMode === "advance") {
               syncRun(null);
-              onError(errorKey);
+              onError(errorKey, error);
             } else {
               syncRun({ ...current, foreground: true, stoppingSince: null, errorKey });
-              onError(errorKey);
+              onError(errorKey, error);
               return;
             }
           }
@@ -290,6 +339,13 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
     return [];
   }, [run]);
 
+  const closeBackup = useMemo<VaultCloseBackupWork | null>(() => {
+    if (run?.kind !== "close" || run.errorKey || run.activeStep !== CLOSING_BACKUP_STEP) {
+      return null;
+    }
+    return { vaultId: run.vaultId, startedAt: run.stepStartedAt, progress: run.stepProgress };
+  }, [run]);
+
   const creatingVaultIds = useMemo(() => {
     const ids: string[] = [];
     if (run?.kind === "create") ids.push(run.vaultId);
@@ -343,6 +399,7 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
       openingVaultIds,
       closingVaultIds,
       backingUpVaultIds,
+      closeBackup,
       creatingVaultIds,
       queuedVaultIds,
       queuedOpenVaultIds,
@@ -351,6 +408,7 @@ export function useVaultPipelineRun({ errorToI18nKey, jobs, onStopRefused }: Pip
     }),
     [
       backingUpVaultIds,
+      closeBackup,
       closingVaultIds,
       creatingVaultIds,
       dismissFailure,

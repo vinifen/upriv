@@ -12,6 +12,7 @@ export {
   SettingsField,
   SettingsFormGrid,
   DisplayNameFieldError,
+  useFixedFolders,
   usePickFolder,
   useRowStatuses,
   VaultSettingsBackupSection,

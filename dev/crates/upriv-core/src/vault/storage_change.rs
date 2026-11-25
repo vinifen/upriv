@@ -61,7 +61,7 @@ fn change_storage(
         if config.storage == storage {
             return Err(UprivError::StorageUnchanged);
         }
-        job.set_step(JobStep::Unlocking);
+        job.begin(JobStep::Unlocking, 0);
         let mut store = with_unlock_lock(|| {
             unlock_counted(vault_dir, password, |unlocked| {
                 steady(vault_dir, vault_id, unlocked)
@@ -70,7 +70,7 @@ fn change_storage(
         job.ensure_running()?;
         store.settle()?;
         job.final_step()?;
-        job.set_step(JobStep::Finishing);
+        job.begin(JobStep::Finishing, 0);
         store.index.storage = storage;
         store.seal(Vec::new())?;
         config.storage = storage;
@@ -226,7 +226,7 @@ mod tests {
         let (_tmp, root, folder) = notes();
         change(&root, PW, PLAIN_WHOLE).unwrap();
         let next: &[u8] = b"next-pass-ok";
-        crate::vault::change_vault_password(&root, "notes", PW, next, false, &test_job_id())
+        crate::vault::change_vault_password(&root, "notes", PW, next, false, "", &test_job_id())
             .unwrap();
         crate::vault::change_vault_kdf(&root, "notes", next, KdfUnlockPreset::M64, &test_job_id())
             .unwrap();

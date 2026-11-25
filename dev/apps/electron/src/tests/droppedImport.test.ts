@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -57,7 +58,8 @@ describe("statDroppedImportPaths", () => {
       await fs.writeFile(file, "hi");
       const result = await statDroppedImportPaths([empty, file, missing]);
       expect(result.files.map((row) => row.relativePath)).toEqual(["note.txt"]);
-      expect(result.unreadable).toEqual([missing]);
+      expect(result.unreadable).toEqual([{ osPath: missing, reason: "missing" }]);
+      expect(result.blocked).toEqual([]);
       expect(result.truncated).toBe(false);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -84,17 +86,74 @@ describe("statDroppedImportPaths", () => {
     }
   });
 
-  it("refuses the tree when a directory entry is a symlink", async () => {
+  it("skips a link inside a dropped folder, and names a dropped link", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "upriv-drop-"));
     try {
       const real = path.join(dir, "real.txt");
       await fs.writeFile(real, "secret");
       const link = path.join(dir, "link.txt");
       if (!(await symlinkOrSkip(real, link))) return;
+      const inside = await statDroppedImportPaths([dir]);
+      expect(inside.files.map((row) => row.relativePath)).toEqual([
+        `${path.basename(dir)}/real.txt`,
+      ]);
+      expect(inside.blocked).toEqual([]);
+      const dropped = await statDroppedImportPaths([link, real]);
+      expect(dropped.files.map((row) => row.relativePath)).toEqual(["real.txt"]);
+      expect(dropped.blocked).toEqual([{ path: "link.txt", reason: "link" }]);
+      expect(dropped.blockedCount).toBe(1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Root reads every file, and Windows has neither modes nor sockets on disk.
+  const asOwner = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.runIf(asOwner)(
+    "names a file it cannot read, a folder it cannot list, and a socket, with why",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "upriv-drop-"));
+      const locked = path.join(dir, "db");
+      const server = net.createServer();
+      try {
+        await fs.writeFile(path.join(dir, "ok.txt"), "ok");
+        await fs.writeFile(path.join(dir, "secret.txt"), "no");
+        await fs.chmod(path.join(dir, "secret.txt"), 0o000);
+        await fs.mkdir(locked);
+        await fs.writeFile(path.join(locked, "inside.txt"), "no");
+        await fs.chmod(locked, 0o000);
+        await new Promise<void>((resolve) => server.listen(path.join(dir, "agent.sock"), resolve));
+        const result = await statDroppedImportPaths([dir]);
+        const root = path.basename(dir);
+        expect(result.files.map((row) => row.relativePath)).toEqual([`${root}/ok.txt`]);
+        expect([...result.blocked].sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+          { path: `${root}/agent.sock`, reason: "special" },
+          { path: `${root}/db`, reason: "permission" },
+          { path: `${root}/secret.txt`, reason: "permission" },
+        ]);
+        expect(result.blockedCount).toBe(3);
+        expect(result.truncated).toBe(false);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await fs.chmod(locked, 0o700).catch(() => undefined);
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(asOwner)("counts every blocked item and names only the first ones", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "upriv-drop-"));
+    try {
+      for (let index = 0; index < 502; index += 1) {
+        const file = path.join(dir, `locked-${index}`);
+        await fs.writeFile(file, "no");
+        await fs.chmod(file, 0o000);
+      }
       const result = await statDroppedImportPaths([dir]);
       expect(result.files).toEqual([]);
-      expect(result.symlinks).toEqual([link]);
-      expect(result.truncated).toBe(false);
+      expect(result.blockedCount).toBe(502);
+      expect(result.blocked).toHaveLength(500);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

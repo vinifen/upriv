@@ -1,10 +1,5 @@
 import type { I18nKey } from "../../i18n/catalog";
-import type {
-  VaultDeleteHold,
-  VaultDisplayStatus,
-  VaultPipelineListStatus,
-  VaultRow,
-} from "../vault/types";
+import type { VaultDeleteHold, VaultDisplayStatus, VaultPipelineListStatus } from "../vault/types";
 
 /** CSS custom property names — single source for vault row/dot colors (SDD §8.2). */
 export const vaultStatusColorVar = {
@@ -48,31 +43,17 @@ export const VAULT_DELETE_HOLD_I18N_KEY = {
   backup_export: "modal.delete_vault.hold.backup_export",
 } as const satisfies Record<VaultDeleteHold, I18nKey>;
 
-/**
- * The line a row shows under its status for a password change: one that did
- * not finish and waits for the new password (the row is `recovery`), or one
- * whose files still wait for Finish. `null` for a steady vault.
- */
-export function vaultPasswordChangeLineKey(row: Pick<VaultRow, "passwordChange">): I18nKey | null {
-  switch (row.passwordChange) {
-    case "pending":
-      return "vault.row.password_change_pending";
-    case "unfinished":
-      return "vault.row.password_change_unfinished";
-    default:
-      return null;
-  }
-}
-
 /** What the row itself says beside its status. */
 export interface VaultStatusRowFlags {
   autoClosed?: boolean;
   deleteUnfinished?: boolean;
+  importUnfinished?: boolean;
 }
 
 /**
- * Row / badge / Info label. A closing vault in its backup phase says so, and
- * a delete that is not running says it did not finish.
+ * Row / badge / Info label. A closing vault in its backup phase says so, a
+ * delete that is not running says it did not finish, and a vault in
+ * recovery because its import was cut off says that.
  */
 export function vaultStatusLabelKey(
   status: VaultDisplayStatus,
@@ -88,6 +69,9 @@ export function vaultStatusLabelKey(
     return "vault.status.backing_up";
   }
   if (status === "closed" && row.autoClosed === true) return "vault.status.auto_closed";
+  if (status === "recovery" && row.importUnfinished === true) {
+    return "vault.status.import_unfinished";
+  }
   if (
     status === "deleting" &&
     row.deleteUnfinished === true &&

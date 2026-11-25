@@ -7,13 +7,13 @@ import {
   type FolderRow,
   type HereDevice,
 } from "@upriv/shared";
-import type { DataFolderListDraft } from "@upriv/shared/react";
+import { DeviceNamesProvider, useDeviceInfo, type DataFolderListDraft } from "@upriv/shared/react";
 import { FolderList, StatusLine, shownPath } from "@/components/folder-list";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { isAndroidDocumentsDefaultGrant } from "@/platform/native/documentsGrant";
-import { useVaultRootService } from "@/platform/services";
+import { useDeviceService, useVaultRootService } from "@/platform/services";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
@@ -51,6 +51,7 @@ export function DataFolderListSection({
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const vaultRoot = useVaultRootService();
+  const device = useDeviceInfo(useDeviceService());
   const { view, loadError, gate } = list;
 
   const pickFolder = useCallback(
@@ -90,11 +91,38 @@ export function DataFolderListSection({
         : null;
   const confirmDelete = (row: FolderRow) =>
     inUse === row.number ? t("modal.data_folder.delete_in_use") : null;
-  // A phone checks Default only while it is the data folder, or nothing is.
+  // A phone checks Default only while it is the data folder, or nothing is; a
+  // check that failed says so.
   const defaultStatus =
-    list.defaultStatus && list.defaultStatus.content !== null ? (
+    list.defaultStatus &&
+    (list.defaultStatus.content !== null || list.defaultStatus.state !== "ok") ? (
       <StatusLine line={dataFolderStatusLine(list.defaultStatus, t)} />
     ) : null;
+  // What the chosen folder still needs, inside its card under the status that
+  // names the problem (desktop parity): Retry for a folder whose check
+  // failed, or the choice for a broken `.upriv`. A path the rules refuse says
+  // why on its row, and checking it again changes nothing.
+  const retryable = gate.problem !== undefined && gate.problem !== "folder_list.status.refused";
+  const selectedFooter = noneChecked ? null : retryable ? (
+    <Button
+      label={t("action.retry")}
+      variant="secondary"
+      size="sm"
+      disabled={disabled}
+      onPress={list.retryStatuses}
+      style={styles.retry}
+    />
+  ) : gate.needsReplacePolicy && selectedFolder ? (
+    <VaultRootIncompleteReplacePanel
+      folder={selectedFolder}
+      replacePolicy={list.replacePolicy}
+      disabled={disabled}
+      onReplacePolicyChange={(policy) => {
+        list.setReplacePolicy(policy);
+        onEdit?.();
+      }}
+    />
+  ) : null;
 
   return (
     <View style={styles.wrap}>
@@ -103,63 +131,41 @@ export function DataFolderListSection({
           {t("modal.vault_root_setup.env_override", { path: view.explicit })}
         </Text>
       ) : null}
-      <FolderList
-        label={t("modal.data_folder.list_label")}
-        policy={DATA_FOLDER_LIST}
-        groups={list.draft}
-        saved={list.saved}
-        here={here}
-        fixed={[
-          {
-            choice: "default",
-            title: t("folder_list.choice.default"),
-            description: t("folder_list.choice.default_desc_android"),
-            status: defaultStatus,
-          },
-        ]}
-        disabled={disabled}
-        noneChecked={noneChecked}
-        renderStatus={(path) => <StatusLine line={dataFolderStatusLine(list.rowStatus(path), t)} />}
-        selectionAttention={gate.attention}
-        inUse={inUse}
-        confirmDelete={confirmDelete}
-        pickFolder={pickFolder}
-        pickedChoice={(picked) => (isAndroidDocumentsDefaultGrant(picked) ? "default" : null)}
-        onChange={(groups) => {
-          list.setDraft(groups);
-          onEdit?.();
-        }}
-      />
-      {!noneChecked && list.selection === "default" && list.defaultStatus?.content === "empty" ? (
-        <Text style={typography.caption}>{t("modal.data_folder.android_documents_note")}</Text>
-      ) : null}
-      {!noneChecked && gate.problem ? (
-        <View style={styles.problem}>
-          <Text
-            accessibilityRole="alert"
-            style={[typography.body, { color: colors.onErrorContainer }]}
-          >
-            {t(gate.problem)}
-          </Text>
-          <Button
-            label={t("action.retry")}
-            variant="secondary"
-            size="sm"
-            disabled={disabled}
-            onPress={list.retryStatuses}
-          />
-        </View>
-      ) : null}
-      {!noneChecked && gate.needsReplacePolicy && selectedFolder ? (
-        <VaultRootIncompleteReplacePanel
-          folder={selectedFolder}
-          replacePolicy={list.replacePolicy}
+      {/* The list file names its own devices. */}
+      <DeviceNamesProvider names={view.osNames} here={device}>
+        <FolderList
+          label={t("modal.data_folder.list_label")}
+          policy={DATA_FOLDER_LIST}
+          groups={list.draft}
+          saved={list.saved}
+          here={here}
+          fixed={[
+            {
+              choice: "default",
+              title: t("folder_list.choice.default"),
+              description: t("folder_list.choice.default_desc_android"),
+              status: defaultStatus,
+            },
+          ]}
           disabled={disabled}
-          onReplacePolicyChange={(policy) => {
-            list.setReplacePolicy(policy);
+          noneChecked={noneChecked}
+          renderStatus={(path) => (
+            <StatusLine line={dataFolderStatusLine(list.rowStatus(path), t)} />
+          )}
+          selectionAttention={gate.attention}
+          selectedFooter={selectedFooter}
+          inUse={inUse}
+          confirmDelete={confirmDelete}
+          pickFolder={pickFolder}
+          pickedChoice={(picked) => (isAndroidDocumentsDefaultGrant(picked) ? "default" : null)}
+          onChange={(groups) => {
+            list.setDraft(groups);
             onEdit?.();
           }}
         />
+      </DeviceNamesProvider>
+      {!noneChecked && list.selection === "default" && list.defaultStatus?.content === "empty" ? (
+        <Text style={typography.caption}>{t("modal.data_folder.android_documents_note")}</Text>
       ) : null}
     </View>
   );
@@ -168,4 +174,5 @@ export function DataFolderListSection({
 const styles = StyleSheet.create({
   wrap: { gap: spacing.md },
   problem: { gap: spacing.sm },
+  retry: { alignSelf: "flex-start" },
 });

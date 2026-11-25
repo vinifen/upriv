@@ -639,19 +639,20 @@ pub(crate) fn every_backup_zip_newest_first(vault_dir: &Path) -> Vec<PathBuf> {
     newest_first(zips)
 }
 
-/// True when this device's last backup is the zip with `stamp` in the folder
-/// in use, and that zip is still there or its folder cannot be reached to
-/// tell: an unchanged vault writes no new zip then. After a switch, the next
-/// close writes one.
-fn last_backup_is_kept(
+/// Where this device's last backup, the zip with `stamp` in `folder`, stands
+/// against the folder in use: [`LastBackupPlace::Kept`] while it is there, or
+/// that folder cannot be reached to tell, and an unchanged vault writes no new
+/// zip then. After a switch it is in another folder, and the next close
+/// writes one.
+fn last_backup_place(
     root: &VaultRoot,
     vault_id: &str,
     vault_dir: &Path,
     stamp: &str,
     folder: &str,
-) -> bool {
+) -> LastBackupPlace {
     if !is_backup_stamp(stamp) {
-        return false;
+        return LastBackupPlace::Gone;
     }
     let saved = load_vault_persistence(vault_dir).ok().flatten();
     let in_use = targets(root, vault_id, vault_dir).selected;
@@ -660,27 +661,32 @@ fn last_backup_is_kept(
     } else {
         match saved.as_ref().and_then(|saved| saved.folder(folder)) {
             Some(recorded) => PathBuf::from(&recorded.dir),
-            None => return false,
+            None => return LastBackupPlace::Gone,
         }
     };
     if dir != in_use.dir {
-        return false;
+        return LastBackupPlace::OtherFolder;
     }
     if !in_use.is_data_folder()
         && check_readable(&dir, FOLDER_STATUS_CHECK_LIMIT) == FolderState::NotResponding
     {
-        return true;
+        return LastBackupPlace::Kept;
     }
     let mut zips = Vec::new();
     zips_named_in(&dir, &mut zips);
     if zips.iter().any(|(found, _)| found == stamp) {
-        return true;
+        return LastBackupPlace::Kept;
     }
-    !in_use.is_data_folder()
+    let folder_away = !in_use.is_data_folder()
         && !in_use
             .place
             .row_folder()
-            .is_some_and(|row| row.host_is_dir())
+            .is_some_and(|row| row.host_is_dir());
+    if folder_away {
+        LastBackupPlace::Kept
+    } else {
+        LastBackupPlace::Gone
+    }
 }
 
 /// What the close knows about this device's last backup.
@@ -689,12 +695,29 @@ pub(crate) struct LastBackup {
     pub folder: String,
 }
 
+/// Where this device's last backup zip stands, for a close of a vault whose
+/// files have not changed since that zip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LastBackupPlace {
+    /// In the folder in use, or that folder cannot be reached to tell: no zip.
+    Kept,
+    /// Written to another folder than the one in use now.
+    OtherFolder,
+    /// No longer in the folder in use.
+    Gone,
+}
+
 /// A close's question: an unchanged vault writes no zip while its last one
 /// is in the folder in use.
-pub(crate) fn close_backup_is_kept(root: &VaultRoot, vault_id: &str, last: &LastBackup) -> bool {
-    root.vault_dir(vault_id).is_ok_and(|vault_dir| {
-        last_backup_is_kept(root, vault_id, &vault_dir, &last.stamp, &last.folder)
-    })
+pub(crate) fn close_backup_place(
+    root: &VaultRoot,
+    vault_id: &str,
+    last: &LastBackup,
+) -> LastBackupPlace {
+    root.vault_dir(vault_id)
+        .map_or(LastBackupPlace::Gone, |vault_dir| {
+            last_backup_place(root, vault_id, &vault_dir, &last.stamp, &last.folder)
+        })
 }
 
 /// Write this vault's close backup where its backups go, then apply
@@ -941,6 +964,9 @@ pub enum BackupSkip {
     NoRoom,
     /// It could not be written.
     Failed,
+    /// The person stopped it alone ([`crate::skip_job_backup`]); the flow
+    /// went on.
+    Stopped,
 }
 
 impl BackupSkip {
@@ -949,6 +975,7 @@ impl BackupSkip {
             Self::Off => "off",
             Self::NoRoom => "no_room",
             Self::Failed => "failed",
+            Self::Stopped => "stopped",
         }
     }
 }
@@ -961,54 +988,74 @@ pub(crate) enum CopyBefore {
     Skipped(BackupSkip),
 }
 
+/// What a zip written before a change came to. A stop of the job fails with
+/// the stop. A stop of this zip alone (`stopped_alone`), no room, or any other
+/// failure skips it, logged as `backup_skipped` with the reason, and the flow
+/// goes on.
+fn settle_copy_before(
+    vault_id: &str,
+    saved: std::result::Result<PathBuf, BackupSkip>,
+    stopped_alone: bool,
+    job: &Job,
+) -> Result<CopyBefore> {
+    let reason = match saved {
+        Ok(zip) => return Ok(CopyBefore::Written(zip)),
+        Err(_) if job.is_stopped() => return Err(UprivError::JobCancelled),
+        Err(_) if stopped_alone => BackupSkip::Stopped,
+        Err(reason) => reason,
+    };
+    log_event(
+        LogLevel::Warn,
+        "backup_skipped",
+        &[("id", vault_id), ("reason", reason.as_str())],
+    );
+    Ok(CopyBefore::Skipped(reason))
+}
+
 /// A save of `store/` as it is, as part of `job`, before a flow changes it:
 /// in the data folder while it holds the zip and `reserve`, else in the
-/// folder in use. A stop removes the partial file and fails with the stop;
-/// no room or any other failure skips it, logged as `backup_skipped` with
-/// the reason, and the flow goes on.
-fn save_before_change(
+/// folder in use; or why there is none. A write that fails or is stopped
+/// removes its partial file.
+fn save_zip_before_change(
     root: &VaultRoot,
     vault_id: &str,
+    vault_dir: &Path,
     reserve: u64,
     into: BackupDir,
     job: &Job,
-) -> Result<CopyBefore> {
-    let vault_dir = root.vault_dir(vault_id)?;
-    let skipped = |reason: BackupSkip| {
-        log_event(
-            LogLevel::Warn,
-            "backup_skipped",
-            &[("id", vault_id), ("reason", reason.as_str())],
-        );
-        Ok(CopyBefore::Skipped(reason))
-    };
-    if load_vault_config(&vault_dir).is_err() {
-        return skipped(BackupSkip::Failed);
-    }
+) -> std::result::Result<PathBuf, BackupSkip> {
+    load_vault_config(vault_dir).map_err(|_| BackupSkip::Failed)?;
     let needed = super::zip_io::store_zip_bytes(&vault_dir.join(STORE_DIR_NAME)).unwrap_or(0);
-    let Some(place) = start_backup_place(root, vault_id, &vault_dir, needed, reserve) else {
-        return skipped(BackupSkip::NoRoom);
-    };
-    match write_backup_zip(&vault_dir, vault_id, &place.dir, into, job) {
-        Ok((_, zip)) => {
-            record_written(&vault_dir, vault_id, &place, &zip);
-            Ok(CopyBefore::Written(zip))
-        }
-        Err(_) if job.is_stopped() => Err(UprivError::JobCancelled),
-        Err(_) => skipped(BackupSkip::Failed),
-    }
+    let place =
+        start_backup_place(root, vault_id, vault_dir, needed, reserve).ok_or(BackupSkip::NoRoom)?;
+    let (_, zip) = write_backup_zip(vault_dir, vault_id, &place.dir, into, job)
+        .map_err(|_| BackupSkip::Failed)?;
+    record_written(vault_dir, vault_id, &place, &zip);
+    Ok(zip)
 }
 
 /// The save a password change writes at its start when its switch is on: the
 /// store as it is, under the password from before the change. `reserve` is
-/// what the change itself needs in the data folder.
+/// what the change itself needs in the data folder. The person may stop this
+/// zip alone ([`crate::skip_job_backup`]); the change goes on without it.
 pub(crate) fn backup_before_password_change(
     root: &VaultRoot,
     vault_id: &str,
     reserve: u64,
     job: &Job,
 ) -> Result<CopyBefore> {
-    save_before_change(root, vault_id, reserve, BackupDir::ChangeSave, job)
+    let vault_dir = root.vault_dir(vault_id)?;
+    let (saved, stopped_alone) = job.backup_step(|| {
+        save_zip_before_change(
+            root,
+            vault_id,
+            &vault_dir,
+            reserve,
+            BackupDir::ChangeSave,
+            job,
+        )
+    });
+    settle_copy_before(vault_id, saved, stopped_alone, job)
 }
 
 /// Remove the zips a killed process never finished. The caller holds this
@@ -1038,13 +1085,16 @@ pub(crate) fn discard_unfinished_backups(vault_dir: &Path) {
 /// The copy of `store/` a rebuild writes before its tree step
 /// ([`super::rebuild`]): a save, which retention never rotates, kept until
 /// the person deletes it, because a rebuild is a best guess and this copy is
-/// the way back. A rebuild goes on without it.
+/// the way back. A rebuild goes on without it only when it does not fit or
+/// fails: nothing stops this copy alone.
 pub(crate) fn copy_before_rebuild(
     root: &VaultRoot,
     vault_id: &str,
     job: &Job,
 ) -> Result<CopyBefore> {
-    save_before_change(root, vault_id, 0, BackupDir::RebuildCopy, job)
+    let vault_dir = root.vault_dir(vault_id)?;
+    let saved = save_zip_before_change(root, vault_id, &vault_dir, 0, BackupDir::RebuildCopy, job);
+    settle_copy_before(vault_id, saved, false, job)
 }
 
 /// Where a new zip goes in its folder, what its check asks of its index
@@ -1950,6 +2000,52 @@ mode = "encrypted_dir"
 "#
         ))
         .expect("config")
+    }
+
+    #[test]
+    fn a_change_whose_backup_is_stopped_alone_goes_on_with_no_zip_left() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let job = Job::start(&test_job_id()).unwrap();
+        job.stop_backup_alone();
+        let copied = backup_before_password_change(&root, "notes", 0, &job).unwrap();
+        assert_eq!(copied, CopyBefore::Skipped(BackupSkip::Stopped));
+        job.ensure_running().expect("the change goes on");
+        let saves = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(BACKUPS_DIR)
+            .join(SAVES_DIR);
+        let left: Vec<_> = crate::host_fs::read_dir(&saves)
+            .map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+            .unwrap_or_default();
+        assert!(left.is_empty(), "{left:?}");
+
+        // The next backup of the same job is not stopped.
+        let next = backup_before_password_change(&root, "notes", 0, &job).unwrap();
+        assert!(matches!(next, CopyBefore::Written(_)));
+    }
+
+    #[test]
+    fn nothing_stops_the_copy_before_a_rebuild_alone() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let job = Job::start(&test_job_id()).unwrap();
+        job.stop_backup_alone();
+        let copied = copy_before_rebuild(&root, "notes", &job).unwrap();
+        assert!(matches!(copied, CopyBefore::Written(_)), "{copied:?}");
     }
 
     #[test]
@@ -3153,16 +3249,27 @@ mode = "encrypted_dir"
         crate::host_fs::create_dir_all(&second).unwrap();
         let (_keep, root) = vault_with_rows(&[&first, &second], 3);
         open_vault(&root, "notes", PASSWORD).unwrap();
-        close_vault(&root, "notes").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
         assert_eq!(zips_in(&first.join("upriv-notes-backups")).len(), 1);
+        assert_eq!(
+            closed.backup_reason,
+            Some(crate::vault::CloseBackupReason::First),
+            "an unchanged vault's first zip says why"
+        );
+        assert_eq!(
+            closed.backup_folder.as_deref(),
+            first.join("upriv-notes-backups").to_str()
+        );
 
         open_vault(&root, "notes", PASSWORD).unwrap();
-        close_vault(&root, "notes").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
         assert_eq!(
             zips_in(&first.join("upriv-notes-backups")).len(),
             1,
             "unchanged: no zip"
         );
+        assert_eq!(closed.backup_reason, None);
+        assert_eq!(closed.backup_folder, None);
 
         let mut config = load_vault_config(root.vault_dir("notes").unwrap()).unwrap();
         config
@@ -3171,11 +3278,15 @@ mode = "encrypted_dir"
             .select_here(this_device(), Selection::Row(2));
         crate::config::save_vault_config(root.vault_dir("notes").unwrap(), &config).unwrap();
         open_vault(&root, "notes", PASSWORD).unwrap();
-        close_vault(&root, "notes").unwrap();
+        let closed = close_vault(&root, "notes").unwrap();
         assert_eq!(
             zips_in(&second.join("upriv-notes-backups")).len(),
             1,
             "after a switch the next close writes a zip"
+        );
+        assert_eq!(
+            closed.backup_reason,
+            Some(crate::vault::CloseBackupReason::Moved)
         );
     }
 
@@ -3196,9 +3307,15 @@ mode = "encrypted_dir"
             stamp: record.stamp.clone().unwrap(),
             folder: record.folder.clone().unwrap(),
         };
-        assert!(close_backup_is_kept(&root, "notes", &last));
+        assert_eq!(
+            close_backup_place(&root, "notes", &last),
+            LastBackupPlace::Kept
+        );
         crate::host_fs::remove_file(dir.join(&only[0])).unwrap();
-        assert!(!close_backup_is_kept(&root, "notes", &last));
+        assert_eq!(
+            close_backup_place(&root, "notes", &last),
+            LastBackupPlace::Gone
+        );
     }
 
     #[test]

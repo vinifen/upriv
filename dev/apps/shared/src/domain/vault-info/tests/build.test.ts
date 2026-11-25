@@ -68,11 +68,14 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
       mounted: true,
     },
     keyStatus: { filesWaiting: 0, keyCopiesDue: false, keyCopiesUpdating: false },
-    storePath: "/data/.upriv/vaults/notes/store/",
-    backupsPath: "/data/.upriv/vaults/notes/backups/",
-    storeOpenPath: "/data/.upriv/vaults/notes/store",
-    backupsOpenPath: "/data/.upriv/vaults/notes/backups",
+    paths: {
+      storePath: "/data/.upriv/vaults/notes/store/",
+      backupsPath: "/data/.upriv/vaults/notes/backups/",
+      storeOpenPath: "/data/.upriv/vaults/notes/store",
+      backupsOpenPath: "/data/.upriv/vaults/notes/backups",
+    },
     locale: "en",
+    osNames: {},
     ...overrides,
   };
 }
@@ -103,7 +106,8 @@ describe("buildVaultInfoSections", () => {
     );
     expect(field(sections, "kdf_preset")).toBe("modal.settings.option.kdf.256mib");
     expect(field(sections, "file_manager")).toBe("modal.info.value.eligible");
-    expect(field(sections, "backup_skip_unchanged")).toBe("modal.info.value.yes");
+    expect(field(sections, "backup_when")).toBe("modal.settings.option.backup.changed");
+    expect(field(sections, "backup_keep_current")).toBe("modal.info.value.yes");
     expect(field(sections, "backup_count")).toBe("2");
     expect(field(sections, "backup_latest")).toBe("20260529120000-notes.zip");
     const tied = buildVaultInfoSections(
@@ -293,22 +297,41 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "store_size")).toBe("—");
   });
 
-  it("shows loading for the backups and store size it is still reading", () => {
+  it("shows each part it is still reading as loading, and the list row's values at once", () => {
     const base = snapshot();
     const sections = buildVaultInfoSections(
       {
         ...base,
+        settings: "reading",
+        paths: null,
         backupSections: null,
+        unlockedFolder: null,
+        keyStatus: "reading",
         runtime: { ...base.runtime, storeBytes: "measuring", filesBytes: "measuring" },
       },
       t,
     );
-    expect(field(sections, "store_size")).toBe("modal.info.loading");
-    expect(field(sections, "files_size")).toBe("modal.info.loading");
-    expect(field(sections, "backup_folder_in_use")).toBe("modal.info.loading");
-    expect(field(sections, "backup_count")).toBe("modal.info.loading");
-    expect(field(sections, "backup_latest")).toBe("modal.info.loading");
-    expect(field(sections, "backup_total_size")).toBe("modal.info.loading");
+    const loading = (id: string) =>
+      sections.flatMap((section) => section.fields).find((entry) => entry.id === id)?.loading;
+    for (const id of [
+      "store_path",
+      "backups_path",
+      "store_size",
+      "files_size",
+      "password_changed_at",
+      "files_waiting",
+      "unlocked_folder_choice",
+      "unlocked_folder_path",
+      "backup_enabled",
+      "backup_folder_in_use",
+      "backup_count",
+      "backup_latest",
+      "backup_total_size",
+    ]) {
+      expect(loading(id)).toBe(true);
+    }
+    expect(loading("display_name")).toBeUndefined();
+    expect(field(sections, "display_name")).toBe(base.vault.displayName);
   });
 
   it("shows set-aside data only for a vault that holds some", () => {
@@ -319,6 +342,27 @@ describe("buildVaultInfoSections", () => {
       t,
     );
     expect(field(sections, "held_size")).toBe("2.0 KB");
+  });
+
+  it("says a cut-off import is not finished, and when it began, for that vault only", () => {
+    const base = snapshot();
+    expect(field(buildVaultInfoSections(base, t), "import_started_at")).toBeUndefined();
+    const cut = {
+      ...base,
+      vault: { ...base.vault, session: "recovery" as const, importUnfinished: true },
+      settings: {
+        ...vaultSettingsFixture(),
+        importing: { started_at: "2026-11-24T00:20:46.000Z" },
+      },
+    };
+    const sections = buildVaultInfoSections(cut, t);
+    expect(field(sections, "display_status")).toBe("vault.status.import_unfinished");
+    expect(field(sections, "import_started_at")).not.toBe("—");
+    const reading = buildVaultInfoSections({ ...cut, settings: "reading" }, t);
+    expect(
+      reading.flatMap((section) => section.fields).find((entry) => entry.id === "import_started_at")
+        ?.loading,
+    ).toBe(true);
   });
 
   it("names the backup folder in use and each folder that holds zips", () => {
@@ -333,9 +377,18 @@ describe("buildVaultInfoSections", () => {
       status: "ok",
       entries: [entry("20260530120000-notes.zip", "2026-05-30T12:00:00.000Z", 5)],
     };
-    const sections = buildVaultInfoSections(snapshot({ backupSections: [dataFolder([]), usb] }), t);
-    const named =
-      '/mnt/usb/upriv-notes-backups · device.name:{"system":"device.system.linux","tag":"3f9c2"}';
+    const sections = buildVaultInfoSections(
+      snapshot({
+        backupSections: [dataFolder([]), usb],
+        osNames: { "3f9c2a7d4e1b8c6f0a2d4e6f8a1b3c5d": "Fedora Linux 41" },
+      }),
+      t,
+    );
+    const device = t("device.os_and_system", {
+      os: "Fedora Linux 41",
+      system: "device.system.linux",
+    });
+    const named = `/mnt/usb/upriv-notes-backups · ${t("device.name", { device, tag: "3f9c2" })}`;
     expect(field(sections, "backup_folder_in_use")).toBe(named);
     expect(field(sections, "backup_folder_f1")).toBe(named);
     expect(field(sections, "backup_folder_data")).toBeUndefined();

@@ -47,7 +47,7 @@ import {
   type FolderPresence,
   type VisibleTreeRow,
 } from "@upriv/shared";
-import { useSearchCollapsedFolders } from "@upriv/shared/react";
+import { useOperationLimit, useSearchCollapsedFolders } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
 import { usePulseOpacity } from "@/hooks/usePulseOpacity";
 import { noteIdleActivity } from "@/lib/idleActivity";
@@ -147,6 +147,8 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { workspace, movePath } = fm;
+  // A tree that loads fast never flashes its skeleton.
+  const treeLoading = useOperationLimit(fm.treeStatus === "loading");
   // Below the one-row width the actions get their own rows and spread across them.
   const [toolbarWrapped, setToolbarWrapped] = useState(false);
   const fmRef = useRef(fm);
@@ -560,7 +562,9 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
         style={[styles.listShell, rootDropActive ? { borderColor: colors.accent } : null]}
       >
         {fm.treeStatus === "loading" ? (
-          <FileTreeSkeleton label={t("modal.file_manager.explorer.loading")} />
+          treeLoading.visible ? (
+            <FileTreeSkeleton label={t("modal.file_manager.explorer.loading")} />
+          ) : null
         ) : fm.treeStatus === "error" ? (
           <View accessibilityRole="alert" style={styles.loadError}>
             <Text style={[styles.loadErrorText, { color: colors.onSurfaceVariant }]}>

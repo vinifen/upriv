@@ -71,7 +71,10 @@ export function useUnlockedFolderDriver() {
   return { missing, known, busy, ensureInstalled, kind };
 }
 
-/** The driver is missing while a folder is wanted: say so, with its install button. */
+/**
+ * The driver is missing while a folder is wanted: a step the person can take,
+ * so it reads in the attention color, with its install button.
+ */
 export function UnlockedFolderDriverNotice({
   kind,
   missing,
@@ -99,7 +102,7 @@ export function UnlockedFolderDriverNotice({
       : "modal.app_settings.action.install_driver_busy";
   return (
     <div className="flex flex-col items-start gap-2">
-      <p className="text-xs leading-relaxed text-on-error-container" role="status">
+      <p className="text-xs leading-relaxed text-vault-recovery" role="status">
         {t(missingKey)}
       </p>
       <Button

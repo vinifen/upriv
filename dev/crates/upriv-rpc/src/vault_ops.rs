@@ -16,8 +16,8 @@ use upriv_core::{
     probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path,
     promote_backup_save, read_import_archive_bytes, read_import_zip_bytes_settings,
     read_import_zip_settings, save_backup_now, seven_zip_export_available, sweep_unfinished,
-    vault_list_item, ExportInclude, ImportExtras, ImportZipProbe, KdfUnlockPreset, OsFolder,
-    VaultConfig, ZipImportClass,
+    vault_list_item, BlockedItems, ExportInclude, ImportExtras, ImportZipProbe, ImportedVault,
+    KdfUnlockPreset, OsFolder, VaultConfig, VaultRoot, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -232,6 +232,23 @@ struct VaultImportFilesZipParams {
     /// Keep the file-manager layout the archive carries.
     #[serde(default)]
     keep_workspace: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultImportOsPathParams {
+    settings: VaultConfig,
+    password: SecretString,
+    #[serde(default)]
+    unlock_preset: Option<KdfUnlockPreset>,
+    /// The chosen file or folder.
+    archive_path: String,
+    job: String,
+    #[serde(default)]
+    welcome: Option<super::VaultWelcomeParams>,
+    /// The person chose to import without the items that cannot be imported.
+    #[serde(default)]
+    leave_out: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -983,10 +1000,21 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
         )
     };
     match imported {
-        Ok(id) => match vault_list_item(&root, &id) {
-            Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
-            Err(error) => map_core_err(error),
-        },
+        Ok(imported) => imported_vault_answer(&root, imported),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// The answer of an import that filled a new vault: the vault, `leftOut`
+/// (the items left out because they could not be imported), and `stopped`
+/// (the person stopped it, and the vault keeps the files that got in).
+fn imported_vault_answer(root: &VaultRoot, imported: ImportedVault) -> RpcResponse {
+    match vault_list_item(root, &imported.id) {
+        Ok(item) => ok(json!({
+            "vault": super::vault_list_item_json(&item),
+            "leftOut": imported.left_out,
+            "stopped": imported.stopped,
+        })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1041,35 +1069,35 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
         }
     };
     match imported {
-        Ok(id) => match vault_list_item(&root, &id) {
-            Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
-            Err(error) => map_core_err(error),
-        },
+        Ok(imported) => imported_vault_answer(&root, imported),
         Err(error) => map_core_err(error),
     }
 }
 
+/// Answers as every import that fills a new vault ([`imported_vault_answer`]);
+/// `leftOut` counts only when `leaveOut` asked for that.
 pub(super) fn vault_import_os_path(params: Value) -> RpcResponse {
-    let parsed: VaultImportFilesZipParams = match serde_json::from_value(params) {
+    let parsed: VaultImportOsPathParams = match serde_json::from_value(params) {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
     if parsed.password.is_empty() {
         return err("invalid_request", "password is required".into());
     }
-    let Some(path) = parsed
-        .archive_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let path = parsed.archive_path.trim();
+    if path.is_empty() {
         return err("invalid_request", "source path is required".into());
-    };
+    }
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
     };
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
+    let blocked_items = if parsed.leave_out {
+        BlockedItems::LeaveOut
+    } else {
+        BlockedItems::Refuse
+    };
     match import_logical_os_path(
         &root,
         parsed.settings,
@@ -1080,12 +1108,10 @@ pub(super) fn vault_import_os_path(params: Value) -> RpcResponse {
             .welcome
             .as_ref()
             .map(super::VaultWelcomeParams::as_core),
+        blocked_items,
         &parsed.job,
     ) {
-        Ok(id) => match vault_list_item(&root, &id) {
-            Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
-            Err(error) => map_core_err(error),
-        },
+        Ok(imported) => imported_vault_answer(&root, imported),
         Err(error) => map_core_err(error),
     }
 }
@@ -1200,16 +1226,20 @@ fn probe_ok_body(
     body
 }
 
-/// Clear what a crash left from a job: the vaults an import never finished
-/// and the unfinished export files. `folders` are the storage-access folders
-/// holding such a file that are not mounted now.
+/// Clear what a crash left from a job: the vaults whose create or store copy
+/// never finished and the unfinished export files. `folders` are the
+/// storage-access folders holding such a file that are not mounted now;
+/// `removedVaults` the vaults it deleted.
 pub(super) fn vault_unfinished_sweep(_params: Value) -> RpcResponse {
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
     };
     match sweep_unfinished(&root) {
-        Ok(folders) => ok(json!({ "folders": folders })),
+        Ok(swept) => ok(json!({
+            "folders": swept.folders,
+            "removedVaults": swept.removed_vaults,
+        })),
         Err(error) => map_core_err(error),
     }
 }

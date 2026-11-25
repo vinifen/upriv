@@ -1,7 +1,7 @@
 //! Session-backed logical file operations. Mutations seal the index.
-//! One OS import seals before it returns. A batch stages each file and seals
-//! a full wave of them, then the tail, so a crash keeps the last finished wave.
-//! A range write into an existing file waits for the next seal; see
+//! An import stages each file and folder and seals them in waves, paced by
+//! how long a seal takes; see [`stage_import`]. A crash keeps the last sealed
+//! wave. A range write into an existing file waits for the next seal; see
 //! [`fs_write_range`]. So does the file-manager layout; see [`fs_write_file`].
 
 use crate::host_fs::File;
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
 use super::seven_zip_pack::mem_available_bytes;
-use crate::error::{Result, UprivError};
+use crate::error::{ImportBlockReason, Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{with_open_session, AttachState, DeferredWrites, Job, JobKind, OpenSession};
@@ -55,6 +55,7 @@ pub(crate) fn commit(session: &mut OpenSession) -> Result<Sealed> {
 }
 
 fn seal_index(session: &mut OpenSession) -> Result<Sealed> {
+    let started = Instant::now();
     let layout = stage_pending_layout(session);
     let copied = match sync_staged(session, RecordsDue::Made) {
         Ok(copied) => copied,
@@ -85,6 +86,7 @@ fn seal_index(session: &mut OpenSession) -> Result<Sealed> {
     settle_staged_layout(session, layout, Some(sealed));
     session.staged_blobs.clear();
     session.unsealed_imports = 0;
+    session.next_paced_seal = Some(paced_after(started, Instant::now()));
     session.deferred = None;
     session.dirty = false;
     session.tree_revision = session.tree_revision.saturating_add(1);
@@ -654,8 +656,9 @@ pub fn fs_write_range(
 const DEFERRED_SEAL_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A batch no flush, fsync, handle close, or other change sealed first is
-/// sealed this long after its first write. Tests wait longer, so a slow machine
-/// does not seal a batch while a test still expects it pending.
+/// sealed this long after its first range write, and no sooner than this
+/// after its first staged import ([`stage_import`]). Tests wait longer, so a
+/// slow machine does not seal a batch while a test still expects it pending.
 const DEFERRED_SEAL_AFTER: Duration = if cfg!(test) {
     Duration::from_secs(30)
 } else {
@@ -678,7 +681,7 @@ fn defer_range_write(
     session.dirty = true;
     session.staged_blobs.add(mutation);
     let ids = mutation_blob_ids(mutation);
-    let pending = join_pending_batch(session);
+    let pending = join_pending_batch(session, Instant::now() + DEFERRED_SEAL_AFTER);
     pending.bytes = pending.bytes.saturating_add(len);
     for id in ids {
         if !pending.blob_ids.contains(&id) {
@@ -691,19 +694,30 @@ fn defer_range_write(
     Ok(())
 }
 
-/// The batch waiting for the next seal, started with its timed seal when
-/// there is none.
-fn join_pending_batch(session: &mut OpenSession) -> &mut DeferredWrites {
+/// The batch waiting for the next seal, which its timer seals by `due` at the
+/// latest: a new batch is started with its timer, and an earlier `due` brings
+/// a batch's timer forward. A later one never puts it off.
+fn join_pending_batch(session: &mut OpenSession, due: Instant) -> &mut DeferredWrites {
     let vault_dir = &session.vault_dir;
-    session.deferred.get_or_insert_with(|| {
-        let batch = DEFERRED_BATCH.fetch_add(1, Ordering::Relaxed) + 1;
-        schedule_deferred_seal(vault_dir.clone(), batch);
-        DeferredWrites {
-            batch,
-            bytes: 0,
-            blob_ids: Vec::new(),
+    match &mut session.deferred {
+        Some(pending) => {
+            if due < pending.due {
+                pending.due = due;
+                schedule_deferred_seal(vault_dir.clone(), pending.batch, due);
+            }
+            pending
         }
-    })
+        empty => {
+            let batch = DEFERRED_BATCH.fetch_add(1, Ordering::Relaxed) + 1;
+            schedule_deferred_seal(vault_dir.clone(), batch, due);
+            empty.insert(DeferredWrites {
+                batch,
+                due,
+                bytes: 0,
+                blob_ids: Vec::new(),
+            })
+        }
+    }
 }
 
 /// Seal the pending batch with the rest of the index, then pack the blobs it
@@ -765,21 +779,17 @@ fn deferred_timers() -> std::sync::MutexGuard<'static, DeferredTimers> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Seal `batch` [`DEFERRED_SEAL_AFTER`] after it started, unless something
-/// sealed it first. Without the worker thread the batch still seals on a
-/// flush, fsync, handle close, other change, the size cap, or close.
-fn schedule_deferred_seal(dir: PathBuf, batch: u64) {
-    schedule_deferred_seal_in(dir, batch, DEFERRED_SEAL_AFTER);
-}
-
-fn schedule_deferred_seal_in(dir: PathBuf, batch: u64, delay: Duration) {
+/// Seal `batch` at `at`, unless something sealed it first. Without the worker
+/// thread the batch still seals on a flush, fsync, handle close, other change,
+/// the size cap, a full import wave, or close.
+fn schedule_deferred_seal(dir: PathBuf, batch: u64, at: Instant) {
     let mut timers = deferred_timers();
     timers.due.retain(|due| due.dir != dir);
     timers.due.push(DeferredDue {
         dir,
         batch,
-        at: Instant::now() + delay,
-        retry: delay,
+        at,
+        retry: DEFERRED_SEAL_AFTER,
         failed: false,
     });
     if timers.worker_alive {
@@ -1138,36 +1148,70 @@ fn publish_prepared(
     }
 }
 
-/// An imported file or folder is listed in RAM; a file's blob is already
-/// durable on disk. The sealed index names it at the next seal:
-/// [`STAGED_IMPORT_WAVE`] staged imports, [`DEFERRED_SEAL_AFTER`] after the
-/// pending batch began, any other committed change, a flush, or close. A crash
-/// before then forgets it; the next open sets its unnamed blob aside.
+/// An imported file or folder is listed in RAM; a file's blob, with its
+/// recovery record, is already durable on disk. The sealed index names it at
+/// the next seal: a full wave ([`import_wave_due`]), the batch's timer
+/// ([`import_timer_due`]), any other committed change, a flush, or close. A
+/// crash before then leaves it out of the tree; the next open sets its blob
+/// aside, named by its record, for the person to put back.
 fn stage_import(session: &mut OpenSession) {
     session.dirty = true;
     session.unsealed_imports = session.unsealed_imports.saturating_add(1);
     session.tree_revision = session.tree_revision.saturating_add(1);
-    join_pending_batch(session);
-    if session.unsealed_imports >= STAGED_IMPORT_WAVE {
+    let due = import_timer_due(session, Instant::now());
+    join_pending_batch(session, due);
+    if import_wave_due(session, Instant::now()) {
         // A failed seal keeps the batch for its timer, which retries and logs.
         let _ = seal_deferred(session);
     }
 }
 
 /// Staged imports sealed together: a file manager import, or the files and
-/// folders of a vault import.
-///
-/// A kill keeps this prefix in the index. Blobs from the unfinished wave are
-/// not named there; open drops those unreferenced blobs.
+/// folders of a vault import. A crash keeps every sealed wave in the index.
 const STAGED_IMPORT_WAVE: u64 = 32;
 
-/// Seal the open import wave once it is full. A short tail stays staged until
-/// [`fs_seal_staged_imports`].
+/// After a seal, an import's next seal waits this many times as long as that
+/// seal took, so sealing takes at most a tenth of an import's time. Each seal
+/// writes the whole index, which grows with every file, so a fixed wave would
+/// make an import of many files spend most of its time, and most of what it
+/// writes to the drive, rewriting the index.
+const SEAL_PACE: u32 = 9;
+
+/// The longest an import's next seal waits after a seal, so one slow seal (a
+/// drive that stalled) never leaves a long stretch of an import for a crash
+/// to cut off. It spaces the seals only: the import itself has no time limit.
+const SEAL_PACE_MAX: Duration = Duration::from_secs(5 * 60);
+
+/// When a paced seal may run after a seal that ran from `started` to `ended`.
+fn paced_after(started: Instant, ended: Instant) -> Instant {
+    let rest = ended
+        .duration_since(started)
+        .saturating_mul(SEAL_PACE)
+        .min(SEAL_PACE_MAX);
+    ended + rest
+}
+
+/// The staged imports make a full wave and the pace allows a seal.
+fn import_wave_due(session: &OpenSession, now: Instant) -> bool {
+    session.unsealed_imports >= STAGED_IMPORT_WAVE
+        && session.next_paced_seal.is_none_or(|paced| now >= paced)
+}
+
+/// When the timer seals a batch an import starts at `now`: after
+/// [`DEFERRED_SEAL_AFTER`], and not before the pace allows. A crash leaves
+/// out of the tree at most what was staged since the last seal.
+fn import_timer_due(session: &OpenSession, now: Instant) -> Instant {
+    let floor = now + DEFERRED_SEAL_AFTER;
+    session
+        .next_paced_seal
+        .map_or(floor, |paced| paced.max(floor))
+}
+
+/// Seal the open import wave once it is due ([`import_wave_due`]). The rest
+/// stays staged until the batch's timer or [`fs_seal_staged_imports`].
 pub(crate) fn fs_seal_staged_wave(root: &VaultRoot, vault_id: &str) -> Result<()> {
     let dir = require_open(root, vault_id)?;
-    let due = with_open_session(&dir, |session| {
-        Ok(session.unsealed_imports >= STAGED_IMPORT_WAVE)
-    })?;
+    let due = with_open_session(&dir, |session| Ok(import_wave_due(session, Instant::now())))?;
     if due {
         fs_seal_staged_imports(root, vault_id)?;
     }
@@ -1261,9 +1305,27 @@ fn write_reader_ahead(dir: &Path, path: &str, reader: &mut (impl Read + ?Sized))
         None => with_open_session(dir, |session| {
             require_user_visible_logical(path)?;
             require_parent_dir(&session.index, path)?;
-            commit_empty_file(session, path).map(|_| session.tree_revision)
+            place_empty_import(session, path).map(|_| session.tree_revision)
         }),
     }
+}
+
+/// Name an empty imported file. It has no blob, so nothing waits for a flush:
+/// a new one is staged like a folder ([`stage_import`]), and one that replaces
+/// a file seals at once, as any replaced file does ([`publish_prepared`]).
+fn place_empty_import(session: &mut OpenSession, path: &str) -> Result<()> {
+    if session.index.find(path).is_some() {
+        return commit_empty_file(session, path);
+    }
+    write_logical_file(
+        store_dir(session),
+        &session.keys,
+        &mut session.index,
+        path,
+        b"",
+    )?;
+    stage_import(session);
+    Ok(())
 }
 
 fn import_os_file_ahead(
@@ -1285,13 +1347,16 @@ fn import_os_file_ahead(
         &keys,
         &file_id,
         &mut file,
-        |_| UprivError::ImportSourceUnreadable(source_seal),
+        |error| UprivError::ImportSourceUnreadable {
+            path: source_seal,
+            reason: super::os_import::read_reason(&error),
+        },
         Ahead::Durable { path: &planned },
     )?;
     let Some(mut prepared) = prepared else {
         return with_open_session(dir, |session| {
             let path = import_destination(session, parent, base_name)?;
-            commit_empty_file(session, &path).map(|_| (to_ui_path(&path), session.tree_revision))
+            place_empty_import(session, &path).map(|_| (to_ui_path(&path), session.tree_revision))
         });
     };
     with_open_session(dir, |session| {
@@ -1433,34 +1498,47 @@ pub fn fs_import_from_os_path(
 /// A link swapped in after the path was checked is refused on every system,
 /// including a Windows reparse point.
 fn open_import_source(path: &Path) -> Result<File> {
-    crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read)
-        .map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
+    super::os_import::open_source(path).map_err(|reason| reject_unreadable(path, reason))
 }
 
-fn reject_unreadable(path: &Path) -> UprivError {
-    UprivError::ImportSourceUnreadable(path.to_path_buf())
+fn reject_unreadable(path: &Path, reason: ImportBlockReason) -> UprivError {
+    UprivError::ImportSourceUnreadable {
+        path: path.to_path_buf(),
+        reason,
+    }
 }
 
 /// Real path of `path`, after directory symlinks. Fail closed when the OS
 /// cannot resolve it.
 fn canonical_file(path: &Path) -> Result<PathBuf> {
-    crate::host_fs::canonicalize(path).map_err(|_| reject_unreadable(path))
+    crate::host_fs::canonicalize(path)
+        .map_err(|error| reject_unreadable(path, super::os_import::read_reason(&error)))
 }
 
 fn validate_import_os_path(root: &VaultRoot, vault_id: &str, os_path: &Path) -> Result<PathBuf> {
     if !os_path.is_absolute() {
-        return Err(reject_unreadable(os_path));
+        return Err(reject_unreadable(os_path, ImportBlockReason::Unreadable));
     }
-    let meta = crate::host_fs::symlink_metadata(os_path).map_err(|_| reject_unreadable(os_path))?;
-    if meta.file_type().is_symlink() || !meta.host_is_file() {
-        return Err(reject_unreadable(os_path));
+    let meta = crate::host_fs::symlink_metadata(os_path)
+        .map_err(|error| reject_unreadable(os_path, super::os_import::read_reason(&error)))?;
+    if meta.file_type().is_symlink() {
+        return Err(reject_unreadable(os_path, ImportBlockReason::Link));
+    }
+    if !meta.host_is_file() {
+        let reason = if meta.host_is_dir() {
+            ImportBlockReason::Unreadable
+        } else {
+            ImportBlockReason::Special
+        };
+        return Err(reject_unreadable(os_path, reason));
     }
     let canonical = canonical_file(os_path)?;
     if let Ok(store) = root.vault_store_dir(vault_id) {
         if store.host_exists() {
-            let store = canonical_file(&store).map_err(|_| reject_unreadable(os_path))?;
+            let store = canonical_file(&store)
+                .map_err(|_| reject_unreadable(os_path, ImportBlockReason::Unreadable))?;
             if canonical.starts_with(&store) {
-                return Err(reject_unreadable(os_path));
+                return Err(reject_unreadable(os_path, ImportBlockReason::Unreadable));
             }
         }
     }
@@ -2148,6 +2226,7 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             KdfUnlockPreset::M32,
             Some(crate::vault::VaultWelcome { readme, workspace }),
+            crate::vault::create::NewVault::Complete,
         )
         .unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
@@ -2204,6 +2283,7 @@ mode = "encrypted_dir"
                 readme: &readme,
                 workspace: "{}",
             }),
+            crate::vault::create::NewVault::Complete,
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultFileTooLarge { .. }));
@@ -2741,7 +2821,7 @@ mode = "encrypted_dir"
         let batch = pending_batch(&root).unwrap();
         // The write scheduled its seal for the test window; bring it forward.
         let dir = root.vault_dir("notes").unwrap();
-        schedule_deferred_seal_in(dir, batch, Duration::from_millis(100));
+        schedule_deferred_seal(dir, batch, Instant::now() + Duration::from_millis(100));
         let deadline = Instant::now() + Duration::from_secs(10);
         while pending_batch(&root).is_some() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
@@ -2755,8 +2835,9 @@ mode = "encrypted_dir"
     fn a_vault_keeps_one_timed_seal_for_its_newest_batch() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("not-open");
-        schedule_deferred_seal(dir.clone(), 7);
-        schedule_deferred_seal(dir.clone(), 8);
+        let at = Instant::now() + DEFERRED_SEAL_AFTER;
+        schedule_deferred_seal(dir.clone(), 7, at);
+        schedule_deferred_seal(dir.clone(), 8, at);
         let batches: Vec<u64> = deferred_timers()
             .due
             .iter()
@@ -2799,6 +2880,53 @@ mode = "encrypted_dir"
         eprintln!("64 MiB in 128 KiB writes, 2000 files: {batched:?} batched");
         eprintln!("same with a seal after every write: {sealed_each:?}");
         close_vault(&root, "notes").unwrap();
+    }
+
+    /// Import timings on this machine: small files with paced seals, then
+    /// with a seal every wave. Set `UPRIV_IMPORT_REPORT_FILES` for another
+    /// count than 10 000:
+    /// `cargo test --release -p upriv-core --lib import_cost_report -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn import_cost_report() {
+        let files = std::env::var("UPRIV_IMPORT_REPORT_FILES")
+            .ok()
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(10_000u64);
+        let saves = |root: &VaultRoot| {
+            with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+                Ok(session.index.saves)
+            })
+            .unwrap()
+        };
+        for paced in [true, false] {
+            let (_tmp, root) = open_notes();
+            let first = saves(&root);
+            let started = Instant::now();
+            for name in names("f", files) {
+                if !paced {
+                    pace_seals(&root, None);
+                }
+                fs_write_staged(&root, "notes", &format!("/{name}"), &mut name.as_bytes()).unwrap();
+                if !paced {
+                    pace_seals(&root, None);
+                }
+                fs_seal_staged_wave(&root, "notes").unwrap();
+            }
+            fs_seal_staged_imports(&root, "notes").unwrap();
+            let elapsed = started.elapsed();
+            let seals = saves(&root) - first;
+            let index = root
+                .vault_dir("notes")
+                .unwrap()
+                .join(crate::paths::STORE_DIR_NAME)
+                .join(crate::store::INDEX_DIR_NAME)
+                .join(crate::store::INDEX_FILE_NAME);
+            let index_kib = crate::host_fs::metadata(&index).unwrap().len() / 1024;
+            let how = if paced { "paced" } else { "a seal every wave" };
+            eprintln!("{files} files, {how}: {elapsed:.1?}, {seals} seals, index {index_kib} KiB");
+            close_vault(&root, "notes").unwrap();
+        }
     }
 
     #[cfg(unix)]
@@ -2875,14 +3003,20 @@ mode = "encrypted_dir"
             &test_job_id(),
         )
         .unwrap_err();
-        assert!(matches!(relative, UprivError::ImportSourceUnreadable(_)));
+        assert!(matches!(
+            relative,
+            UprivError::ImportSourceUnreadable { .. }
+        ));
 
         let bait = store.join("bait.bin");
         crate::host_fs::write(&bait, b"x").unwrap();
         let from_store =
             fs_import_from_os_path(&root, "notes", "/", "bait.bin", &bait, &test_job_id())
                 .unwrap_err();
-        assert!(matches!(from_store, UprivError::ImportSourceUnreadable(_)));
+        assert!(matches!(
+            from_store,
+            UprivError::ImportSourceUnreadable { .. }
+        ));
 
         #[cfg(unix)]
         {
@@ -2891,7 +3025,13 @@ mode = "encrypted_dir"
             let linked =
                 fs_import_from_os_path(&root, "notes", "/", "link.bin", &link, &test_job_id())
                     .unwrap_err();
-            assert!(matches!(linked, UprivError::ImportSourceUnreadable(_)));
+            assert!(matches!(
+                linked,
+                UprivError::ImportSourceUnreadable {
+                    reason: ImportBlockReason::Link,
+                    ..
+                }
+            ));
 
             let alias = tmp.path().join("alias");
             crate::host_fs::create_dir(&alias).unwrap();
@@ -2901,7 +3041,10 @@ mode = "encrypted_dir"
             let via_store =
                 fs_import_from_os_path(&root, "notes", "/", "via.bin", &via, &test_job_id())
                     .unwrap_err();
-            assert!(matches!(via_store, UprivError::ImportSourceUnreadable(_)));
+            assert!(matches!(
+                via_store,
+                UprivError::ImportSourceUnreadable { .. }
+            ));
         }
 
         close_vault(&root, "notes").unwrap();
@@ -3168,6 +3311,219 @@ mode = "encrypted_dir"
         assert!(sealed_index_names(&root, "w0.txt"));
         assert!(sealed_index_names(&root, &format!("w{last}.txt")));
         assert_eq!(pending_batch(&root), None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    /// Hold the next import seal of the open notes vault until `next`.
+    fn pace_seals(root: &VaultRoot, next: Option<Instant>) {
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            session.next_paced_seal = next;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn paced_seal(root: &VaultRoot) -> Option<Instant> {
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            Ok(session.next_paced_seal)
+        })
+        .unwrap()
+    }
+
+    /// When the pending batch's timer seals it, as the batch and the timer
+    /// table each say.
+    fn batch_due(root: &VaultRoot) -> (Option<Instant>, Option<Instant>) {
+        let dir = root.vault_dir("notes").unwrap();
+        let pending = with_open_session(&dir, |session| {
+            Ok(session.deferred.as_ref().map(|pending| pending.due))
+        })
+        .unwrap();
+        let timer = deferred_timers()
+            .due
+            .iter()
+            .find(|due| due.dir == dir)
+            .map(|due| due.at);
+        (pending, timer)
+    }
+
+    /// Import each name as a file holding its name, the way a vault import
+    /// does: stage it, then seal the wave when it is due.
+    fn import_files(root: &VaultRoot, names: &[String]) {
+        for name in names {
+            let mut body = name.as_bytes();
+            fs_write_staged(root, "notes", &format!("/{name}"), &mut body).unwrap();
+            fs_seal_staged_wave(root, "notes").unwrap();
+        }
+    }
+
+    fn names(prefix: &str, count: u64) -> Vec<String> {
+        (0..count)
+            .map(|index| format!("{prefix}{index}.txt"))
+            .collect()
+    }
+
+    #[test]
+    fn a_seal_holds_the_next_import_seal_for_nine_times_its_length() {
+        let started = Instant::now();
+        let ended = started + Duration::from_millis(100);
+        assert_eq!(
+            paced_after(started, ended),
+            ended + Duration::from_millis(900)
+        );
+        assert_eq!(paced_after(started, started), started);
+        let stalled = started + Duration::from_secs(3600);
+        assert_eq!(paced_after(started, stalled), stalled + SEAL_PACE_MAX);
+
+        let (_tmp, root) = open_notes();
+        assert_eq!(paced_seal(&root), None, "nothing to pace before a seal");
+        let before = Instant::now();
+        fs_write_file(&root, "notes", "/a.txt", b"a").unwrap();
+        let paced = paced_seal(&root).expect("every seal sets the pace");
+        assert!(paced >= before && paced <= paced_after(before, Instant::now()));
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_full_wave_waits_until_the_pace_allows_a_seal() {
+        let (_tmp, root) = open_notes();
+        pace_seals(&root, Some(Instant::now() + Duration::from_secs(3600)));
+        let held = names("p", STAGED_IMPORT_WAVE * 2);
+        import_files(&root, &held);
+        assert!(
+            !sealed_index_names(&root, "p0.txt"),
+            "the pace holds the wave"
+        );
+        assert_eq!(fs_read_file(&root, "notes", "/p0.txt").unwrap(), b"p0.txt");
+
+        pace_seals(&root, Some(Instant::now()));
+        import_files(&root, &["last.txt".to_string()]);
+        for name in held.iter().chain(["last.txt".to_string()].iter()) {
+            assert!(sealed_index_names(&root, name), "{name}");
+        }
+        assert_eq!(pending_batch(&root), None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn an_import_batch_waits_for_the_pace_and_a_range_write_brings_it_forward() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        // A quick seal: the batch's timer keeps its usual delay.
+        let before = Instant::now();
+        import_files(&root, &["quick.txt".to_string()]);
+        let (pending, timer) = batch_due(&root);
+        let due = pending.unwrap();
+        assert!(due >= before + DEFERRED_SEAL_AFTER);
+        assert!(due <= Instant::now() + DEFERRED_SEAL_AFTER);
+        assert_eq!(timer, Some(due));
+        fs_seal_staged_imports(&root, "notes").unwrap();
+
+        // A slow seal: the timer waits for the pace.
+        let paced = Instant::now() + Duration::from_secs(3600);
+        pace_seals(&root, Some(paced));
+        import_files(&root, &names("s", 3));
+        let batch = pending_batch(&root).unwrap();
+        assert_eq!(batch_due(&root), (Some(paced), Some(paced)));
+
+        // A range write in the same batch is sealed on its own delay.
+        let before = Instant::now();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        let (pending, timer) = batch_due(&root);
+        let due = pending.unwrap();
+        assert!(due >= before + DEFERRED_SEAL_AFTER);
+        assert!(due <= Instant::now() + DEFERRED_SEAL_AFTER);
+        assert_eq!(timer, Some(due));
+        assert_eq!(pending_batch(&root), Some(batch), "one batch, one timer");
+
+        // A later import never puts that timer off.
+        import_files(&root, &["after.txt".to_string()]);
+        assert_eq!(batch_due(&root), (Some(due), Some(due)));
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_crash_sets_aside_every_file_a_held_wave_staged_each_named() {
+        let (_tmp, root) = open_notes();
+        pace_seals(&root, Some(Instant::now() + Duration::from_secs(3600)));
+        // Half the files sit in folders the same wave made, which the crash
+        // takes with it.
+        let mut folders = HashSet::new();
+        fs_ensure_folder_path_staged(&root, "notes", "deep/er", &mut folders).unwrap();
+        let staged: Vec<String> = names("c", STAGED_IMPORT_WAVE + 8)
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                if index % 2 == 0 {
+                    format!("deep/er/{name}")
+                } else {
+                    name
+                }
+            })
+            .collect();
+        import_files(&root, &staged);
+        let dir = root.vault_dir("notes").unwrap();
+        assert!(
+            crate::session::abandon_session(&dir),
+            "the process dies with the wave unsealed"
+        );
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert!(fs_read_file(&root, "notes", "/c1.txt").is_err());
+        let top = fs_list_tree(&root, "notes")
+            .unwrap()
+            .children
+            .unwrap_or_default();
+        assert!(top.iter().all(|node| node.name != "deep"), "{top:?}");
+        let held = fs_held_list(&root, "notes").unwrap();
+        let mut named: Vec<String> = held
+            .iter()
+            .map(|item| {
+                item.file
+                    .as_ref()
+                    .expect("its record names it")
+                    .path
+                    .clone()
+            })
+            .collect();
+        named.sort();
+        let mut expected: Vec<String> = staged.iter().map(|name| format!("/{name}")).collect();
+        expected.sort();
+        assert_eq!(named, expected);
+
+        let every: Vec<String> = held.iter().map(|item| item.name.clone()).collect();
+        fs_held_restore(&root, "notes", &every).unwrap();
+        for name in &staged {
+            assert_eq!(
+                fs_read_file(&root, "notes", &format!("/{name}")).unwrap(),
+                name.as_bytes()
+            );
+        }
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn an_empty_imported_file_is_staged_and_one_replacing_a_file_seals_at_once() {
+        let (tmp, root) = open_notes();
+        let blobs = blob_count(&root);
+        fs_write_staged(&root, "notes", "/empty.txt", &mut &b""[..]).unwrap();
+        let src = os_source(tmp.path(), "e.txt", b"");
+        let (picked, _) =
+            fs_import_from_os_path(&root, "notes", "/", "picked.txt", &src, &test_job_id())
+                .unwrap();
+        assert_eq!(blob_count(&root), blobs, "an empty file has no blob");
+        assert_eq!(fs_read_file(&root, "notes", "/empty.txt").unwrap(), b"");
+        assert_eq!(fs_read_file(&root, "notes", &picked).unwrap(), b"");
+        assert!(!sealed_index_names(&root, "empty.txt"));
+        assert!(!sealed_index_names(&root, "picked.txt"));
+        assert!(pending_batch(&root).is_some(), "its timer seals it");
+
+        fs_seal_staged_imports(&root, "notes").unwrap();
+        assert!(sealed_index_names(&root, "empty.txt"));
+        assert!(sealed_index_names(&root, "picked.txt"));
+
+        fs_write_file(&root, "notes", "/full.txt", b"bytes").unwrap();
+        fs_write_staged(&root, "notes", "/full.txt", &mut &b""[..]).unwrap();
+        assert_eq!(sealed_bytes(&root, "full.txt"), b"");
         close_vault(&root, "notes").unwrap();
     }
 

@@ -1,7 +1,8 @@
+import type { ReactNode } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
-  plainRecoveryOffers,
+  vaultRecoveryCase,
   type PlainLeftover,
   type PlainRecoveryAction,
   type VaultListItem,
@@ -13,13 +14,22 @@ interface VaultRecoveryModalProps {
   open: boolean;
   onClose: () => void;
   onAction: (action: PlainRecoveryAction) => void;
+  /** Finish a password change that left files on an earlier key (the Password screen). */
+  onFinishPasswordChange: () => void;
+  /** Delete a vault whose import was cut off (the Delete vault window). */
+  onDelete: () => void;
 }
 
 /**
- * Dirty-close recovery.
- * Encrypted, or a plaintext vault with no leftover folder: unlock the store.
- * A leftover folder: the warning is the only step. The button starts the wipe
- * and this window closes; the row shows `recovering` until it ends.
+ * Why a vault is in recovery, and its way out (`vaultRecoveryCase`):
+ * - A leftover plain-text folder: the warning is the only step. The button
+ *   starts the wipe and this window closes; the row shows `recovering`.
+ * - A password change that left files on an earlier key: Finish, on the
+ *   Password screen, or an unlock that leaves it for later.
+ * - An import a quit or a crash cut off: an unlock keeps what got in, or the
+ *   Delete vault window removes it.
+ * - A password change that did not finish: the unlock asks for the new password.
+ * - A close that did not finish: unlock the store as it is.
  */
 export function VaultRecoveryModal({
   vault,
@@ -27,18 +37,94 @@ export function VaultRecoveryModal({
   open,
   onClose,
   onAction,
+  onFinishPasswordChange,
+  onDelete,
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
-  // A leftover follows its record, whatever the vault's mode says.
-  const pending = Boolean(vault?.plainLeftover) && leftover === undefined;
-  const offers = plainRecoveryOffers(pending ? null : (leftover ?? null));
 
   if (!open || !vault) return null;
 
-  const runPrimary = () => {
-    if (pending) return;
-    onAction(offers.remove ? { kind: "remove_folder" } : { kind: "resume_store" });
-  };
+  const recovery = vaultRecoveryCase(vault, leftover);
+  const resume = () => onAction({ kind: "resume_store" });
+  const text = (body: string) => (
+    <p className="text-sm leading-relaxed text-on-surface-variant">{body}</p>
+  );
+
+  let actions: ReactNode;
+  let body: ReactNode = null;
+  switch (recovery) {
+    case "loading":
+      actions = (
+        <Button variant="primary" size="sm" disabled>
+          {t("action.continue")}
+        </Button>
+      );
+      break;
+    case "remove_folder":
+      actions = (
+        <Button variant="danger" size="sm" onClick={() => onAction({ kind: "remove_folder" })}>
+          {t("recovery.remove")}
+        </Button>
+      );
+      body = (
+        <div className="space-y-3">
+          {text(
+            t("recovery.hint_plain", { name: vault.displayName, since: leftover?.since ?? "" }),
+          )}
+          {text(t("recovery.remove_desc"))}
+        </div>
+      );
+      break;
+    case "finish_password_change":
+      actions = (
+        <>
+          <Button variant="secondary" size="sm" onClick={resume}>
+            {t("action.unlock")}
+          </Button>
+          <Button variant="primary" size="sm" onClick={onFinishPasswordChange}>
+            {t("recovery.finish_password_change")}
+          </Button>
+        </>
+      );
+      body = (
+        <div className="space-y-3">
+          {text(t("vault.change_password.unfinished"))}
+          {text(t("recovery.finish_password_change_hint"))}
+        </div>
+      );
+      break;
+    case "import_unfinished":
+      actions = (
+        <>
+          <Button variant="secondary" size="sm" onClick={onDelete}>
+            {t("modal.delete_vault.title")}
+          </Button>
+          <Button variant="primary" size="sm" onClick={resume}>
+            {t("recovery.keep_import")}
+          </Button>
+        </>
+      );
+      body = (
+        <div className="space-y-3">
+          {text(t("recovery.import_unfinished", { name: vault.displayName }))}
+          {text(t("recovery.import_unfinished_hint"))}
+        </div>
+      );
+      break;
+    case "password_change_pending":
+    case "unfinished_close":
+      actions = (
+        <Button variant="primary" size="sm" onClick={resume}>
+          {t("action.continue")}
+        </Button>
+      );
+      body = text(
+        recovery === "password_change_pending"
+          ? t("unlock.password_change_pending")
+          : t("recovery.hint", { name: vault.displayName }),
+      );
+      break;
+  }
 
   return (
     <Modal
@@ -48,39 +134,9 @@ export function VaultRecoveryModal({
       contextTitle={vault.displayName}
       onClose={onClose}
       panelClassName="max-w-lg"
-      footer={
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            {t("action.cancel")}
-          </Button>
-          <Button
-            variant={offers.remove ? "danger" : "primary"}
-            size="sm"
-            disabled={pending}
-            onClick={runPrimary}
-          >
-            {offers.remove ? t("recovery.remove") : t("action.continue")}
-          </Button>
-        </div>
-      }
+      footer={<div className="flex flex-wrap justify-end gap-2">{actions}</div>}
     >
-      {pending ? null : offers.remove ? (
-        <div className="space-y-3">
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("recovery.hint_plain", {
-              name: vault.displayName,
-              since: leftover?.since ?? "",
-            })}
-          </p>
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("recovery.remove_desc")}
-          </p>
-        </div>
-      ) : (
-        <p className="text-sm leading-relaxed text-on-surface-variant">
-          {t("recovery.hint", { name: vault.displayName })}
-        </p>
-      )}
+      {body}
     </Modal>
   );
 }

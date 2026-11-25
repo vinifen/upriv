@@ -1,7 +1,5 @@
 import { useId } from "react";
 import {
-  KDF_UNLOCK_OPTION_META,
-  KDF_UNLOCK_PRESETS,
   changeKdfFormIsDowngrade,
   requireVaultConfigEditLockedI18nKey,
   type ChangeKdfFieldsState,
@@ -10,7 +8,7 @@ import {
 import { useTranslation } from "@/i18n";
 import { PasswordInput } from "@/components/ui";
 import {
-  PolicyRadioOption,
+  KdfPresetChoice,
   settingsControlClass,
   settingsInvalidControlClass,
   SettingsField,
@@ -26,10 +24,13 @@ interface VaultChangeKdfFieldsProps {
   /** Wrong current password — ring and message on that field. */
   passwordFieldError?: string | null;
   error?: string | null;
-  /** This change is already running. */
-  busy?: boolean;
 }
 
+/**
+ * The Unlock RAM screen, as every change screen lays out: what the change
+ * does, the vault's password, then its choice. The footer's action takes
+ * both.
+ */
 export function VaultChangeKdfFields({
   currentPreset,
   blocked,
@@ -37,15 +38,12 @@ export function VaultChangeKdfFields({
   onChange,
   passwordFieldError,
   error,
-  busy = false,
 }: VaultChangeKdfFieldsProps) {
   const { t } = useTranslation();
   const passwordId = useId();
-  const presetGroup = useId();
 
   const presetChanged = fields.nextPreset !== currentPreset;
   const downgrade = changeKdfFormIsDowngrade(currentPreset, fields.nextPreset);
-  const locked = blocked || busy;
 
   return (
     <div className="space-y-3">
@@ -62,11 +60,11 @@ export function VaultChangeKdfFields({
         {t("vault.change_kdf.backups_note")}
       </p>
 
-      <SettingsField label={t("vault.change_kdf.current")} htmlFor={passwordId} disabled={locked}>
+      <SettingsField label={t("vault.change_kdf.current")} htmlFor={passwordId} disabled={blocked}>
         <PasswordInput
           id={passwordId}
           value={fields.password}
-          disabled={locked}
+          disabled={blocked}
           aria-invalid={passwordFieldError ? true : undefined}
           aria-errormessage={passwordFieldError ? `${passwordId}-error` : undefined}
           onChange={(e) => onChange({ password: e.target.value })}
@@ -80,30 +78,12 @@ export function VaultChangeKdfFields({
         ) : null}
       </SettingsField>
 
-      <SettingsField label={t("modal.settings.field.kdf.unlock_preset")} disabled={locked}>
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.kdf.unlock_preset")}
-          className="grid gap-2"
-        >
-          {KDF_UNLOCK_PRESETS.map((preset) => {
-            const meta = KDF_UNLOCK_OPTION_META[preset];
-            return (
-              <PolicyRadioOption
-                key={preset}
-                groupName={presetGroup}
-                value={preset}
-                checked={fields.nextPreset === preset}
-                disabled={locked}
-                title={t(meta.titleKey)}
-                description={t(meta.descKey)}
-                badge={meta.badge}
-                tone={meta.tone}
-                onSelect={() => onChange({ nextPreset: preset })}
-              />
-            );
-          })}
-        </div>
+      <SettingsField label={t("modal.settings.field.kdf.unlock_preset")} disabled={blocked}>
+        <KdfPresetChoice
+          value={fields.nextPreset}
+          disabled={blocked}
+          onChange={(nextPreset) => onChange({ nextPreset })}
+        />
       </SettingsField>
 
       {downgrade ? (

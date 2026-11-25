@@ -13,7 +13,7 @@ describe("unlockFolderLine", () => {
     expect(unlockFolderLine(folder("/home/me/Dropbox/Notes", "cloud"), "upriv_plain")).toEqual({
       key: "unlock.folder.plain",
       params: { path: "/home/me/Dropbox/Notes" },
-      warning: "plain.place.class.cloud",
+      warning: "plain.folder_class.cloud",
     });
     expect(unlockFolderLine(folder("/home/me/Notes", "local"), "upriv_plain")?.warning).toBeNull();
   });

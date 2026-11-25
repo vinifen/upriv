@@ -1,11 +1,12 @@
 declare global {
   interface Window {
     upriv?: {
+      /** The value, or the failure as its `code: message` text with the details core sent. */
       invoke(
         method: string,
         params?: Record<string, unknown>,
         timeoutMs?: number,
-      ): Promise<unknown>;
+      ): Promise<{ ok: true; value: unknown } | { ok: false; error: string; details?: unknown }>;
       onEvent(callback: (name: string, payload: unknown) => void): () => void;
       /** Absolute path of an OS-dropped File (`webUtils.getPathForFile`). */
       getPathForFile?(file: File): string | undefined;
@@ -19,15 +20,7 @@ declare global {
             symlinks?: string[];
           }
       >;
-      statDroppedPaths?(paths: string[]): Promise<
-        | { relativePath: string; osPath: string; size: number }[]
-        | {
-            files: { relativePath: string; osPath: string; size: number }[];
-            unreadable: string[];
-            truncated?: boolean;
-            symlinks?: string[];
-          }
-      >;
+      statDroppedPaths?(paths: string[]): Promise<unknown>;
       readDroppedPathRange?(
         osPath: string,
         offset: number,

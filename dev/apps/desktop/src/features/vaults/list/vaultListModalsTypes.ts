@@ -23,6 +23,10 @@ export interface VaultListModalsHandle {
   settingsGroupId: string | null;
   setSettingsGroupId: (id: string | null) => void;
   settingsGroup: VaultGroup | null;
+  /** The group the Delete group window is open for. */
+  deleteGroupId: string | null;
+  setDeleteGroupId: (id: string | null) => void;
+  deleteGroup: VaultGroup | null;
   appSettingsOpen: boolean;
   appSettingsDirty: boolean;
   /** Returns false when Data folder or Groups has unsaved edits (caller should toast). */
